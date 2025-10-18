@@ -2,7 +2,7 @@
 
 ## The Elevator Pitch
 
-BrightShopper transforms BrightSign digital signage players into intelligent retail analytics sensors, delivering real-time insights about shopper behaviorwho's watching, what captures their attention, and how they interact with displaysall without cloud dependency, bandwidth costs, or privacy concerns. Built on BrightSign's NPU-accelerated platform running optimized C++ AI models, BrightShopper provides comprehensive behavioral analytics (people counting, gaze tracking, pose estimation, shopping behaviors) at 5.5W power consumption with 11-year expected lifespan, making it the most efficient and reliable edge AI solution for retail analytics.
+BrightShopper transforms BrightSign digital signage players into intelligent retail analytics sensors. It answers the fundamental question retailers ask: "Who's watching my content, and are they engaged?" Using on-device AI models, BrightShopper delivers real-time behavioral insights—people counting, gaze tracking, pose estimation, shopping behaviors—without cloud dependency, bandwidth costs, or privacy concerns. At 5.5W power consumption with 11-year expected lifespan, it's the most efficient and reliable edge AI solution for retail analytics.
 
 ## Value Proposition
 
