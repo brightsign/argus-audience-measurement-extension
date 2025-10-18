@@ -79,6 +79,7 @@ A: The two players offer different analytics capabilities:
 | **Person Tracking** | ✓ Advanced (with pose history) | ✓ Basic (bbox tracking) |
 | **Person Count** | ✓ Yes | ✓ Yes |
 | **Face Count** | ✓ Yes | ✓ Yes |
+
 | **Gaze Count** | ✓ Yes | ✓ Yes |
 | **Movement Analytics** | ✓ Yes | ✓ Yes |
 | **Dwell Time** | ✓ Yes | ✓ Yes |
@@ -262,6 +263,92 @@ A: Retailers see ROI through multiple channels:
 **Operational insights**: Understand traffic patterns, peak times, and customer flows to optimize staffing and merchandising
 
 **Competitive advantage**: Offer data-driven insights that pure digital signage competitors cannot match
+
+
+**Q: What analytics software is available for BrightShopper?**
+
+A: BrightSign offers two complementary analytics platforms for collecting and visualizing BrightShopper data across multiple players:
+
+**BSN.cloud Analytics (Cloud-Based):**
+- Integrated into BrightSign's BSN.cloud content management platform
+- Aggregates BrightShopper data from all connected players
+- Interactive dashboards with graphs showing trends over time
+- **Content attribution**: Links viewer metrics to specific media being played at the time of viewership
+- Ideal for customers already using BSN.cloud for content management
+- Subscription-based pricing as part of BSN.cloud service
+
+**BrightShopper Analytics Enterprise (On-Premise):**
+- Self-hosted enterprise software package
+- Aggregates BrightShopper data from fleet of players
+- Interactive dashboards with graphs showing trends over time
+- Does not include content attribution (content management separate)
+- Ideal for large enterprises requiring on-premise data storage
+- One-time license with annual maintenance
+
+Both platforms provide the same core analytics capabilities—collecting shopper metrics across locations, visualizing trends, and generating reports. The key difference is BSN.cloud's content attribution feature and cloud hosting vs. enterprise on-premise deployment.
+
+**Q: What is content attribution and why does it matter?**
+
+A: Content attribution is a powerful feature in BSN.cloud Analytics that links viewer engagement metrics directly to the specific content being displayed at that moment.
+
+**How it works:**
+- BSN.cloud knows what content is playing on each player at every moment
+- BrightShopper continuously streams engagement data (person count, gaze, dwell time, etc.)
+- BSN.cloud correlates the two data streams to attribute viewers to content
+
+**What you can measure:**
+- **Engagement by creative**: Which ads/videos captured the most attention?
+- **Performance by time slot**: Does content perform better at certain times of day?
+- **Campaign effectiveness**: Compare engagement across different creative versions
+- **ROI per asset**: Understand which content investments drove the most engagement
+
+**Example insights:**
+- "Creative A had 45% gaze rate vs. Creative B's 28% gaze rate"
+- "Morning shoppers spend 8 seconds viewing promotions vs. 4 seconds in afternoon"
+- "Product demo videos generate 3x more shelf interactions than static ads"
+
+**Why it matters:**
+- **Optimize content strategy**: Double down on what works, eliminate what doesn't
+- **Prove campaign ROI**: Show clients/stakeholders engagement data per campaign
+- **Dynamic content scheduling**: Schedule high-performing content during peak traffic times
+- **A/B testing**: Compare creative variants with real engagement data
+
+Without content attribution, you know *how many* people are engaging, but not *what content* they're engaging with. BSN.cloud Analytics connects these dots automatically.
+
+**Q: How do the two analytics platforms compare?**
+
+A: Both platforms provide comprehensive shopper analytics, but differ in deployment model and features:
+
+| Feature | BSN.cloud Analytics | BrightShopper Analytics Enterprise |
+|---------|---------------------|-----------------------------------|
+| **Deployment** | Cloud-hosted (SaaS) | On-premise / self-hosted |
+| **Data Collection** | ✓ Multi-player aggregation | ✓ Multi-player aggregation |
+| **Time-Series Graphs** | ✓ Yes | ✓ Yes |
+| **Interactive Dashboards** | ✓ Yes | ✓ Yes |
+| **Export/Reports** | ✓ Yes | ✓ Yes |
+| **Content Attribution** | ✓ Yes | ✗ No |
+| **Content Management Integration** | ✓ Native (BSN.cloud) | Separate CMS required |
+| **Data Storage** | BrightSign cloud | Customer infrastructure |
+| **Pricing Model** | Subscription (per player/month) | One-time license + maintenance |
+| **Setup Time** | Minutes (auto-provision) | Days (IT deployment) |
+| **Maintenance** | BrightSign managed | Customer managed |
+| **Updates** | Automatic | Manual (scheduled releases) |
+| **API Access** | ✓ REST API | ✓ REST API |
+| **Custom Integrations** | Webhooks | Full database access |
+
+**Choose BSN.cloud Analytics if:**
+- You use (or plan to use) BSN.cloud for content management
+- You want content-to-engagement attribution
+- You prefer cloud-hosted, zero-maintenance solutions
+- You need rapid deployment across multiple locations
+
+**Choose Analytics Enterprise if:**
+- You require on-premise data storage for compliance/security
+- Your IT policy prohibits cloud analytics services
+- You need deep integration with existing enterprise systems
+- You want full control over data infrastructure and retention
+
+Many customers use both: BSN.cloud Analytics for corporate stores with content attribution needs, and Analytics Enterprise for customers requiring on-premise deployment.
 
 ### Integration & Deployment
 
