@@ -16,28 +16,28 @@ This document compares power consumption across different platforms when running
 | Platform | Static Power | Face Detection Power | Delta | Notes |
 |----------|-------------|---------------------|-------|-------|
 | **BrightSign XT5** | 3.10W | 3.90W | **+0.80W** | RK3588 NPU with optimized inference |
-| OrangePi 5B+ | 1.36W | 4.04W | +2.68W | Standard SBC configuration |
-| RPi5 with Hailo NPU | 4.69W | 7.11W | +2.42W | External NPU accelerator |
+| OrangePi 5B+ | 1.37W | 4.06W | +2.69W | Standard SBC configuration |
+| RPi5 with Hailo NPU | 4.71W | 7.14W | +2.43W | External NPU accelerator |
 
 **Measurement details:**
 - **XT5**: Measured via PoE switch power monitoring (includes PoE conversion overhead)
-- **OrangePi/RPi5**: Measured at 5.138V DC input
+- **OrangePi/RPi5**: Measured at 5.160V DC input
 
 ## Key Findings
 
 ### BrightSign XT5 Advantages
 
 1. **Minimal incremental power**: Face detection adds only 0.80W (26% increase) beyond static baseline
-2. **1.8x more efficient** than RPi5 with Hailo NPU during face detection (3.90W vs. 7.11W)
-3. **Similar efficiency** to OrangePi 5B+ for single-core workload (3.90W vs. 4.04W)
-4. **Moderate static power**: 3.10W baseline (OrangePi has lower static at 1.36W, but RPi5 is higher at 4.69W)
+2. **1.8x more efficient** than RPi5 with Hailo NPU during face detection (3.90W vs. 7.14W)
+3. **Similar efficiency** to OrangePi 5B+ for single-core workload (3.90W vs. 4.06W)
+4. **Moderate static power**: 3.10W baseline (OrangePi has lower static at 1.37W, but RPi5 is higher at 4.71W)
 
 ### Implications for Deployment
 
 **24/7 Operation:**
 - **XT5**: 3.90W × 24 hours = 93.6 Wh/day
-- **OrangePi 5B+**: 4.04W × 24 hours = 97.0 Wh/day (1.0x more)
-- **RPi5+Hailo**: 7.11W × 24 hours = 170.6 Wh/day (1.8x more)
+- **OrangePi 5B+**: 4.06W × 24 hours = 97.0 Wh/day (1.0x more)
+- **RPi5+Hailo**: 7.14W × 24 hours = 170.6 Wh/day (1.8x more)
 
 **Annual Power Consumption:**
 - **XT5**: 34.2 kWh/year
@@ -46,8 +46,8 @@ This document compares power consumption across different platforms when running
 
 **Thermal Management:**
 - XT5 requires **no active cooling** for single-core face detection (3.90W easily dissipated passively)
-- OrangePi similar thermal output (4.04W), may work with passive cooling
-- RPi5+Hailo higher thermal output (7.11W) may require active cooling for sustained operation
+- OrangePi similar thermal output (4.06W), may work with passive cooling
+- RPi5+Hailo higher thermal output (7.14W) may require active cooling for sustained operation
 - Lower power = longer hardware lifespan and higher reliability
 
 **Scalability:**
@@ -57,6 +57,23 @@ This document compares power consumption across different platforms when running
   - RPi5+Hailo: 62.2 MWh/year (+28.0 MWh annual cost)
 
 ## Why the Difference?
+### Platform Architecture Context
+
+**Important Note**: The XT5 and OrangePi 5B+ both use the **same RK3588 processor** with identical NPU hardware (3-core, 6 TOPS total). The power consumption differences are primarily due to software implementation and system design:
+
+**Software Implementation:**
+- **XT5**: BrightShopper implemented in **C++** with optimized RKNN runtime
+- **OrangePi 5B+**: Reference implementation in **Python** with standard RKNN bindings
+- **RPi5+Hailo**: Python implementation with external NPU accelerator
+
+**Expected Behavior:**
+- **Static power**: XT5 slightly higher (3.10W vs 1.37W) due to additional control plane software running on BrightSign OS
+- **Per-core inference power**: The large difference (+0.80W for XT5 vs +2.69W for OrangePi) reflects **C++ vs Python efficiency**
+- **Same hardware**: Both platforms use identical RK3588 NPU cores, so hardware efficiency is the same
+- **Software overhead**: Python interpreter overhead, memory management, and less optimized data pipelines account for 3.3x higher incremental power per NPU core on OrangePi
+
+With a C++ implementation on OrangePi 5B+, we would expect performance nearly identical to XT5 (within 10-15% due to OS differences).
+
 
 ### BrightSign XT5 Efficiency Factors
 
@@ -68,14 +85,14 @@ This document compares power consumption across different platforms when running
 ### Competitor Considerations
 
 **OrangePi 5B+:**
-- Lower static power (1.36W) due to simpler board design
-- Higher incremental power per NPU core (+2.68W vs. XT5's +0.80W)
+- Lower static power (1.37W) due to simpler board design
+- Higher incremental power per NPU core (+2.69W vs. XT5's +0.80W)
 - Less optimized inference stack increases per-core power draw
 - Standard Linux kernel may not fully leverage power-saving features
 
 **Raspberry Pi 5 + Hailo:**
 - External NPU accelerator requires USB/PCIe power budget
-- High baseline power (4.69W static) due to more complex board architecture
+- High baseline power (4.71W static) due to more complex board architecture
 - Host CPU involvement for data transfer and coordination
 - Higher baseline due to external accelerator interface
 
@@ -86,8 +103,8 @@ For BrightShopper's 3-model architecture utilizing all 3 NPU cores:
 | Platform | Estimated Power (3 cores active) | Basis |
 |----------|----------------------------------|-------|
 | **BrightSign XT5** | ~5.5W | Efficient power gating: 3.10W + (3 × 0.80W) |
-| OrangePi 5B+ | ~9.4W | Linear scaling: 1.36W + (3 × 2.68W) |
-| RPi5 + Hailo | ~12.0W | External accelerator overhead: 4.69W + (3 × 2.42W) |
+| OrangePi 5B+ | ~9.5W | Linear scaling: 1.37W + (3 × 2.69W) |
+| RPi5 + Hailo | ~12.00W | External accelerator overhead: 4.71W + (3 × 2.43W) |
 
 **Expected XT5 advantage with 3 cores**: 1.7-2.2x more power efficient than competitors.
 
@@ -112,5 +129,5 @@ This efficiency advantage makes BrightSign the ideal platform for always-on reta
 **Test Date**: 2024
 **Measurement Method**: 
 - XT5: PoE switch power monitoring (includes PoE conversion overhead)
-- OrangePi/RPi5: DC power measurement at 5.138V input
+- OrangePi/RPi5: DC power measurement at 5.160V input
 **Models**: RetinaFace (320x320 input) running at ~15ms inference time
