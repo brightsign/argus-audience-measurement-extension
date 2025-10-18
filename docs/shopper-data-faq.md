@@ -46,7 +46,54 @@ BrightSign is the global market leader in digital signage media players, deliver
 
 **Q: What is BrightShopper?**
 
-A: BrightShopper is an edge AI analytics platform that transforms BrightSign digital signage players into intelligent shopper behavior sensors. It uses three specialized AI models running simultaneously on player's three NPU cores to deliver real-time insights about customer count, engagement, movement, and shopping behavior—all without requiring cloud connectivity or compromising privacy.
+A: BrightShopper is an edge AI analytics platform that transforms BrightSign digital signage players into intelligent shopper behavior sensors. It uses specialized AI models running on the player's on-board NPU to deliver real-time insights about customer count, engagement, movement, and shopping behavior—all without requiring cloud connectivity or compromising privacy.
+
+**Q: Which BrightSign players support BrightShopper?**
+
+A: BrightShopper is available on two BrightSign player models:
+
+**XT5 (Premium):**
+- Runs all three AI models simultaneously
+- Full feature set including pose estimation and behavior detection
+- Ideal for high-value locations and comprehensive analytics needs
+
+**XS156 (Value):**
+- Runs two AI models simultaneously (face/gaze detection + object detection)
+- Core engagement metrics without pose estimation
+- Cost-effective solution for large-scale deployments focused on attention metrics
+
+Both players deliver real-time analytics with complete on-device processing and privacy protection.
+
+**Q: What are the differences between BrightShopper on XT5 vs. XS156?**
+
+A: The two players offer different analytics capabilities:
+
+| Feature | XT5 | XS156 |
+|---------|-----|-------|
+| **AI Models Running** | 3 models | 2 models |
+| **Face Detection** | ✓ Yes | ✓ Yes |
+| **Gaze Tracking** | ✓ Yes | ✓ Yes |
+| **Object Detection** | ✓ Yes (carts, baskets, products) | ✓ Yes (carts, baskets, products) |
+| **Pose Estimation** | ✓ Yes (17 keypoints) | ✗ No |
+| **Behavior Detection** | ✓ Yes (cart pushing, shelf reach, etc.) | Limited (inferred from objects only) |
+| **Person Tracking** | ✓ Advanced (with pose history) | ✓ Basic (bbox tracking) |
+| **Person Count** | ✓ Yes | ✓ Yes |
+| **Face Count** | ✓ Yes | ✓ Yes |
+| **Gaze Count** | ✓ Yes | ✓ Yes |
+| **Movement Analytics** | ✓ Yes | ✓ Yes |
+| **Dwell Time** | ✓ Yes | ✓ Yes |
+
+**XT5 Use Cases:**
+- Premium retail locations requiring behavior insights
+- Stores wanting to detect cart/basket usage and shelf interactions
+- Deployments needing custom behavior classification
+- Applications requiring detailed pose data for analytics
+
+**XS156 Use Cases:**
+- Large-scale deployments where attention metrics are primary goal
+- Budget-conscious installations focused on engagement ROI
+- Locations where gaze and object context are sufficient
+- High-volume rollouts across multiple stores
 
 **Q: Why did BrightSign build BrightShopper?**
 
@@ -111,33 +158,44 @@ A: BrightShopper uses state-of-the-art AI models optimized for retail environmen
 
 Accuracy varies with lighting, camera angle, distance, and occlusion. We provide best practices guides for camera placement to optimize performance.
 
+
 **Q: What AI models power BrightShopper?**
 
-A: BrightShopper runs three AI models simultaneously, each on its own NPU core:
+A: BrightShopper uses different AI model configurations depending on the player:
 
-1. **RetinaFace** (NPU Core 0): Face detection and gaze estimation - identifies faces and determines if people are looking at the screen
-2. **YOLOv8-pose** (NPU Core 1): Person detection with 17-point pose estimation - tracks body position and enables behavior recognition
-3. **YOLOx** (NPU Core 2): Object detection - identifies shopping carts, baskets, and products for context
+**XT5 (3 models):**
+1. **RetinaFace**: Face detection and gaze estimation - identifies faces and determines if people are looking at the screen
+2. **YOLOv8-pose**: Person detection with 17-point pose estimation - tracks body position and enables behavior recognition
+3. **YOLOx**: Object detection - identifies shopping carts, baskets, and products for context
 
-These models work together through a fusion layer that correlates detections, then a tracking layer maintains person identity and behavior state across frames.
+**XS156 (2 models):**
+1. **RetinaFace**: Face detection and gaze estimation - identifies faces and determines if people are looking at the screen
+2. **YOLOx**: Object detection - identifies shopping carts, baskets, and products for context; also provides person detection for tracking
 
+Both configurations use a fusion layer that correlates detections, then a tracking layer maintains person identity and movement state across frames.
 **Q: What is the performance and latency?**
 
-A: BrightShopper achieves real-time performance:
+A: BrightShopper achieves real-time performance on both players:
+
+**XT5 (3 models):**
 - **Latency**: ~69ms end-to-end (capture to analytics output)
-- **Throughput**: 14 FPS with all three models, 20+ FPS with optimized YOLOx variant
-- **All 3 NPU cores utilized**: Maximum efficiency from RK3588 hardware
+- **Throughput**: 14 FPS with all three models, 20+ FPS with optimized configuration
+
+**XS156 (2 models):**
+- **Latency**: ~50ms end-to-end (capture to analytics output)
+- **Throughput**: 18-20 FPS with both models
 
 This real-time performance enables immediate content adaptation and responsive interactive experiences.
+
 
 **Q: What hardware is required?**
 
 A: BrightShopper requires:
-- **BrightSign player** with RK3588 NPU (RK3588-based models)
-- **USB or IP camera** (720p minimum, 1080p recommended)
-- **Network connection** for analytics output (UDP/JSON, HTTP, MQTT supported)
+- **BrightSign player**: XT5 or XS156
+- **USB or IP camera**: 720p minimum, 1080p recommended
+- **Network connection**: For analytics output (UDP/JSON, HTTP, MQTT supported)
 
-No additional compute hardware or cloud services required. The BrightSign player handles all AI processing.
+No additional compute hardware or cloud services required. The BrightSign player handles all AI processing on-device.
 
 **Q: How does BrightShopper handle privacy?**
 
@@ -255,6 +313,8 @@ A: Yes! BrightShopper supports custom behavior models through transfer learning:
 - Any behavior visible through pose + context
 
 BrightSign Professional Services can help train custom models using your store footage.
+
+**Note**: Advanced pose-based behavior detection and custom transfer learning require the XT5 player. The XS156 provides basic behavior inference from object associations (e.g., person near cart = likely shopping).
 
 ### Competition & Market Position
 
