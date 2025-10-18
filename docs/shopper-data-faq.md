@@ -11,15 +11,15 @@
 
 *Groundbreaking edge AI solution delivers unprecedented insights into customer behavior, engagement, and shopping patterns without cloud dependency or privacy concerns*
 
-**LOS GATOS, CA** – BrightSign, the global market leader in digital signage media players, today announced BrightShopper, a revolutionary edge AI analytics platform that transforms retail digital signage displays into intelligent customer behavior sensors. Built on BrightSign's proven hardware platform with the powerful RK3588 NPU processor, BrightShopper delivers real-time shopper analytics with zero cloud latency, complete data privacy, and cinema-quality performance.
+**LOS GATOS, CA** – BrightSign, the global market leader in digital signage media players, today announced BrightShopper, a revolutionary edge AI analytics platform that transforms retail digital signage displays into intelligent customer behavior sensors. Built on BrightSign's proven hardware platform, BrightShopper delivers real-time shopper analytics with zero cloud latency, complete data privacy, and cinema-quality performance.
 
-BrightShopper represents a breakthrough in retail analytics by simultaneously running three specialized AI models across all three NPU cores of the RK3588 processor, delivering comprehensive behavioral insights that were previously impossible to achieve at the edge:
+BrightShopper represents a breakthrough in retail analytics by simultaneously running three specialized AI models across all three NPU cores in the XT5 player, delivering comprehensive behavioral insights that were previously impossible to achieve at the edge:
 
 - **People counting and tracking**: Know exactly how many shoppers are in view and track their movement patterns
 - **Facial detection and gaze tracking**: Understand which content captures attention and for how long
 - **Pose estimation and behavior recognition**: Identify shopping behaviors like cart pushing, basket carrying, shelf interaction, and product selection
 
-"Retailers have long struggled with the fundamental question: 'Who's watching my content, and are they engaged?'" said Anthony Gaudiosi, CEO of BrightSign. "BrightShopper answers this question in real-time with unprecedented detail, all while keeping customer data private and secure on the device. This is the future of retail analytics—powerful AI that respects privacy while delivering actionable insights."
+"Retailers have long struggled with the fundamental question: 'Who's watching my content, and are they engaged?'" said Steve Durkee, CEO of BrightSign. "BrightShopper answers this question in real-time with unprecedented detail, all while keeping customer data private and secure on the device. This is the future of retail analytics—powerful AI that respects privacy while delivering actionable insights."
 
 Unlike cloud-based analytics solutions that introduce latency, raise privacy concerns, and incur ongoing bandwidth costs, BrightShopper processes all data locally on the BrightSign player. Retailers receive rich behavioral insights in milliseconds, not seconds, enabling real-time content adaptation and immediate performance measurement.
 
@@ -31,7 +31,7 @@ Unlike cloud-based analytics solutions that introduce latency, raise privacy con
 - **Frame-to-frame tracking**: Maintain continuity across frames to understand customer journeys
 - **Privacy-first design**: All processing on-device with no cloud transmission of video or personal data
 
-BrightShopper is available immediately as a software upgrade for compatible BrightSign players with RK3588 processors. Custom behavior models and integration services are available through BrightSign's professional services team.
+BrightShopper is available immediately as a software upgrade for compatible BrightSign players. Custom behavior models and integration services are available through BrightSign's professional services team.
 
 For more information, visit **brightsign.biz/brightshopper** or contact your BrightSign sales representative.
 
@@ -46,7 +46,7 @@ BrightSign is the global market leader in digital signage media players, deliver
 
 **Q: What is BrightShopper?**
 
-A: BrightShopper is an edge AI analytics platform that transforms BrightSign digital signage players into intelligent shopper behavior sensors. It uses three specialized AI models running simultaneously on the RK3588's three NPU cores to deliver real-time insights about customer count, engagement, movement, and shopping behavior—all without requiring cloud connectivity or compromising privacy.
+A: BrightShopper is an edge AI analytics platform that transforms BrightSign digital signage players into intelligent shopper behavior sensors. It uses three specialized AI models running simultaneously on player's three NPU cores to deliver real-time insights about customer count, engagement, movement, and shopping behavior—all without requiring cloud connectivity or compromising privacy.
 
 **Q: Why did BrightSign build BrightShopper?**
 
@@ -397,15 +397,6 @@ BrightShopper outputs JSON messages via UDP, HTTP, or MQTT:
 
 **Total system latency**: ~69ms (capture → analytics output)
 
-### Power Consumption Comparison
-
-| Platform | Static Power | Face Detection Power | Notes |
-|----------|-------------|---------------------|-------|
-| **BrightSign XT5** | 58 mA | 58 mA | RK3588 NPU with optimized inference |
-| OrangePi 5B+ | 265 mA | 787 mA | Standard SBC configuration |
-| RPi5 with Hailo NPU | 912 mA | 1383 mA | External NPU accelerator |
-
-**BrightSign advantage**: 15x lower power consumption during face detection compared to RPi5+Hailo, enabling 24/7 deployment without thermal or power concerns.
 
 ---
 
