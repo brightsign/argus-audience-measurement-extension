@@ -41,8 +41,8 @@ This document compares power consumption across different platforms when running
 
 **Annual Power Consumption:**
 - **XT5**: 34.2 kWh/year
-- **OrangePi 5B+**: 35.4 kWh/year
-- **RPi5+Hailo**: 62.2 kWh/year
+- **OrangePi 5B+**: 35.6 kWh/year
+- **RPi5+Hailo**: 62.5 kWh/year
 
 **Thermal Management:**
 - XT5 requires **no active cooling** for single-core face detection (3.90W easily dissipated passively)
@@ -53,8 +53,8 @@ This document compares power consumption across different platforms when running
 **Scalability:**
 - For 1000-device retail deployment:
   - XT5: 34.2 MWh/year
-  - OrangePi: 35.4 MWh/year (+1.2 MWh annual cost)
-  - RPi5+Hailo: 62.2 MWh/year (+28.0 MWh annual cost)
+  - OrangePi: 35.6 MWh/year (+1.4 MWh annual cost)
+  - RPi5+Hailo: 62.5 MWh/year (+28.3 MWh annual cost)
 
 ## Why the Difference?
 ### Platform Architecture Context
@@ -71,6 +71,8 @@ This document compares power consumption across different platforms when running
 - **Per-core inference power**: The large difference (+0.80W for XT5 vs +2.69W for OrangePi) reflects **C++ vs Python efficiency**
 - **Same hardware**: Both platforms use identical RK3588 NPU cores, so hardware efficiency is the same
 - **Software overhead**: Python interpreter overhead, memory management, and less optimized data pipelines account for 3.3x higher incremental power per NPU core on OrangePi
+
+**Memory Bandwidth Limitation**: Python's inefficient memory management (object overhead, reference counting, fragmented allocations) significantly increases memory bandwidth requirements. For the 3-model BrightShopper workload (RetinaFace + YOLOv8-pose + YOLOx), Python's memory overhead would likely **exceed the RK3588 NPU's memory bandwidth capacity**, making simultaneous 3-model operation impractical or impossible without severe performance degradation. This is why the multi-core projection for OrangePi should be considered theoretical - actual deployment would require sequential model execution rather than parallel.
 
 With a C++ implementation on OrangePi 5B+, we would expect performance nearly identical to XT5 (within 10-15% due to OS differences).
 
@@ -103,15 +105,17 @@ For BrightShopper's 3-model architecture utilizing all 3 NPU cores:
 | Platform | Estimated Power (3 cores active) | Basis |
 |----------|----------------------------------|-------|
 | **BrightSign XT5** | ~5.5W | Efficient power gating: 3.10W + (3 × 0.80W) |
-| OrangePi 5B+ | ~9.5W | Linear scaling: 1.37W + (3 × 2.69W) |
+| OrangePi 5B+ | ~9.5W* | Linear scaling: 1.37W + (3 × 2.69W) |
 | RPi5 + Hailo | ~12.00W | External accelerator overhead: 4.71W + (3 × 2.43W) |
 
-**Expected XT5 advantage with 3 cores**: 1.7-2.2x more power efficient than competitors.
+**\*Important caveat**: The OrangePi 9.5W estimate assumes parallel 3-model execution is possible with Python. In practice, **Python's memory inefficiency would likely prevent running 3 models simultaneously** due to NPU memory bandwidth constraints. The Python implementation would need to run models sequentially, reducing throughput significantly.
+
+**Expected XT5 advantage with 3 cores**: 1.7-2.2x more power efficient than competitors (assuming competitors can achieve 3-model parallelism, which is unlikely with Python).
 
 **3-Core Annual Energy Consumption:**
 - **XT5**: 48.2 kWh/year
-- **OrangePi 5B+**: 82.4 kWh/year (+34.2 kWh, 71% more)
-- **RPi5+Hailo**: 104.7 kWh/year (+56.5 kWh, 117% more)
+- **OrangePi 5B+**: 82.8 kWh/year (+34.6 kWh, 71% more)
+- **RPi5+Hailo**: 105.1 kWh/year (+56.9 kWh, 117% more)
 
 ## Conclusion
 
