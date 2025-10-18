@@ -2,7 +2,14 @@
 
 ## Overview
 
-This document compares power consumption across different platforms when running face detection inference on a single NPU core. These measurements demonstrate the efficiency advantages of the BrightSign XT5 with RK3588 NPU for edge AI workloads.
+This document compares power consumption across different platforms when running face detection inference on a single NPU core. These measurements demonstrate the efficiency advantages of BrightSign's NPU platform for edge AI workloads.
+
+**Platform Context**: BrightSign offers NPU-enabled players across three Rockchip SoCs:
+- **XT5**: RK3588 (3-core NPU, 6 TOPS)
+- **XS156**: RK3576 (2-core NPU, 4 TOPS)
+- **LS5/HS5**: RK3568 (1-core NPU, 1 TOPS)
+
+This analysis focuses on the **XT5 (RK3588)** as the reference platform. The per-core efficiency characteristics apply equally to XS156 and LS5/HS5, which use the same C++ implementation but run fewer models based on available NPU cores.
 
 ## Test Configuration
 

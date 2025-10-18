@@ -7,10 +7,19 @@ This repository contains the NPU-accelerated software platform powering BrightSi
 ## Platform Highlights
 
 **Hardware Foundation:**
-- **Rockchip RK3588** SoC with integrated 3-core NPU (6 TOPS total)
-- **5.5W total power** for 3-model AI workload (XT5)
+
+The platform supports three Rockchip NPU-enabled SoCs, each targeting different performance and cost requirements:
+
+- **RK3588** (3-core NPU, 6 TOPS) - Premium tier, used in **XT5**
+- **RK3576** (2-core NPU, 4 TOPS) - Mid-tier, used in **XS156**
+- **RK3568** (1-core NPU, 1 TOPS) - Entry tier, used in **LS5/HS5**
+
+**Performance characteristics (using XT5/RK3588 as reference):**
+- **5.5W total power** for 3-model AI workload
 - **Fanless operation** with passive cooling
 - **11-year expected lifespan** (100,000-hour MTBF)
+
+*Note: This documentation primarily focuses on the XT5/RK3588 implementation. Lower-tier products (XS156, LS5/HS5) support fewer simultaneous models but use the same software architecture and C++ implementation.*
 
 **Software Architecture:**
 - **C++ implementation** with optimized RKNN runtime for maximum efficiency
@@ -53,17 +62,18 @@ Real-time retail analytics running entirely on-device:
 
 ### Platform Configurations
 
-**XT5 (Premium):**
-- 3 NPU cores active
-- Full suite: face detection + pose estimation + object detection
-- 5.5W total power
-- Comprehensive behavior analytics
+| Player | SoC | NPU Cores | Models Supported | Features |
+|--------|-----|-----------|-----------------|----------|
+| **XT5** | RK3588 | 3-core (6 TOPS) | 3 models parallel | Face + Pose + Object detection - full behavioral analytics |
+| **XS156** | RK3576 | 2-core (4 TOPS) | 2 models parallel | Face + Object detection - engagement analytics |
+| **LS5/HS5** | RK3568 | 1-core (1 TOPS) | 1 model | Face detection only - basic engagement metrics |
 
-**XS156 (Value):**
-- 2 NPU cores active
-- Core metrics: face detection + object detection (no pose)
-- ~4W total power
-- Cost-effective engagement analytics
+**Power consumption:**
+- **XT5**: ~5.5W (3-core workload)
+- **XS156**: ~4W estimated (2-core workload)
+- **LS5/HS5**: ~3.5W estimated (1-core workload)
+
+All configurations use the same optimized C++ implementation and share the core software architecture. Lower-tier products simply run fewer models in parallel based on available NPU cores.
 
 ## Documentation
 

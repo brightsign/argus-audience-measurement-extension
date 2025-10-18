@@ -13,7 +13,7 @@
 
 **LOS GATOS, CA** – BrightSign, the global market leader in digital signage media players, today announced BrightShopper, a revolutionary edge AI analytics platform that transforms retail digital signage displays into intelligent customer behavior sensors. Built on BrightSign's proven hardware platform, BrightShopper delivers real-time shopper analytics with zero cloud latency, complete data privacy, and cinema-quality performance.
 
-BrightShopper is available on two BrightSign player models, each optimized for different deployment needs. The flagship XT5 player runs three specialized AI models simultaneously, while the XS156 player runs two models for cost-effective installations. Both deliver comprehensive behavioral insights that were previously impossible to achieve at the edge:
+BrightShopper is available across BrightSign's NPU-enabled player lineup, with capabilities scaling based on NPU core count. The flagship XT5 (RK3588, 3-core NPU) runs three specialized AI models simultaneously for comprehensive behavioral analytics. The XS156 (RK3576, 2-core NPU) runs two models for core engagement metrics, while the LS5/HS5 (RK3568, 1-core NPU) provides fundamental attention tracking. All players deliver real-time analytics that were previously impossible to achieve at the edge:
 
 - **People counting and tracking**: Know exactly how many shoppers are in view and track their movement patterns
 - **Facial detection and gaze tracking**: Understand which content captures attention and for how long
@@ -50,42 +50,50 @@ A: BrightShopper is an edge AI analytics platform that transforms BrightSign dig
 
 **Q: Which BrightSign players support BrightShopper?**
 
-A: BrightShopper is available on two BrightSign player models:
+A: BrightShopper is available on BrightSign players with NPU-enabled SoCs. The feature set scales based on the NPU capabilities:
 
-**XT5 (Premium):**
-- Runs all three AI models simultaneously
-- Full feature set including pose estimation and behavior detection
-- Ideal for high-value locations and comprehensive analytics needs
+**XT5 (Premium - RK3588):**
+- **NPU**: 3-core, 6 TOPS
+- **Models**: Runs all three AI models simultaneously
+- **Features**: Full feature set including pose estimation and behavior detection
+- **Use case**: High-value locations and comprehensive analytics needs
 
-**XS156 (Value):**
-- Runs two AI models simultaneously (face/gaze detection + object detection)
-- Core engagement metrics without pose estimation
-- Cost-effective solution for large-scale deployments focused on attention metrics
+**XS156 (Mid-tier - RK3576):**
+- **NPU**: 2-core, 4 TOPS
+- **Models**: Runs two AI models simultaneously (face/gaze detection + object detection)
+- **Features**: Core engagement metrics without pose estimation
+- **Use case**: Cost-effective solution for large-scale deployments focused on attention metrics
 
-Both players deliver real-time analytics with complete on-device processing and privacy protection.
+**LS5/HS5 (Entry - RK3568):**
+- **NPU**: 1-core, 1 TOPS
+- **Models**: Runs one AI model (face/gaze detection)
+- **Features**: Basic engagement metrics (person count, face count, gaze tracking)
+- **Use case**: Budget-conscious deployments requiring fundamental attention analytics
 
-**Q: What are the differences between BrightShopper on XT5 vs. XS156?**
+All players deliver real-time analytics with complete on-device processing and privacy protection. The difference is the number of simultaneous AI models supported.
 
-A: The two players offer different analytics capabilities:
+**Q: What are the differences between BrightShopper across player models?**
 
-| Feature | XT5 | XS156 |
-|---------|-----|-------|
-| **AI Models Running** | 3 models | 2 models |
-| **Face Detection** | ✓ Yes | ✓ Yes |
-| **Gaze Tracking** | ✓ Yes | ✓ Yes |
-| **Object Detection** | ✓ Yes (carts, baskets, products) | ✓ Yes (carts, baskets, products) |
-| **Pose Estimation** | ✓ Yes (17 keypoints) | ✗ No |
-| **Behavior Detection** | ✓ Yes (cart pushing, shelf reach, etc.) | Limited (inferred from objects only) |
-| **Person Tracking** | ✓ Advanced (with pose history) | ✓ Basic (bbox tracking) |
-| **Person Count** | ✓ Yes | ✓ Yes |
-| **Face Count** | ✓ Yes | ✓ Yes |
+A: The players offer different analytics capabilities based on NPU core count:
 
-| **Gaze Count** | ✓ Yes | ✓ Yes |
-| **Movement Analytics** | ✓ Yes | ✓ Yes |
-| **Dwell Time** | ✓ Yes | ✓ Yes |
+| Feature | XT5 (RK3588) | XS156 (RK3576) | LS5/HS5 (RK3568) |
+|---------|--------------|----------------|------------------|
+| **NPU Cores** | 3-core (6 TOPS) | 2-core (4 TOPS) | 1-core (1 TOPS) |
+| **AI Models Running** | 3 models | 2 models | 1 model |
+| **Face Detection** | ✓ Yes | ✓ Yes | ✓ Yes |
+| **Gaze Tracking** | ✓ Yes | ✓ Yes | ✓ Yes |
+| **Object Detection** | ✓ Yes (carts, baskets, products) | ✓ Yes (carts, baskets, products) | ✗ No |
+| **Pose Estimation** | ✓ Yes (17 keypoints) | ✗ No | ✗ No |
+| **Behavior Detection** | ✓ Yes (cart pushing, shelf reach, etc.) | Limited (inferred from objects only) | ✗ No |
+| **Person Tracking** | ✓ Advanced (with pose history) | ✓ Basic (bbox tracking) | ✓ Basic (bbox tracking) |
+| **Person Count** | ✓ Yes | ✓ Yes | ✓ Yes |
+| **Face Count** | ✓ Yes | ✓ Yes | ✓ Yes |
+| **Gaze Count** | ✓ Yes | ✓ Yes | ✓ Yes |
+| **Movement Analytics** | ✓ Yes | ✓ Yes | ✓ Basic |
+| **Dwell Time** | ✓ Yes | ✓ Yes | ✓ Yes |
 
 **XT5 Use Cases:**
-- Premium retail locations requiring behavior insights
+- Premium retail locations requiring comprehensive behavior insights
 - Stores wanting to detect cart/basket usage and shelf interactions
 - Deployments needing custom behavior classification
 - Applications requiring detailed pose data for analytics
@@ -95,6 +103,12 @@ A: The two players offer different analytics capabilities:
 - Budget-conscious installations focused on engagement ROI
 - Locations where gaze and object context are sufficient
 - High-volume rollouts across multiple stores
+
+**LS5/HS5 Use Cases:**
+- Entry-level engagement tracking (people count, attention, dwell)
+- Large-scale deployments requiring only fundamental metrics
+- Budget-sensitive installations where basic analytics suffice
+- Proof-of-concept and pilot programs
 
 **Q: Why did BrightSign build BrightShopper?**
 

@@ -2,7 +2,11 @@
 
 ## Executive Summary
 
-This document provides comprehensive analysis of power consumption, thermal characteristics, and reliability implications for the BrightSign XT5 running BrightShopper analytics compared to competitive platforms. Key findings:
+This document provides comprehensive analysis of power consumption, thermal characteristics, and reliability implications for BrightSign NPU-enabled players running BrightShopper analytics compared to competitive platforms.
+
+**Note**: This analysis focuses primarily on the **XT5 (RK3588, 3-core NPU)** as the reference platform. The XS156 (RK3576, 2-core NPU) and LS5/HS5 (RK3568, 1-core NPU) use the same software architecture but run fewer models in parallel, resulting in proportionally lower power consumption with similar efficiency characteristics.
+
+Key findings:
 
 - **XT5 thermal output**: 5.50W for 3-core AI inference (42% lower than OrangePi, 54% lower than RPi5+Hailo)
 - **XT5 fanless operation**: Passive cooling sufficient; competitors require active cooling
@@ -34,13 +38,21 @@ The XT5 and OrangePi 5B+ use the **same RK3588 processor** with identical NPU ha
 This comparison highlights the critical importance of implementation language for power-constrained edge AI applications - not just for power efficiency, but also for achieving the throughput required to fully utilize multi-core NPU hardware.
 
 
-**BrightSign XT5:**
+**BrightSign XT5 (RK3588):**
 - **Power delivery**: PoE (Power over Ethernet)
 - **Workload 1 (static)**: **3.10W** (measured via PoE switch)
 - **Workload 2 (face detection, 1 NPU core)**: **3.90W** (measured via PoE switch)
 - **Estimated 3-core AI workload**: **5.50W**
 
 *Note: Face detection adds 0.80W per NPU core. For 3-core BrightShopper workload (RetinaFace + YOLOv8-pose + YOLOx), we estimate 3.10W baseline + (3 × 0.80W) = 5.50W total.*
+
+**BrightSign XS156 (RK3576) - Estimated:**
+- **Static**: ~3.0W (similar baseline to XT5)
+- **2-core AI workload**: ~4.6W (3.0W + 2 × 0.80W)
+
+**BrightSign LS5/HS5 (RK3568) - Estimated:**
+- **Static**: ~2.8W (slightly lower baseline)
+- **1-core AI workload**: ~3.6W (2.8W + 1 × 0.80W)
 
 **OrangePi 5B+:**
 - **Power delivery**: 5.160V DC

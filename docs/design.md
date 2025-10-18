@@ -1,6 +1,13 @@
 # BrightSign NPU Gaze Extension Architecture
 
-This document describes the architecture of the BrightSign NPU Gaze Extension system, which provides real-time gaze tracking capabilities using neural processing units.
+This document describes the architecture of the BrightSign NPU platform and BrightShopper analytics system, which provides real-time behavioral analytics using on-device neural processing units.
+
+**Platform Support**: This architecture runs across BrightSign's NPU-enabled product lineup:
+- **XT5**: RK3588 (3-core NPU, 6 TOPS) - runs 3 models in parallel
+- **XS156**: RK3576 (2-core NPU, 4 TOPS) - runs 2 models in parallel
+- **LS5/HS5**: RK3568 (1-core NPU, 1 TOPS) - runs 1 model
+
+**Documentation Scope**: This document focuses on the **XT5 (RK3588)** implementation as the reference platform. Lower-tier products use the same software architecture but run fewer models concurrently based on available NPU cores.
 
 ## System Overview
 
