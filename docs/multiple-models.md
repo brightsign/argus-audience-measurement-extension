@@ -1,10 +1,10 @@
 # Multiple Model Architecture
 
-This document describes how to extend the BrightSign NPU Gaze Extension architecture to support running multiple models concurrently, leveraging the RK3588's 3-core NPU.
+This document describes how to extend the BrightSign NPU Gaze Extension architecture to support running multiple models concurrently, leveraging all 3 cores of the RK3588's NPU for retail analytics.
 
 ## Executive Summary
 
-The RK3588 NPU has 3 cores that can run models independently. To run RetinaFace (gaze detection) and YOLOx (object detection) concurrently, we need to:
+The RK3588 NPU has 3 cores that can run models independently. To run RetinaFace (face/gaze detection), YOLOv8-pose (person pose estimation), and YOLOx (object detection) concurrently on all 3 cores, we need to:
 
 1. **Split preprocessing into model-specific branches** after initial capture
 2. **Create parallel inference pipelines** with dedicated queues and workers per model
@@ -14,6 +14,29 @@ The RK3588 NPU has 3 cores that can run models independently. To run RetinaFace 
 
 The key insight: **share capture, fork preprocessing, parallelize inference, merge results**.
 
+## Retail Analytics Goals
+
+The system provides comprehensive shopper analytics by combining outputs from three specialized models:
+
+**Detection Outputs:**
+- **Person count**: Number of people in frame (from YOLOv8-pose)
+- **Face count**: Number of faces detected (from RetinaFace)
+- **Gaze count**: Number of faces looking at screen (from RetinaFace gaze estimation)
+- **Pose data**: 17 COCO keypoints per person (shoulders, elbows, wrists, hips, knees, ankles, etc.)
+- **Object context**: Detected objects like carts, baskets, products (from YOLOx)
+
+**Frame-to-Frame Tracking:**
+- **Movement direction**: Track person position changes across frames
+- **Gaze state changes**: Detect when person looks toward/away from screen
+- **Pose transitions**: Identify pose changes indicating specific behaviors
+
+**Behavioral Inference (via transfer learning on YOLOv8-pose):**
+- **Pushing cart**: Arm/hand positions extended forward, body leaning slightly
+- **Carrying basket**: Elbow bent, hand raised to waist/chest height
+- **Shelf interaction**: Arm extension toward shelf, hand position near product level
+- **Standing/browsing**: Stationary with minimal pose variation
+- **Walking**: Regular leg movement pattern
+
 ## Architecture Changes
 
 ### Current Single-Model Architecture (Recap)
@@ -22,19 +45,22 @@ The key insight: **share capture, fork preprocessing, parallelize inference, mer
 Capture -> QueueA -> Preprocess -> QueueB -> ModelRunner -> Postprocess -> Publishers
 ```
 
-### New Multi-Model Architecture
+### New 3-Model Architecture (Full NPU Utilization)
 
 ```
-                    -> PreprocRetina -> QueueRetina -> RetinaFace(NPU0) 
-Capture -> QueueA $                                                      -> Fusion -> Publishers
-                    -> PreprocYOLO   -> QueueYOLO   -> YOLOx(NPU1)      
+                    -> PreprocRetina -> QueueRetina -> RetinaFace(NPU0)   -\
+                    |                                                       |
+Capture -> QueueA ->|-> PreprocPose  -> QueuePose   -> YOLOv8-pose(NPU1) -|-> Fusion -> Tracker -> Publishers
+                    |                                                       |
+                    \-> PreprocYOLO  -> QueueYOLO   -> YOLOx(NPU2)        -/
 ```
 
 **Key principles:**
-- **Single capture source**: One camera feed for all models (minimizes bandwidth)
+- **Single capture source**: One camera feed for all 3 models (minimizes bandwidth)
 - **Forked preprocessing**: Each model gets its own preprocessing worker with model-specific transforms
-- **Parallel inference**: Models run concurrently on different NPU cores
+- **Parallel inference**: All 3 models run concurrently, one per NPU core
 - **Result fusion**: Combined post-processor merges detections with timestamp correlation
+- **Temporal tracking**: Frame-to-frame tracker maintains person state, movement, and behavior history
 
 ## Detailed Component Changes
 
@@ -82,7 +108,7 @@ auto frame = captureQueue.pop();  // Reference counted, no copy
 - Each worker reads its own ModelSpec configuration
 - Workers run in parallel threads
 
-**Example: Two preprocessing workers**
+**Example: Three preprocessing workers**
 
 ```cpp
 // RetinaFace preprocessing worker
@@ -94,6 +120,19 @@ class RetinaPreprocessWorker {
             auto frame = captureQueue.pop();  // shared_ptr<Frame>
             auto tensor = preprocess(frame, retinaSpec);
             retinaQueue.push(tensor);
+        }
+    }
+};
+
+// YOLOv8-pose preprocessing worker
+class PosePreprocessWorker {
+    ModelSpec poseSpec;  // 640x640 BGR, mean=[0,0,0], std=[255,255,255]
+
+    void run() {
+        while (running) {
+            auto frame = captureQueue.pop();  // same shared_ptr<Frame>
+            auto tensor = preprocess(frame, poseSpec);
+            poseQueue.push(tensor);
         }
     }
 };
@@ -128,11 +167,12 @@ class YOLOPreprocessWorker {
 
 ```cpp
 FrameQueue retinaInferenceQueue(capacity=1, policy=OVERWRITE);
+FrameQueue poseInferenceQueue(capacity=1, policy=OVERWRITE);
 FrameQueue yoloInferenceQueue(capacity=1, policy=OVERWRITE);
 ```
 
 **Why separate queues?**
-- Models have different inference times (RetinaFace ~15ms, YOLOx ~30ms)
+- Models have different inference times (RetinaFace ~15ms, YOLOv8-pose ~25ms, YOLOx ~30ms)
 - Independent queues prevent head-of-line blocking
 - Each model gets freshest preprocessed frame at its own pace
 
@@ -172,16 +212,17 @@ class ModelRunner {
 
 // Usage
 ModelRunner retinaRunner(retinaModel, npu_core_id=0);
-ModelRunner yoloRunner(yoloModel, npu_core_id=1);
+ModelRunner poseRunner(poseModel, npu_core_id=1);
+ModelRunner yoloRunner(yoloModel, npu_core_id=2);
 ```
 
 **RK3588 NPU Core Allocation Strategy:**
 
-| NPU Core | Assignment | Rationale |
-|----------|------------|-----------|
-| Core 0   | RetinaFace | Face detection (primary task, ~15ms) |
-| Core 1   | YOLOx      | Object detection (~30ms) |
-| Core 2   | Reserved   | Future model (e.g., pose estimation) |
+| NPU Core | Assignment    | Rationale |
+|----------|---------------|-----------|
+| Core 0   | RetinaFace    | Face/gaze detection (fastest, ~15ms) |
+| Core 1   | YOLOv8-pose   | Pose estimation with 17 keypoints (~25ms) |
+| Core 2   | YOLOx         | Object detection for carts/baskets/products (~30ms) |
 
 **Important:** RKNN API allows core affinity via `rknn_init` flags. Verify with RKNN toolkit that models are actually scheduled on target cores (check `rknn_query(RKNN_QUERY_PERF_DETAIL)`).
 
@@ -198,9 +239,11 @@ ModelRunner yoloRunner(yoloModel, npu_core_id=1);
 **Architecture:**
 
 ```
-RetinaFace -> RetinaPostproc -> FusionQueue 
-                                            -> FusionPostproc -> Publishers
-YOLOx      -> YOLOPostproc   -> FusionQueue 
+RetinaFace  -> RetinaPostproc -> FusionQueue -\
+                                               |
+YOLOv8-pose -> PosePostproc   -> FusionQueue -|-> FusionPostproc -> Tracker -> Publishers
+                                               |
+YOLOx       -> YOLOPostproc   -> FusionQueue -/
 ```
 
 **Implementation:**
@@ -216,6 +259,26 @@ class RetinaPostprocessor {
         result.timestamp = output.timestamp;
         result.faces = faces;
         result.gazes = gazes;
+        result.gaze_count = countLookingAtScreen(gazes);
+
+        fusionQueue.push(result);
+    }
+};
+
+class PosePostprocessor {
+    void process(PoseOutput output) {
+        auto persons = extractPersons(output);  // NMS, confidence threshold
+
+        // Extract 17 COCO keypoints per person
+        // [nose, left_eye, right_eye, left_ear, right_ear,
+        //  left_shoulder, right_shoulder, left_elbow, right_elbow,
+        //  left_wrist, right_wrist, left_hip, right_hip,
+        //  left_knee, right_knee, left_ankle, right_ankle]
+
+        DetectionResult result;
+        result.timestamp = output.timestamp;
+        result.persons = persons;
+        result.person_count = persons.size();
 
         fusionQueue.push(result);
     }
@@ -227,7 +290,7 @@ class YOLOPostprocessor {
 
         DetectionResult result;
         result.timestamp = output.timestamp;
-        result.objects = objects;
+        result.objects = objects;  // carts, baskets, products
 
         fusionQueue.push(result);
     }
@@ -238,7 +301,12 @@ class FusionPostprocessor {
     struct TimestampedResult {
         uint64_t timestamp;
         optional<FaceDetections> faces;
+        optional<PoseDetections> persons;
         optional<ObjectDetections> objects;
+
+        int person_count = 0;
+        int face_count = 0;
+        int gaze_count = 0;
     };
 
     // Buffer to hold results waiting for pairing
@@ -252,31 +320,227 @@ class FusionPostprocessor {
             auto& entry = buffer[result.timestamp];
 
             // Merge into entry
-            if (result.has_faces()) entry.faces = result.faces;
-            if (result.has_objects()) entry.objects = result.objects;
+            if (result.has_faces()) {
+                entry.faces = result.faces;
+                entry.face_count = result.faces.size();
+                entry.gaze_count = result.gaze_count;
+            }
+            if (result.has_persons()) {
+                entry.persons = result.persons;
+                entry.person_count = result.person_count;
+            }
+            if (result.has_objects()) {
+                entry.objects = result.objects;
+            }
 
             // Check if we have all expected results for this timestamp
             if (entry.is_complete() || entry.is_too_old()) {
-                // Publish combined result
-                publishCombined(entry);
+                // Correlate detections
+                correlatePersonsWithFaces(entry);
+                correlatePersonsWithObjects(entry);
+
+                // Send to tracker
+                trackerQueue.push(entry);
                 buffer.erase(result.timestamp);
             }
         }
+    }
+
+    void correlatePersonsWithFaces(TimestampedResult& entry) {
+        // Match face bboxes with person bboxes based on IoU
+        // Link gaze direction to specific person
+    }
+
+    void correlatePersonsWithObjects(TimestampedResult& entry) {
+        // Associate nearby carts/baskets with persons
+        // Detect if person's hand keypoints overlap with shelf products
     }
 };
 ```
 
 **Fusion strategies:**
 
-1. **Timestamp matching** (primary): Wait for results from both models with matching timestamps
+1. **Timestamp matching** (primary): Wait for results from all 3 models with matching timestamps
 2. **Timeout-based**: If one model is slow, publish partial results after timeout (e.g., 100ms)
 3. **Best-effort**: Publish latest available results from each model, even if timestamps don't align
 
-**Correlation logic (optional):**
-- **Associate faces with nearby objects**: If face bbox overlaps with "person" object, link them
-- **Scene understanding**: Use object detections to provide context for gaze (e.g., "looking at cup")
+**Correlation logic:**
+- **Associate faces with persons**: Match face bbox with person bbox using IoU, link gaze to specific person
+- **Associate persons with objects**: Link nearby carts/baskets to persons based on proximity
+- **Detect shelf interactions**: Check if wrist keypoints are near product bounding boxes
+- **Scene understanding**: Combine all detections for rich behavioral context
 
-### 6. Resource Manager (Extended for Multi-Model)
+### 6. Temporal Tracking (New Component)
+
+The tracker maintains frame-to-frame continuity and detects behavioral patterns over time.
+
+**Implementation:**
+
+```cpp
+class TemporalTracker {
+    struct TrackedPerson {
+        int track_id;
+        cv::Rect2f bbox;
+        std::vector<cv::Point2f> keypoints;  // 17 COCO keypoints
+
+        // Face/gaze association
+        optional<int> face_id;
+        bool looking_at_screen;
+
+        // Object associations
+        optional<int> cart_id;
+        optional<int> basket_id;
+
+        // Movement tracking
+        cv::Point2f velocity;  // pixels/frame
+        float direction_angle;  // radians
+
+        // Behavior state
+        PoseBehavior behavior;  // PUSHING_CART, CARRYING_BASKET, SHELF_INTERACTION, etc.
+        int behavior_frame_count;  // frames in current behavior
+
+        // History for temporal analysis
+        std::deque<cv::Point2f> position_history;  // last N positions
+        std::deque<PoseKeypoints> pose_history;     // last N poses
+        int frames_since_gaze_change;
+    };
+
+    std::map<int, TrackedPerson> active_tracks;
+    int next_track_id = 0;
+
+    void update(const TimestampedResult& fused_result) {
+        // 1. Data association: match current detections to existing tracks
+        auto associations = matchDetectionsToTracks(fused_result.persons);
+
+        // 2. Update existing tracks
+        for (auto& [det_idx, track_id] : associations) {
+            updateTrack(track_id, fused_result, det_idx);
+        }
+
+        // 3. Create new tracks for unmatched detections
+        for (auto& unmatched_det : getUnmatchedDetections(associations)) {
+            createNewTrack(unmatched_det, fused_result);
+        }
+
+        // 4. Remove stale tracks (not detected for N frames)
+        removeStale Tracks();
+
+        // 5. Analyze behavior changes
+        for (auto& [track_id, person] : active_tracks) {
+            analyzeBehaviorChange(person);
+            detectMovementPattern(person);
+            trackGazeChanges(person);
+        }
+
+        // 6. Publish tracking results
+        publishTrackingResults();
+    }
+
+    void updateTrack(int track_id, const TimestampedResult& result, int det_idx) {
+        auto& track = active_tracks[track_id];
+        auto& detection = result.persons[det_idx];
+
+        // Update position
+        cv::Point2f prev_center = getCenter(track.bbox);
+        track.bbox = detection.bbox;
+        cv::Point2f new_center = getCenter(detection.bbox);
+
+        // Compute velocity
+        track.velocity = new_center - prev_center;
+        track.direction_angle = atan2(track.velocity.y, track.velocity.x);
+
+        // Update keypoints and pose history
+        track.keypoints = detection.keypoints;
+        track.pose_history.push_back(detection.keypoints);
+        if (track.pose_history.size() > 10) track.pose_history.pop_front();
+
+        // Update position history
+        track.position_history.push_back(new_center);
+        if (track.position_history.size() > 30) track.position_history.pop_front();
+
+        // Associate with face/gaze
+        track.face_id = findMatchingFace(track.bbox, result.faces);
+        if (track.face_id) {
+            bool prev_gaze = track.looking_at_screen;
+            track.looking_at_screen = result.faces[*track.face_id].looking_at_screen;
+            if (prev_gaze != track.looking_at_screen) {
+                track.frames_since_gaze_change = 0;
+            } else {
+                track.frames_since_gaze_change++;
+            }
+        }
+
+        // Associate with objects (cart, basket)
+        track.cart_id = findNearbyObject(track.bbox, result.objects, "cart");
+        track.basket_id = findNearbyObject(track.bbox, result.objects, "basket");
+    }
+
+    void analyzeBehaviorChange(TrackedPerson& person) {
+        // Infer behavior from pose keypoints and object associations
+        PoseBehavior new_behavior = inferBehavior(person);
+
+        if (new_behavior != person.behavior) {
+            // Behavior changed - emit event
+            emitBehaviorChangeEvent(person.track_id, person.behavior, new_behavior);
+            person.behavior = new_behavior;
+            person.behavior_frame_count = 0;
+        } else {
+            person.behavior_frame_count++;
+        }
+    }
+
+    PoseBehavior inferBehavior(const TrackedPerson& person) {
+        // Use heuristics on keypoints + object associations
+        // Later: use transfer-learned classifier
+
+        if (person.cart_id.has_value()) {
+            // Check arm positions for pushing gesture
+            if (armsExtendedForward(person.keypoints)) {
+                return PoseBehavior::PUSHING_CART;
+            }
+        }
+
+        if (person.basket_id.has_value()) {
+            // Check for bent elbow, raised hand
+            if (armBentWithRaisedHand(person.keypoints)) {
+                return PoseBehavior::CARRYING_BASKET;
+            }
+        }
+
+        // Check for shelf interaction (hand near products)
+        if (handNearShelfProducts(person, objects)) {
+            return PoseBehavior::SHELF_INTERACTION;
+        }
+
+        // Check movement
+        if (person.velocity.norm() < 2.0) {
+            return PoseBehavior::STANDING;
+        } else {
+            return PoseBehavior::WALKING;
+        }
+    }
+};
+```
+
+**Tracking Features:**
+
+- **Person re-identification**: Maintains consistent track IDs across frames using IoU + keypoint similarity
+- **Velocity estimation**: Computes direction and speed of movement
+- **Gaze tracking**: Monitors when person starts/stops looking at screen
+- **Behavior classification**: Infers activity from pose + object context
+- **Event detection**: Emits events for behavior changes (started browsing, picked up product, etc.)
+
+**Transfer Learning Note:**
+
+The `inferBehavior()` function initially uses heuristics. For production, train a classifier on the 17 keypoints to recognize:
+- Pushing cart (arms extended, torso leaning)
+- Carrying basket (elbow bent, hand raised)
+- Shelf reach (arm extension, hand up)
+- Product pickup (hand near shelf, then retraction)
+
+Fine-tune YOLOv8-pose or add a lightweight MLP head on the keypoints for behavior classification.
+
+### 7. Resource Manager (Extended for Multi-Model)
 
 **Current behavior:**
 - Manages RGA contexts, tensor buffers for single model
@@ -321,7 +585,7 @@ class ResourceManager {
 - YOLOx: ~4.7MB input (640x640x3 float), ~200KB output
 - Total NPU memory budget on RK3588: ~800MB shared across cores
 
-### 7. Configuration (Multi-Model Support)
+### 8. Configuration (Multi-Model Support)
 
 **Current configuration:**
 ```yaml
@@ -357,10 +621,31 @@ processing:
         confidence_threshold: 0.7
         max_faces: 10
 
+    - name: "yolov8_pose"
+      enabled: true
+      model_path: "/models/yolov8n_pose_640.rknn"
+      npu_core: 1  # Core 1 for pose estimation
+      priority: "high"
+
+      preprocessing:
+        target_size: [640, 640]
+        color_format: "BGR"
+        normalize:
+          mean: [0, 0, 0]
+          std: [255, 255, 255]
+        letterbox: true
+
+      postprocessing:
+        type: "yolov8_pose"
+        nms_threshold: 0.5
+        confidence_threshold: 0.5
+        max_persons: 20
+        keypoint_confidence_threshold: 0.3
+
     - name: "yolox"
       enabled: true
       model_path: "/models/yolox_s_640.rknn"
-      npu_core: 1
+      npu_core: 2  # Core 2 for object detection
       priority: "medium"
 
       preprocessing:
@@ -375,52 +660,78 @@ processing:
         type: "yolox"
         nms_threshold: 0.5
         confidence_threshold: 0.5
-        classes: ["person", "cup", "phone", "bottle"]  # Filter to relevant objects
+        classes: ["cart", "basket", "bottle", "cup", "cell phone"]  # Retail-relevant objects
 
   # Fusion configuration
   fusion:
     enabled: true
     timestamp_tolerance_ms: 50  # Max time diff for matching results
     timeout_ms: 100  # Max wait for missing results
-    correlate_faces_objects: true  # Link faces with person detections
+    correlate_persons_faces: true  # Link persons with face detections
+    correlate_persons_objects: true  # Link persons with carts/baskets
+    detect_shelf_interactions: true  # Check wrist keypoints near products
+
+  # Tracking configuration
+  tracking:
+    enabled: true
+    max_age: 30  # frames to keep track without detection
+    min_hits: 3  # detections required before publishing track
+    iou_threshold: 0.3  # for matching detections to tracks
+
+    # Behavior classification
+    behavior_detection:
+      enabled: true
+      use_transfer_learning: false  # Set true when model is trained
+      model_path: "/models/behavior_classifier.rknn"  # Optional: trained classifier
 
 output:
   publishers:
     - type: "udp_json"
       port: 8080
       include_faces: true
+      include_persons: true
+      include_person_count: true
+      include_face_count: true
+      include_gaze_count: true
       include_objects: true
+      include_tracks: true
+      include_behaviors: true
       include_correlations: true
 ```
 
-### 8. Orchestrator (Multi-Pipeline Management)
+### 9. Orchestrator (Multi-Pipeline Management)
 
 **Current behavior:**
 - Starts single capture -> preprocess -> infer -> postprocess pipeline
 
 **New behavior:**
 - Starts capture (single)
-- **Starts multiple preprocessing workers** (one per model)
-- **Starts multiple inference workers** (one per model)
-- **Starts multiple postprocessing workers** (one per model)
+- **Starts 3 preprocessing workers** (one per model)
+- **Starts 3 inference workers** (one per model, one per NPU core)
+- **Starts 3 postprocessing workers** (one per model)
 - Starts fusion worker
+- Starts tracking worker
 - Starts publishers
 
 **Thread topology:**
 
 ```
-Thread 1: CaptureWorker
-Thread 2: RetinaPreprocessWorker
-Thread 3: RetinaInferenceWorker (NPU core 0)
-Thread 4: RetinaPostprocessWorker
-Thread 5: YOLOPreprocessWorker
-Thread 6: YOLOInferenceWorker (NPU core 1)
-Thread 7: YOLOPostprocessWorker
-Thread 8: FusionWorker
-Thread 9: PublisherWorker
+Thread 1:  CaptureWorker
+Thread 2:  RetinaPreprocessWorker
+Thread 3:  RetinaInferenceWorker (NPU core 0)
+Thread 4:  RetinaPostprocessWorker
+Thread 5:  PosePreprocessWorker
+Thread 6:  PoseInferenceWorker (NPU core 1)
+Thread 7:  PosePostprocessWorker
+Thread 8:  YOLOPreprocessWorker
+Thread 9:  YOLOInferenceWorker (NPU core 2)
+Thread 10: YOLOPostprocessWorker
+Thread 11: FusionWorker
+Thread 12: TrackingWorker
+Thread 13: PublisherWorker
 ```
 
-**Total: 9 threads** (vs. 4-5 for single model)
+**Total: 13 threads** (vs. 4-5 for single model)
 
 **Orchestrator initialization:**
 
@@ -463,6 +774,12 @@ class Orchestrator {
             fusionWorker->start();
         }
 
+        // Start tracking worker
+        if (config.tracking.enabled) {
+            trackingWorker = std::make_unique<TrackingWorker>(config.tracking);
+            trackingWorker->start();
+        }
+
         // Start publishers
         for (auto& pub : publishers) {
             pub->start();
@@ -481,49 +798,69 @@ sequenceDiagram
     participant Cap as "Capture"
     participant QA as "CaptureQueue"
     participant PR as "PreprocRetina"
+    participant PP as "PreprocPose"
     participant PY as "PreprocYOLO"
     participant QR as "QueueRetina"
+    participant QP as "QueuePose"
     participant QY as "QueueYOLO"
     participant MR as "RetinaFace(NPU0)"
-    participant MY as "YOLOx(NPU1)"
+    participant MP as "YOLOv8-pose(NPU1)"
+    participant MY as "YOLOx(NPU2)"
     participant PostR as "PostRetina"
+    participant PostP as "PostPose"
     participant PostY as "PostYOLO"
     participant Fuse as "Fusion"
+    participant Track as "Tracker"
     participant Pub as "Publishers"
 
     Cap->>QA: push shared_ptr<Frame>
 
-    par Parallel Preprocessing
+    par Parallel Preprocessing (3 workers)
         PR->>QA: pop shared_ptr<Frame>
         PR->>PR: NV12->RGB, resize 320x320
         PR->>QR: push tensor
+    and
+        PP->>QA: pop shared_ptr<Frame>
+        PP->>PP: NV12->BGR, resize 640x640
+        PP->>QP: push tensor
     and
         PY->>QA: pop shared_ptr<Frame>
         PY->>PY: NV12->BGR, resize 640x640
         PY->>QY: push tensor
     end
 
-    par Parallel Inference
+    par Parallel Inference (3 NPU cores)
         MR->>QR: pop tensor
         MR->>MR: infer on NPU core 0
         MR->>PostR: send detections
     and
+        MP->>QP: pop tensor
+        MP->>MP: infer on NPU core 1
+        MP->>PostP: send detections
+    and
         MY->>QY: pop tensor
-        MY->>MY: infer on NPU core 1
+        MY->>MY: infer on NPU core 2
         MY->>PostY: send detections
     end
 
-    par Parallel Post-processing
+    par Parallel Post-processing (3 workers)
         PostR->>PostR: extract faces/gaze, NMS
-        PostR->>Fuse: push {ts, faces}
+        PostR->>Fuse: push {ts, faces, gaze_count}
+    and
+        PostP->>PostP: extract persons/keypoints, NMS
+        PostP->>Fuse: push {ts, persons, person_count}
     and
         PostY->>PostY: extract objects, NMS
         PostY->>Fuse: push {ts, objects}
     end
 
     Fuse->>Fuse: match by timestamp
-    Fuse->>Fuse: correlate faces->objects
-    Fuse->>Pub: publish combined result
+    Fuse->>Fuse: correlate persons->faces->objects
+    Fuse->>Track: send fused result
+
+    Track->>Track: update tracks, compute velocity
+    Track->>Track: infer behaviors, detect events
+    Track->>Pub: publish tracks + analytics
 ```
 
 ## Performance Considerations
@@ -538,36 +875,41 @@ sequenceDiagram
 - **Total latency:** ~55ms
 - **Throughput:** ~18 FPS (limited by capture)
 
-**Multi-model (RetinaFace + YOLOx):**
+**3-model (RetinaFace + YOLOv8-pose + YOLOx):**
 - Capture: 33ms (30 FPS)  **shared**
-- Preprocess: 5ms (Retina) + 8ms (YOLO)  **parallel**
-- Inference: 15ms (Retina, NPU0) + 30ms (YOLO, NPU1)  **parallel**
-- Postprocess: 2ms (Retina) + 3ms (YOLO)  **parallel**
+- Preprocess: 5ms (Retina) + 8ms (Pose) + 8ms (YOLO)  **parallel**
+- Inference: 15ms (Retina, NPU0) + 25ms (Pose, NPU1) + 30ms (YOLO, NPU2)  **parallel**
+- Postprocess: 2ms (Retina) + 3ms (Pose) + 3ms (YOLO)  **parallel**
 - Fusion: 1ms
-- **Total latency:** 33ms (capture) + max(8ms preproc, 30ms infer) + 1ms fusion = **72ms**
-- **Throughput:** ~14 FPS (limited by YOLOx inference)
+- Tracking: 2ms
+- **Total latency:** 33ms (capture) + max(8ms preproc, 30ms infer, 3ms postproc) + 1ms fusion + 2ms tracking = **69ms**
+- **Throughput:** ~14 FPS (limited by YOLOx inference on NPU core 2)
 
-**Bottleneck:** YOLOx inference at 30ms. Consider:
-- Using smaller YOLOx variant (YOLOx-nano: ~10ms)
-- Reducing YOLOx input size (640->416)
-- Running YOLOx at reduced frame rate (every 2nd frame)
+**Bottleneck:** YOLOx inference at 30ms on NPU core 2. Options:
+- Use smaller YOLOx variant (YOLOx-nano: ~10ms) → achieve ~20 FPS
+- Reduce YOLOx input size (640→416) → ~20ms inference
+- Run YOLOx at reduced frame rate (every 2nd frame) while maintaining pose/face at full rate
+
+**All 3 NPU cores fully utilized**
 
 ### Memory Footprint
 
-| Component | Single Model | Multi-Model | Delta |
-|-----------|--------------|-------------|-------|
-| Model weights (RKNN) | 1.5 MB (Retina) | 1.5 MB + 9 MB (YOLOx) | +9 MB |
-| Input tensors | 0.3 MB | 0.3 MB + 4.7 MB | +4.7 MB |
-| Output tensors | 0.05 MB | 0.05 MB + 0.2 MB | +0.2 MB |
+| Component | Single Model | 3-Model System | Delta |
+|-----------|--------------|----------------|-------|
+| Model weights (RKNN) | 1.5 MB (Retina) | 1.5 MB + 3.5 MB (Pose) + 9 MB (YOLOx) | +12.5 MB |
+| Input tensors | 0.3 MB | 0.3 MB + 4.7 MB (Pose) + 4.7 MB (YOLO) | +9.4 MB |
+| Output tensors | 0.05 MB | 0.05 MB + 0.3 MB (Pose) + 0.2 MB (YOLO) | +0.5 MB |
 | Frame buffers (shared) | 1.2 MB | 1.2 MB | 0 |
-| **Total** | ~3 MB | ~17 MB | +14 MB |
+| Tracking state | 0 | ~0.5 MB (30 tracks × ~17KB each) | +0.5 MB |
+| **Total** | ~3 MB | ~26 MB | +23 MB |
 
-**RK3588 NPU memory budget:** ~800 MB total, so 17 MB is well within limits.
+**RK3588 NPU memory budget:** ~800 MB total, so 26 MB is well within limits.
 
 ### CPU Load
 
 - Preprocessing is CPU/RGA-bound (if RGA is saturated, will use OpenCV fallback)
-- With 2 preprocessing workers, RGA utilization increases
+- With 3 preprocessing workers, RGA utilization is higher
+- Tracking adds CPU overhead (~2ms per frame for 10-20 tracked persons)
 - Monitor RGA queue depth; if high, consider staggering preprocessing or reducing resolution
 
 ### Synchronization Overhead
