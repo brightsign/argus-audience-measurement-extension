@@ -13,7 +13,7 @@
 
 **LOS GATOS, CA** – BrightSign, the global market leader in digital signage media players, today announced BrightShopper, a revolutionary edge AI analytics platform that transforms retail digital signage displays into intelligent customer behavior sensors. Built on BrightSign's proven hardware platform, BrightShopper delivers real-time shopper analytics with zero cloud latency, complete data privacy, and cinema-quality performance.
 
-BrightShopper represents a breakthrough in retail analytics by simultaneously running three specialized AI models across all three NPU cores in the XT5 player, delivering comprehensive behavioral insights that were previously impossible to achieve at the edge:
+BrightShopper is available on two BrightSign player models, each optimized for different deployment needs. The flagship XT5 player runs three specialized AI models simultaneously, while the XS156 player runs two models for cost-effective installations. Both deliver comprehensive behavioral insights that were previously impossible to achieve at the edge:
 
 - **People counting and tracking**: Know exactly how many shoppers are in view and track their movement patterns
 - **Facial detection and gaze tracking**: Understand which content captures attention and for how long
