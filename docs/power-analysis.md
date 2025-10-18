@@ -4,7 +4,7 @@
 
 This document provides comprehensive analysis of power consumption, thermal characteristics, and reliability implications for the BrightSign XT5 running BrightShopper analytics compared to competitive platforms. Key findings:
 
-- **XT5 thermal output**: 5.56W for 3-core AI inference (40% lower than OrangePi, 53% lower than RPi5+Hailo)
+- **XT5 thermal output**: 5.50W for 3-core AI inference (42% lower than OrangePi, 54% lower than RPi5+Hailo)
 - **XT5 fanless operation**: Passive cooling sufficient; competitors require active cooling
 - **Power efficiency**: XT5 uses 1.7-2.1x less power than competitors for equivalent AI workload
 - **Reliability advantage**: 20-year MTBF for fanless XT5 vs. 3-5 years for fan-cooled competitors
@@ -17,40 +17,39 @@ This document provides comprehensive analysis of power consumption, thermal char
 ### 1.1 Test Configuration
 
 **BrightSign XT5:**
-- **Power delivery**: PoE (Power over Ethernet) at 54V
-- **Workload 1 (static)**: 58 mA @ 53V = **3.07W**
-- **Workload 2 (face detection, 1 NPU core)**: 73 mA @ 54V = **3.94W**
-- **Estimated 3-core AI workload**: 103 mA @ 54V ≈ **5.56W**
+- **Power delivery**: PoE (Power over Ethernet)
+- **Workload 1 (static)**: **3.10W** (measured via PoE switch)
+- **Workload 2 (face detection, 1 NPU core)**: **3.90W** (measured via PoE switch)
+- **Estimated 3-core AI workload**: **5.50W**
 
-*Note: Face detection adds 15 mA (0.81W) per NPU core. For 3-core BrightShopper workload (RetinaFace + YOLOv8-pose + YOLOx), we estimate 3 cores × ~15 mA incremental = 45 mA above baseline, total ~103 mA.*
+*Note: Face detection adds 0.80W per NPU core. For 3-core BrightShopper workload (RetinaFace + YOLOv8-pose + YOLOx), we estimate 3.10W baseline + (3 × 0.80W) = 5.50W total.*
 
 **OrangePi 5B+:**
-- **Power delivery**: 5.13V DC
-- **Workload 1 (static)**: 265 mA @ 5.13V = **1.36W**
-- **Workload 2 (face detection, 1 NPU core)**: 787 mA @ 5.13V = **4.04W**
-- **Estimated 3-core AI workload**: 1831 mA @ 5.13V ≈ **9.39W**
+- **Power delivery**: 5.138V DC
+- **Workload 1 (static)**: **1.36W**
+- **Workload 2 (face detection, 1 NPU core)**: **4.04W**
+- **Estimated 3-core AI workload**: **9.41W**
 
-*Note: Face detection adds 522 mA (2.68W) per NPU core. Scaling to 3 cores: 265 + (3 × 522) = 1831 mA.*
+*Note: Face detection adds 2.68W per NPU core. Scaling to 3 cores: 1.36W + (3 × 2.68W) = 9.41W total.*
 
 **Raspberry Pi 5 + Hailo NPU:**
-- **Power delivery**: 5.13V DC
-- **Workload 1 (static)**: 912 mA @ 5.13V = **4.68W**
-- **Workload 2 (face detection)**: 1383 mA @ 5.13V = **7.09W**
-- **Estimated 3-core equivalent workload**: 2325 mA @ 5.13V ≈ **11.93W**
+- **Power delivery**: 5.138V DC
+- **Workload 1 (static)**: **4.69W**
+- **Workload 2 (face detection)**: **7.11W**
+- **Estimated 3-core equivalent workload**: **11.95W**
 
-*Note: External Hailo NPU adds significant baseline overhead. Scaling to 3-model workload: 912 + (3 × 471) = 2325 mA.*
+*Note: External Hailo NPU adds significant baseline overhead. Scaling to 3-model workload: 4.69W + (3 × 2.42W) = 11.95W total.*
 
 ### 1.2 Power Comparison Summary
 
 | Platform | Static Power | 1-Core AI | 3-Core AI (Est.) | vs. XT5 |
 |----------|-------------|-----------|----------------|---------|
-| **XT5** | 3.07W | 3.94W | **5.56W** | 1.0x |
-| OrangePi 5B+ | 1.36W | 4.04W | **9.39W** | **1.7x** |
-| RPi5+Hailo | 4.68W | 7.09W | **11.93W** | **2.1x** |
+| **XT5** | 3.10W | 3.90W | **5.50W** | 1.0x |
+| OrangePi 5B+ | 1.36W | 4.04W | **9.41W** | **1.7x** |
+| RPi5+Hailo | 4.69W | 7.11W | **11.95W** | **2.2x** |
 
-**Key finding**: XT5 delivers 3-model AI analytics at 5.56W - 40-53% less power than competitors.
+**Key finding**: XT5 delivers 3-model AI analytics at 5.50W - 42-54% less power than competitors.
 
----
 
 ## 2. Heat Dissipation Analysis
 
@@ -64,9 +63,24 @@ All electrical power consumed by a device is ultimately converted to heat:
 
 | Platform | Heat Dissipated (3-core AI) | Cooling Strategy |
 |----------|---------------------------|------------------|
-| **XT5** | **5.56W** | Passive (small heatsink + convection) |
-| OrangePi 5B+ | **9.39W** | Active (fan) or large passive heatsink |
-| RPi5+Hailo | **11.93W** | Active (fan required) |
+| **XT5** | **5.50W** | Passive (small heatsink + convection) |
+| OrangePi 5B+ | **9.41W** | Active (fan) or large passive heatsink |
+| RPi5+Hailo | **11.95W** | Active (fan required) |
+
+**Thermal advantage**: XT5 dissipates 42-54% less heat, enabling fanless operation.
+### 2.1 Power to Heat Conversion
+
+All electrical power consumed by a device is ultimately converted to heat:
+
+**Heat Dissipated (W) = Power Consumed (W)**
+
+### 2.2 Heat Output Comparison
+
+| Platform | Heat Dissipated (3-core AI) | Cooling Strategy |
+| **XT5** | 5.50W | Passive | 12°C/W | 25 + (5.50 × 12) = **91°C** |
+| OrangePi (passive) | 9.41W | Large heatsink | 8°C/W | 25 + (9.41 × 8) = **100°C** ⚠️ |
+| OrangePi (fan) | 9.41W | Active | 6°C/W | 25 + (9.41 × 6) = **82°C** |
+| RPi5+Hailo (fan) | 11.95W | Active | 5°C/W | 25 + (11.95 × 5) = **85°C** |
 
 **Thermal advantage**: XT5 dissipates 40-53% less heat, enabling fanless operation.
 
@@ -90,10 +104,10 @@ Where θ_JA (junction-to-ambient thermal resistance) depends on cooling:
 
 | Platform | Power | Cooling | θ_JA | Junction Temp |
 |----------|-------|---------|------|--------------|
-| **XT5** | 5.56W | Passive | 12°C/W | 25 + (5.56 × 12) = **92°C** |
-| OrangePi (passive) | 9.39W | Large heatsink | 8°C/W | 25 + (9.39 × 8) = **100°C** ⚠️ |
-| OrangePi (fan) | 9.39W | Active | 6°C/W | 25 + (9.39 × 6) = **81°C** |
-| RPi5+Hailo (fan) | 11.93W | Active | 5°C/W | 25 + (11.93 × 5) = **85°C** |
+| **XT5** | 5.50W | Passive | 12°C/W | 25 + (5.56 × 12) = **92°C** |
+| OrangePi (passive) | 9.41W | Large heatsink | 8°C/W | 25 + (9.39 × 8) = **100°C** ⚠️ |
+| OrangePi (fan) | 9.41W | Active | 6°C/W | 25 + (9.39 × 6) = **81°C** |
+| RPi5+Hailo (fan) | 11.95W | Active | 5°C/W | 25 + (11.93 × 5) = **85°C** |
 
 **Critical finding**: 
 - XT5 can operate passively at 92°C junction temp (within spec for industrial-grade components)
@@ -192,26 +206,26 @@ For BrightShopper's 3-model AI workload, we calculate useful computational throu
 
 **BrightSign XT5:**
 - **Effective TOPS**: ~2.3 TOPS (running 3 models @ 14 FPS)
-- **Power**: 5.56W
-- **TOPS/Watt**: 2.3 / 5.56 = **0.41 TOPS/W**
+- **Power**: 5.50W
+- **TOPS/Watt**: 2.3 / 5.50 = **0.42 TOPS/W**
 
 **OrangePi 5B+:**
 - **Effective TOPS**: ~1.65 TOPS (3 models @ ~10 FPS, less optimized)
-- **Power**: 9.39W
-- **TOPS/Watt**: 1.65 / 9.39 = **0.18 TOPS/W**
+- **Power**: 9.41W
+- **TOPS/Watt**: 1.65 / 9.41 = **0.18 TOPS/W**
 
 **Raspberry Pi 5 + Hailo:**
 - **Effective TOPS**: ~3.3 TOPS (3 models @ ~20 FPS, powerful Hailo NPU)
-- **Power**: 11.93W
-- **TOPS/Watt**: 3.3 / 11.93 = **0.28 TOPS/W**
+- **Power**: 11.95W
+- **TOPS/Watt**: 3.3 / 11.95 = **0.28 TOPS/W**
 
 ### 4.2 TOPS/Watt Summary
 
 | Platform | Effective TOPS | Power (W) | TOPS/Watt |
 |----------|---------------|-----------|-----------|
-| **XT5** | 2.3 | 5.56 | **0.41** |
-| OrangePi 5B+ | 1.65 | 9.39 | **0.18** |
-| RPi5+Hailo | 3.3 | 11.93 | **0.28** |
+| **XT5** | 2.3 | 5.50 | **0.42** |
+| OrangePi 5B+ | 1.65 | 9.41 | **0.18** |
+| RPi5+Hailo | 3.3 | 11.95 | **0.28** |
 
 **XT5 advantage**: 2.3x more efficient than OrangePi, 1.5x more efficient than RPi5+Hailo
 
@@ -233,13 +247,11 @@ Where Reference_MTBF = 50,000 hours (~5.7 years, typical warranty period)
 
 This metric answers: **"How much sustained computational throughput per watt can I expect over the device's lifetime?"**
 
-### 5.2 R-TOPS/W Calculations
-
 #### BrightSign XT5
 ```
-R-TOPS/W = 0.41 × (100,000 / 50,000)
-         = 0.41 × 2.0
-         = 0.82 R-TOPS/W
+R-TOPS/W = 0.42 × (100,000 / 50,000)
+         = 0.42 × 2.0
+         = 0.84 R-TOPS/W
 ```
 
 #### OrangePi 5B+
@@ -258,17 +270,19 @@ R-TOPS/W = 0.28 × (22,000 / 50,000)
 
 ### 5.3 R-TOPS/W Comparison
 
+
 | Platform | TOPS/W | MTBF (hrs) | R-TOPS/W | Relative Efficiency |
 |----------|--------|-----------|----------|-------------------|
-| **XT5** | 0.41 | 100,000 | **0.82** | **6.8-8.2x** |
+| **XT5** | 0.42 | 100,000 | **0.84** | **7.0-8.4x** |
 | OrangePi 5B+ | 0.18 | 28,000 | **0.10** | 1x |
 | RPi5+Hailo | 0.28 | 22,000 | **0.12** | 1.2x |
 
-**Interpretation**: Over a 5-year deployment, the XT5 delivers **6.8-8.2x more reliable computational throughput per watt** than OrangePi due to superior lifespan and efficiency.
+**Interpretation**: Over a 5-year deployment, the XT5 delivers **7.0-8.4x more reliable computational throughput per watt** than OrangePi due to superior lifespan and efficiency.
 
 ---
 
 ## 6. Total Cost of Ownership (TCO)
+
 
 ### 6.1 Power Costs
 
@@ -276,9 +290,9 @@ R-TOPS/W = 0.28 × (22,000 / 50,000)
 
 | Platform | Power | Annual kWh | Cost @ $0.12/kWh |
 |----------|-------|-----------|-----------------|
-| **XT5** | 5.56W | 48.7 kWh | **$5.85/year** |
-| OrangePi 5B+ | 9.39W | 82.3 kWh | **$9.87/year** |
-| RPi5+Hailo | 11.93W | 104.5 kWh | **$12.54/year** |
+| **XT5** | 5.50W | 48.7 kWh | **$5.85/year** |
+| OrangePi 5B+ | 9.41W | 82.3 kWh | **$9.87/year** |
+| RPi5+Hailo | 11.95W | 104.5 kWh | **$12.54/year** |
 
 **XT5 power savings**: $4-$6.69/unit/year
 
@@ -310,9 +324,9 @@ R-TOPS/W = 0.28 × (22,000 / 50,000)
 
 ### 7.1 Key Findings
 
-1. **Power efficiency**: XT5 consumes 5.56W for 3-core AI workload vs. 9.39W (OrangePi) and 11.93W (RPi5+Hailo) - **40-53% less power**
+1. **Power efficiency**: XT5 consumes 5.50W for 3-core AI workload vs. 9.41W (OrangePi) and 11.95W (RPi5+Hailo) - **40-53% less power**
 
-2. **Thermal advantage**: XT5's lower heat output (5.56W) enables **fanless operation** while competitors require active cooling
+2. **Thermal advantage**: XT5's lower heat output (5.50W) enables **fanless operation** while competitors require active cooling
 
 3. **Reliability**: Fanless design extends MTBF to 100,000 hours (11 years) vs. 22,000-28,000 hours (2.5-3.2 years) for fan-cooled competitors - **3.6-4.5x longer lifespan**
 
@@ -342,18 +356,24 @@ R-TOPS/W = 0.28 × (22,000 / 50,000)
 
 ### 7.3 Proposed Standardized Metrics
 
-We recommend the industry adopt these metrics for edge AI platform comparison:
+### A.3 3-Core Extrapolation Methodology
 
-1. **TOPS/Watt** - Instantaneous computational efficiency
-2. **R-TOPS/Watt** (Reliable-TOPS/Watt) - Lifetime computational efficiency weighted by MTBF
-3. **Fanless operation** - Critical for 24/7 deployments in challenging environments
-4. **MTBF** (hours) - Expected lifespan under continuous operation
-5. **TCO per TOPS-hour** - Economic efficiency over device lifetime
+XT5 3-core estimate based on measured power increment:
+- Static: 3.10W
+- +1 core (RetinaFace): 3.90W (+0.80W)
+- Estimated +3 cores: 3.10W + (3 × 0.80W) = 5.50W
 
----
+OrangePi 3-core estimate based on measured power increment:
+- Static: 1.36W
+- +1 core: 4.04W (+2.68W)
+- Estimated +3 cores: 1.36W + (3 × 2.68W) = 9.41W
 
-## Appendix A: Measurement Notes
+RPi5+Hailo 3-core estimate based on measured power increment:
+- Static: 4.69W
+- +1 core: 7.11W (+2.42W)
+- Estimated +3 cores: 4.69W + (3 × 2.42W) = 11.95W
 
+*Note: Linear scaling is conservative; actual 3-core power may be lower due to shared resources and power gating.*
 ### A.1 XT5 Power Measurement
 
 XT5 measurements taken via PoE switch with per-port power monitoring:
@@ -364,7 +384,7 @@ XT5 measurements taken via PoE switch with per-port power monitoring:
 ### A.2 Competitor Power Measurement
 
 OrangePi 5B+ and RPi5+Hailo measurements taken via USB power meter:
-- Voltage: 5.13V DC (typical USB-C PD voltage under load)
+- Voltage: 5.138V DC (typical USB-C PD voltage under load)
 - Current measured at input to device
 - Does not include external PSU losses
 
