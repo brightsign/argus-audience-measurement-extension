@@ -1,0 +1,85 @@
+*~
+external
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+CMakeScripts/
+cmake_install.cmake
+install_manifest.txt
+CTestTestfile.cmake
+_deps/
+build/
+out/
+
+# Compiled Object files
+*.slo
+*.lo
+*.o
+*.obj
+
+# Precompiled Headers
+*.gch
+*.pch
+
+# Compiled Dynamic libraries
+*.so
+*.dylib
+*.dll
+
+# Fortran module files
+*.mod
+*.smod
+
+# Compiled Static libraries
+*.lai
+*.la
+*.a
+*.lib
+
+# Executables
+*.exe
+*.out
+*.app
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Build directories
+bin/
+lib/
+dist/
+*-build/
+
+# Testing
+Testing/
+CTestCostData.txt
+
+# Package managers
+conan.lock
+conanbuildinfo.*
+conaninfo.txt
+graph_info.json
+vcpkg_installed/
+
+# Debug and profiling
+*.dSYM/
+*.su
+*.idb
+*.pdb
+callgrind.out.*
+perf.data*
+*.gcda
+*.gcno
+*.gcov
+
+# CMake generated
+compile_commands.json
+*.cbp
+*.ninja
+.ninja_deps
+.ninja_log
