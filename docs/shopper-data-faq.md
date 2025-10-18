@@ -331,3 +331,82 @@ As hardware improves, BrightShopper will automatically deliver higher frame rate
 
 *"As a brand running promotional displays in retail, BrightShopper gives us the proof-of-performance data we need to show our CPG clients. We can demonstrate not just foot traffic, but actual engagement and interaction. It's become a key differentiator in our sales process."*
 — **Sarah Mitchell, CEO, [Retail Marketing Agency]**
+
+---
+
+## Technical Appendix
+
+### Output Data Format
+
+BrightShopper outputs JSON messages via UDP, HTTP, or MQTT:
+
+```json
+{
+  "timestamp": 1634567890123,
+  "frame_id": 12345,
+  "analytics": {
+    "counts": {
+      "persons": 5,
+      "faces": 4,
+      "gazes": 3
+    },
+    "tracks": [
+      {
+        "track_id": 42,
+        "bbox": [120, 80, 280, 520],
+        "keypoints": [[150, 100], [145, 95], ...],
+        "has_face": true,
+        "looking_at_screen": true,
+        "has_cart": false,
+        "has_basket": true,
+        "behavior": "CARRYING_BASKET",
+        "velocity": [2.3, -0.5],
+        "direction_degrees": 282,
+        "dwell_time_seconds": 12.4,
+        "frames_since_gaze_change": 45
+      }
+    ],
+    "objects": [
+      {"class": "cart", "bbox": [500, 300, 600, 500], "confidence": 0.92},
+      {"class": "basket", "bbox": [200, 150, 250, 200], "confidence": 0.88}
+    ]
+  }
+}
+```
+
+### Camera Requirements
+
+**Minimum specifications:**
+- Resolution: 720p (1280×720)
+- Frame rate: 15 FPS minimum, 30 FPS recommended
+- Field of view: 60-90 degrees horizontal
+- Mounting height: 7-12 feet above floor
+- Lighting: 200+ lux (typical retail lighting sufficient)
+
+**Recommended cameras:**
+- Logitech C920/C930 (USB)
+- Any RTSP-compatible IP camera with H.264 encoding
+
+### Model Performance Details
+
+| Model | Input Size | NPU Core | Inference Time | Output |
+|-------|-----------|----------|---------------|--------|
+| RetinaFace | 320×320 RGB | 0 | ~15ms | Faces + gaze vectors |
+| YOLOv8-pose | 640×640 BGR | 1 | ~25ms | Persons + 17 keypoints |
+| YOLOx | 640×640 BGR | 2 | ~30ms | Objects (carts, baskets, etc.) |
+
+**Total system latency**: ~69ms (capture → analytics output)
+
+### Power Consumption Comparison
+
+| Platform | Static Power | Face Detection Power | Notes |
+|----------|-------------|---------------------|-------|
+| **BrightSign XT5** | 58 mA | 58 mA | RK3588 NPU with optimized inference |
+| OrangePi 5B+ | 265 mA | 787 mA | Standard SBC configuration |
+| RPi5 with Hailo NPU | 912 mA | 1383 mA | External NPU accelerator |
+
+**BrightSign advantage**: 15x lower power consumption during face detection compared to RPi5+Hailo, enabling 24/7 deployment without thermal or power concerns.
+
+---
+
+*For more information, technical documentation, and integration guides, visit the BrightShopper Developer Portal at* **developers.brightsign.biz/brightshopper**
