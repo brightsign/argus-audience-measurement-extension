@@ -2,7 +2,7 @@
 
 ## The Elevator Pitch
 
-BrightShopper transforms BrightSign digital signage players into intelligent retail analytics sensors. It answers the fundamental question retailers ask: "Who's watching my content, and are they engaged?" Using on-device AI models, BrightShopper delivers real-time behavioral insights—people counting, gaze tracking, pose estimation, shopping behaviors—without cloud dependency, bandwidth costs, or privacy concerns. At 5.5W power consumption with 11-year expected lifespan, it's the most efficient and reliable edge AI solution for retail analytics.
+BrightShopper transforms BrightSign digital signage players into intelligent retail analytics sensors. It answers the fundamental question retailers ask: "Who's watching my content, and are they engaged?" Using on-device AI models, BrightShopper delivers real-time behavioral insights—people counting, gaze tracking, pose estimation, shopping behaviors—without cloud dependency, bandwidth costs, or privacy concerns. With 5.5W power consumption, 100,000-hour MTBF, and a 5-year warranty, it's the most efficient and reliable edge AI solution for retail analytics.
 
 ## Value Proposition
 
@@ -13,7 +13,7 @@ Unlike dedicated analytics cameras requiring separate installation and managemen
 All AI processing occurs on-device. No video leaves the player. No personally identifiable information is collected or transmitted. BrightShopper delivers rich behavioral insightsperson counts, gaze patterns, dwell times, shopping behaviorswhile maintaining complete data privacy. This edge-first architecture eliminates privacy concerns associated with cloud-based video analytics, ensures compliance with data protection regulations, and removes ongoing bandwidth costs.
 
 ### Real-Time Performance at Ultra-Low Power
-BrightShopper delivers millisecond-latency analytics enabling immediate content adaptation and live dashboards. The C++ implementation on Rockchip NPU hardware achieves 0.42 TOPS/Watt efficiency3.3x better than Python implementations on identical hardware and 1.5-2.3x better than competing platforms. At just 5.5W for full 3-model operation (XT5), the platform enables fanless 24/7 deployment with 100,000-hour MTBF (11-year expected lifespan) versus 2.5-3 years for fan-cooled alternatives.
+BrightShopper delivers millisecond-latency analytics enabling immediate content adaptation and live dashboards. The C++ implementation on Rockchip NPU hardware achieves 0.42 TOPS/Watt efficiency—3.3x better than Python implementations on identical hardware and 1.5-2.3x better than competing platforms. At just 5.5W for full 3-model operation (XT5), the platform enables fanless 24/7 deployment with 100,000-hour MTBF backed by a 5-year warranty—delivering 3.6-4.5x better reliability than fan-cooled alternatives.
 
 ### Scalable Platform Architecture
 Three product tiers serve different deployment needs while sharing the same software architecture:

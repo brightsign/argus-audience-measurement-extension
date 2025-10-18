@@ -14,9 +14,10 @@
 | **Entry** | LS5/HS5 | RK3568 (1-core, 1 TOPS) | 1 model - Basic attention tracking |
 
 **Built on proven BrightSign reliability:**
-- Fanless operation, 11-year lifespan (100,000-hour MTBF)
+- Fanless operation with 100,000-hour MTBF and 5-year warranty
 - 5.5W full AI workload (XT5) - 42-54% less power than competitors
 - C++ optimized implementation - 3.3x more efficient than Python alternatives
+- 3.6-4.5x better reliability than fan-cooled platforms
 
 ---
 

@@ -178,7 +178,8 @@ Assuming identical component quality at 25°C baseline (MTBF = 100,000 hours), w
 - **System MTBF**: **31,000 hours** (electronics only)
 
 **However**, BrightSign's industrial design and quality components likely yield:
-- **Real-world MTBF**: **100,000-150,000 hours (11-17 years)** based on field data
+- **Real-world MTBF**: **100,000-150,000 hours** based on field data
+- **Warranty**: 5-year coverage reflecting high confidence in reliability
 
 #### OrangePi 5B+ (with fan, 81°C junction temp)
 - **Junction temperature**: ~81°C (with active cooling)
@@ -202,13 +203,13 @@ Additionally, active cooling introduces:
 
 ### 3.3 Reliability Comparison
 
-| Platform | Junction Temp | Cooling | Electronics MTBF | Fan MTBF | System MTBF | Expected Life |
-|----------|--------------|---------|-----------------|----------|-------------|--------------|
-| **XT5** | 75°C | Fanless | 100,000 hrs | N/A | **100,000 hrs** | **11 years** |
-| OrangePi 5B+ | 81°C | Fan | 40,000 hrs | 35,000 hrs | **28,000 hrs** | **3.2 years** |
-| RPi5+Hailo | 85°C | Fan | 30,000 hrs | 30,000 hrs | **22,000 hrs** | **2.5 years** |
+| Platform | Junction Temp | Cooling | Electronics MTBF | Fan MTBF | System MTBF | Warranty |
+|----------|--------------|---------|-----------------|----------|-------------|----------|
+| **XT5** | 75°C | Fanless | 100,000 hrs | N/A | **100,000 hrs** | **5 years** |
+| OrangePi 5B+ | 81°C | Fan | 40,000 hrs | 35,000 hrs | **28,000 hrs** | 1 year |
+| RPi5+Hailo | 85°C | Fan | 30,000 hrs | 30,000 hrs | **22,000 hrs** | 1 year |
 
-**XT5 reliability advantage**: 3.6-4.5x longer expected lifespan
+**XT5 reliability advantage**: 3.6-4.5x better MTBF with industry-leading 5-year warranty
 
 ### 3.4 Real-World Durability Implications
 
@@ -267,7 +268,7 @@ For BrightShopper's 3-model AI workload, we calculate useful computational throu
 
 ### 5.1 Motivation
 
-Traditional TOPS/Watt measures instantaneous computational efficiency but ignores long-term reliability. A platform that delivers high TOPS/W but requires replacement every 3 years provides less *lifetime value* than a platform with moderate TOPS/W but 11-year lifespan.
+Traditional TOPS/Watt measures instantaneous computational efficiency but ignores long-term reliability. A platform that delivers high TOPS/W but requires replacement within warranty period provides less *lifetime value* than a platform with moderate TOPS/W and exceptional reliability.
 
 We propose **Reliable-TOPS/Watt (R-TOPS/W)**, which weights computational efficiency by expected operational lifetime:
 
@@ -358,7 +359,7 @@ R-TOPS/W = 0.28 × (22,000 / 50,000)
 
 2. **Thermal advantage**: XT5's lower heat output (5.50W) enables **fanless operation** while competitors require active cooling
 
-3. **Reliability**: Fanless design extends MTBF to 100,000 hours (11 years) vs. 22,000-28,000 hours (2.5-3.2 years) for fan-cooled competitors - **3.6-4.5x longer lifespan**
+3. **Reliability**: Fanless design delivers 100,000-hour MTBF vs. 22,000-28,000 hours for fan-cooled competitors - **3.6-4.5x better reliability** backed by industry-leading 5-year warranty
 
 4. **Computational efficiency**: XT5 delivers 0.42 TOPS/W vs. 0.18-0.28 TOPS/W for competitors - **1.5-2.3x better**
 
@@ -372,7 +373,7 @@ R-TOPS/W = 0.28 × (22,000 / 50,000)
 ### 7.2 Recommendations
 
 **For 24/7 retail deployments:**
-- **Choose XT5** for fanless, maintenance-free operation with 11-year expected lifespan
+- **Choose XT5** for fanless, maintenance-free operation with 100,000-hour MTBF and 5-year warranty
 - Avoid platforms requiring active cooling in dusty retail environments (fan failures accelerate)
 - XT5's lower power enables battery backup and solar operation in remote locations
 
@@ -383,7 +384,7 @@ R-TOPS/W = 0.28 × (22,000 / 50,000)
 
 **For sustainability goals:**
 - **Choose XT5** to minimize carbon footprint (42-54% less energy consumption)
-- Reduce e-waste from premature device failures (11-year vs. 2.5-3.2-year lifespan)
+- Reduce e-waste from premature device failures (3.6-4.5x better reliability than competitors)
 
 ### 7.3 Proposed Standardized Metrics
 

@@ -17,7 +17,7 @@ The platform supports three Rockchip NPU-enabled SoCs, each targeting different 
 **Performance characteristics (using XT5/RK3588 as reference):**
 - **5.5W total power** for 3-model AI workload
 - **Fanless operation** with passive cooling
-- **11-year expected lifespan** (100,000-hour MTBF)
+- **100,000-hour MTBF** with 5-year warranty - enterprise-grade reliability exceeding competitors by 3.6-4.5x
 
 *Note: This documentation primarily focuses on the XT5/RK3588 implementation. Lower-tier products (XS156, LS5/HS5) support fewer simultaneous models but use the same software architecture and C++ implementation.*
 
@@ -54,7 +54,7 @@ Real-time retail analytics running entirely on-device:
 
 3. **Unmatched efficiency**: 5.5W for full 3-model analytics42% less power than competitors. Enables fanless 24/7 operation.
 
-4. **Proven reliability**: Built on BrightSign's media player platform deployed in 100,000+ locations worldwide. 11-year expected lifespan vs. 2.5-3 years for fan-cooled alternatives.
+4. **Proven reliability**: Built on BrightSign's media player platform deployed in 100,000+ locations worldwide. 100,000-hour MTBF with 5-year warranty delivers 3.6-4.5x better reliability than fan-cooled alternatives.
 
 5. **Multi-model intelligence**: Combines face detection (RetinaFace), pose estimation (YOLOv8-pose), and object detection (YOLOx) running in parallel for comprehensive behavioral insights.
 
@@ -91,7 +91,7 @@ All configurations use the same optimized C++ implementation and share the core 
 | **TOPS/Watt** | 0.42 | 1.5-2.3x better than competitors |
 | **R-TOPS/Watt** | 0.84 | 7-8x better lifetime computational value |
 | **Power (3-core)** | 5.5W | 42-54% less than competitors |
-| **MTBF** | 100,000 hrs | 3.6-4.5x longer than fan-cooled platforms |
+| **MTBF** | 100,000 hrs | 3.6-4.5x better reliability than fan-cooled platforms |
 | **Incremental power/core** | +0.80W | 3.3x better than Python on same hardware |
 
 **R-TOPS/W** (Reliable-TOPS/Watt) = a novel metric combining computational efficiency (TOPS/W) with operational lifetime (MTBF), measuring the total computational value delivered per watt over the device's lifespan.
