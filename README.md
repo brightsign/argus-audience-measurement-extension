@@ -1,127 +1,88 @@
-# BrightSign NPU Platform
+# Rockchip NPU Gaze Detection Architecture
 
-**Next-generation edge AI architecture for BrightSign digital signage players**
+**High-performance edge AI architecture for real-time computer vision on Rockchip NPU platforms**
 
-This repository contains the NPU-accelerated software platform powering BrightSign's latest products based on the Rockchip RK3588 processor. The platform leverages the RK3588's integrated 3-core NPU (6 TOPS) to deliver real-time computer vision and AI analytics at the edgewith no cloud dependency, zero latency, and complete data privacy.
+This repository contains the technical architecture and design for an NPU-accelerated gaze detection and multi-model inference system targeting Rockchip SoCs with integrated NPU capabilities.
 
-## Platform Highlights
+## Supported Hardware Platforms
 
-**Hardware Foundation:**
+The architecture supports three Rockchip NPU-enabled SoCs:
 
-The platform supports three Rockchip NPU-enabled SoCs, each targeting different performance and cost requirements:
+- **RK3588** (3-core NPU, 6 TOPS) - Supports 3 models in parallel
+- **RK3576** (2-core NPU, 4 TOPS) - Supports 2 models in parallel
+- **RK3568** (1-core NPU, 1 TOPS) - Supports 1 model
 
-- **RK3588** (3-core NPU, 6 TOPS) - Premium tier, used in **XT5**
-- **RK3576** (2-core NPU, 4 TOPS) - Mid-tier, used in **XS156**
-- **RK3568** (1-core NPU, 1 TOPS) - Entry tier, used in **LS5/HS5**
+*Note: Documentation primarily focuses on the RK3588 implementation as the reference platform. Lower-tier SoCs use the same software architecture but run fewer models concurrently based on available NPU cores.*
 
-**Performance characteristics (using XT5/RK3588 as reference):**
-- **5.5W total power** for 3-model AI workload
-- **Fanless operation** with passive cooling
-- **100,000-hour MTBF** with 5-year warranty - enterprise-grade reliability exceeding competitors by 3.6-4.5x
+## Architecture Highlights
 
-*Note: This documentation primarily focuses on the XT5/RK3588 implementation. Lower-tier products (XS156, LS5/HS5) support fewer simultaneous models but use the same software architecture and C++ implementation.*
-
-**Software Architecture:**
+**Software Design:**
 - **C++ implementation** with optimized RKNN runtime for maximum efficiency
 - **Multi-model parallelism** - run up to 3 AI models simultaneously on separate NPU cores
 - **Zero-copy data pipelines** for minimal memory bandwidth usage
 - **Sub-15ms inference latency** per model at full resolution
+- **Modular pipeline architecture** supporting multiple input sources (RTSP, USB, RGBD cameras)
 
-**Performance Advantages:**
+**Performance Characteristics (RK3588):**
+- **0.80W incremental power per NPU core** for face detection workload
+- **~5.5W total power** for 3-model parallel execution
 - **3.3x more power-efficient** than Python implementations on identical hardware
-- **1.7-2.2x lower power consumption** than competing edge AI platforms
-- **Memory-efficient design** enables true 3-model parallel execution (impossible with Python on same hardware)
-- **0.42 TOPS/Watt** computational efficiency vs. 0.17-0.28 for competitors
+- **Memory-efficient design** enables true 3-model parallel execution
 
-## BrightShopper: Flagship Application
+## Supported Models
 
-**BrightShopper** is the first product built on this NPU platform, transforming BrightSign digital signage players into intelligent shopper analytics sensors.
+The architecture supports concurrent execution of multiple specialized models:
 
-### What BrightShopper Does
+- **Face Detection** - RetinaFace for face localization and gaze estimation
+- **Pose Estimation** - YOLOv8-pose for 17-keypoint skeleton tracking
+- **Object Detection** - YOLOx for general object detection
 
-Real-time retail analytics running entirely on-device:
-- **People counting & tracking** - Know exactly who's in view and where they move
-- **Gaze detection & attention tracking** - Measure which content captures attention and for how long
-- **Pose estimation** - 17-keypoint skeleton tracking for behavior recognition
-- **Shopping behavior detection** - Cart pushing, basket carrying, shelf interaction, product selection
-- **Content attribution** - Link engagement metrics to specific media (BSN.cloud Analytics)
-
-### Unique Selling Propositions
-
-1. **Edge-first, privacy-first**: All processing on-device. No video transmitted to cloud. Zero PII collected.
-
-2. **Real-time performance**: Millisecond-latency analytics enable immediate content adaptation and live dashboards.
-
-3. **Unmatched efficiency**: 5.5W for full 3-model analytics42% less power than competitors. Enables fanless 24/7 operation.
-
-4. **Proven reliability**: Built on BrightSign's media player platform deployed in 100,000+ locations worldwide. 100,000-hour MTBF with 5-year warranty delivers 3.6-4.5x better reliability than fan-cooled alternatives.
-
-5. **Multi-model intelligence**: Combines face detection (RetinaFace), pose estimation (YOLOv8-pose), and object detection (YOLOx) running in parallel for comprehensive behavioral insights.
-
-6. **Content-to-engagement attribution**: BSN.cloud Analytics automatically links viewer metrics to specific media assets, proving campaign ROI.
-
-### Platform Configurations
-
-| Player | SoC | NPU Cores | Models Supported | Features |
-|--------|-----|-----------|-----------------|----------|
-| **XT5** | RK3588 | 3-core (6 TOPS) | 3 models parallel | Face + Pose + Object detection - full behavioral analytics |
-| **XS156** | RK3576 | 2-core (4 TOPS) | 2 models parallel | Face + Object detection - engagement analytics |
-| **LS5/HS5** | RK3568 | 1-core (1 TOPS) | 1 model | Face detection only - basic engagement metrics |
-
-**Power consumption:**
-- **XT5**: ~5.5W (3-core workload)
-- **XS156**: ~4W estimated (2-core workload)
-- **LS5/HS5**: ~3.5W estimated (1-core workload)
-
-All configurations use the same optimized C++ implementation and share the core software architecture. Lower-tier products simply run fewer models in parallel based on available NPU cores.
+Models are assigned to dedicated NPU cores with independent preprocessing pipelines and merged in post-processing for comprehensive scene understanding.
 
 ## Documentation
 
-- **[BrightShopper PR-FAQ](docs/bright-shopper-faq.md)** - Product vision, capabilities, and frequently asked questions
-- **[Power Analysis](docs/power-analysis.md)** - Detailed efficiency, thermal, and reliability analysis
-- **[Single-Core Power Comparison](docs/one-core-power-compare.md)** - XT5 vs. OrangePi vs. Raspberry Pi benchmarks
-- **[Multi-Model Architecture](docs/multiple-models.md)** - Technical design for parallel NPU execution
-- **[Design Overview](docs/design.md)** - System architecture and implementation details
-- **[RGB-D Support](docs/rgbd.md)** - Depth sensing capabilities
+### Core Architecture
+- **[Design Overview](docs/design.md)** - System architecture, pipeline design, and implementation details
+- **[Multi-Model Architecture](docs/multiple-models.md)** - Technical design for parallel NPU execution across multiple cores
 
-## Key Metrics
+### Integration Guides
+- **[RGB-D Camera Support](docs/rgbd.md)** - Integrating depth cameras for enhanced scene understanding
 
-| Metric | XT5 Value | Industry Context |
-|--------|-----------|------------------|
-| **TOPS/Watt** | 0.42 | 1.5-2.3x better than competitors |
-| **R-TOPS/Watt** | 0.84 | 7-8x better lifetime computational value |
-| **Power (3-core)** | 5.5W | 42-54% less than competitors |
-| **MTBF** | 100,000 hrs | 3.6-4.5x better reliability than fan-cooled platforms |
-| **Incremental power/core** | +0.80W | 3.3x better than Python on same hardware |
+### Product Implementation
+- **[BrightShopper](brightshopper/)** - Reference implementation for retail analytics use case
 
-**R-TOPS/W** (Reliable-TOPS/Watt) = a novel metric combining computational efficiency (TOPS/W) with operational lifetime (MTBF), measuring the total computational value delivered per watt over the device's lifespan.
+## Key Technical Features
 
-## Competitive Advantages
+**Modular Pipeline Design:**
+- Pluggable input sources (RTSP, USB camera, RGBD)
+- Configurable preprocessing per model type
+- Independent NPU core affinity management
+- Unified post-processing with multi-model fusion
 
-### vs. Cloud-based Analytics
-- **Zero latency**: Milliseconds vs. seconds for cloud round-trip
-- **No bandwidth costs**: All processing local, no video upload
-- **100% uptime**: Works without internet connectivity
-- **Privacy compliance**: No PII leaves the device
+**Optimized for Edge Deployment:**
+- Low-latency real-time inference
+- Minimal memory footprint
+- Fanless operation on passively cooled hardware
+- Production-ready error handling and recovery
 
-### vs. Python Edge AI Implementations
-- **3.3x lower power per NPU core**: C++ vs. Python efficiency
-- **Memory bandwidth**: Python would saturate NPU bandwidth at 3 models; C++ enables true parallelism
-- **Production reliability**: Compiled binary vs. interpreter dependencies
+**Multi-Model Capabilities:**
+- Concurrent model execution on separate NPU cores
+- Frame synchronization across models
+- Cross-model result correlation
+- Scalable architecture supporting 1-3 models based on available cores
 
-### vs. External NPU Accelerators (Hailo, Coral)
-- **1.8x lower total power**: No USB/PCIe overhead, native NPU integration
-- **Lower baseline power**: 3.1W vs. 4.7W static
-- **Simpler design**: No external modules, PoE-powered single-box solution
+## Performance Metrics (RK3588)
 
-### vs. Retail Analytics Cameras
-- **Dual-purpose hardware**: Digital signage + analytics in one device
-- **Lower TCO**: No separate camera infrastructure
-- **Content attribution**: Link viewer data to displayed media automatically
+| Metric | Value | Notes |
+|--------|-------|-------|
+| **Incremental power/core** | +0.80W | C++ implementation vs +2.69W for Python |
+| **Power (3-core workload)** | ~5.5W | Enables fanless operation |
+| **Inference latency** | <15ms | Per model at full resolution |
+| **Memory efficiency** | High | Zero-copy pipelines, enables 3-model parallel execution |
 
 ## Getting Started
 
-*Documentation for deploying BrightShopper and developing custom NPU applications coming soon.*
+*Documentation for building and deploying the gaze detection system coming soon.*
 
 ## License
 
@@ -129,6 +90,5 @@ All configurations use the same optimized C++ implementation and share the core 
 
 ---
 
-**BrightSign** - Market leader in digital signage media players
-**Platform**: Rockchip RK3588 NPU-accelerated edge AI
-**Applications**: Retail analytics, audience measurement, behavioral intelligence
+**Technical Focus**: Computer vision architecture for Rockchip NPU platforms
+**Key Applications**: Gaze detection, pose estimation, real-time behavioral analytics
