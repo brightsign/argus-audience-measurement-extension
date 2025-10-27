@@ -3,17 +3,17 @@
 
 #include <memory>
 #include <atomic>
-#include "pipeline_types.h"
-#include "frame_queue.h"
-#include "capture_worker.h"
-#include "preprocess_stage.h"
-#include "inference_stage.h"
-#include "postprocess_stage.h"
-#include "input_factory.h"
-#include "model_factory.h"
-#include "resource_manager.h"
-#include "processing_params.h"
-#include "configuration.h"       // AppConfig if you use it
+#include "pipeline/pipeline_types.h"
+#include "pipeline/frame_queue.h"
+#include "pipeline/capture_worker.h"
+#include "pipeline/preprocess_stage.h"
+#include "pipeline/inference_stage.h"
+#include "pipeline/postprocess_stage.h"
+#include "input/input_factory.h"
+#include "models/model_factory.h"
+#include "resources/resource_manager.h"
+#include "config/processing_params.h"
+#include "config/configuration.h"       // AppConfig if you use it
 
 struct PipelineBuildConfig {
   // Queues

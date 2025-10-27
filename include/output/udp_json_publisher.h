@@ -3,7 +3,7 @@
 
 #include <memory>
 #include <string>
-#include "publisher.h"
+#include "output/publisher_v2.h"
 
 // UDP JSON publisher (real-time, low-latency)
 // Implementation hides sockets/serialization in Impl.

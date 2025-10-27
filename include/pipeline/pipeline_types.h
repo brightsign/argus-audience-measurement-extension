@@ -4,6 +4,8 @@
 #include <cstdint>
 #include <vector>
 #include <string>
+#include <memory>
+#include "models/model_runner.h"
 
 // Reuse your Resource and Model types where included
 enum class PixFmt : uint8_t { NV12, RGB24, BGR24, GRAY8 };
@@ -37,13 +39,6 @@ struct PreprocFrame {
   uint64_t seq{0};
 };
 
-// Minimal, model-agnostic inference outputs (non-owning view)
-struct Detection {
-  float x0, y0, x1, y1;
-  float score;
-  int   class_id{-1};
-};
-struct Landmarks { float pts[10]; }; // (x,y)*5
 struct InferenceOut {
   const Detection* dets{nullptr}; int num_dets{0};
   const Landmarks* lms{nullptr};  int num_lms{0};
@@ -57,11 +52,28 @@ struct Track {
   int       id{-1};
   float     gaze_yaw{0.f};   // degrees
   float     gaze_pitch{0.f};
+  
+  // Ensure proper default construction/destruction
+  Track() = default;
+  ~Track() = default;
+  Track(const Track&) = default;
+  Track& operator=(const Track&) = default;
+  Track(Track&&) = default;
+  Track& operator=(Track&&) = default;
 };
+
 struct PipelineResult {
   std::vector<Track> tracks;
   int64_t pts_ns{0};
   uint64_t seq{0};
+  
+  // Ensure proper default construction/destruction
+  PipelineResult() = default;
+  ~PipelineResult() = default;
+  PipelineResult(const PipelineResult&) = default;
+  PipelineResult& operator=(const PipelineResult&) = default;
+  PipelineResult(PipelineResult&&) = default;
+  PipelineResult& operator=(PipelineResult&&) = default;
 };
 
 #endif // PIPELINE_TYPES_H

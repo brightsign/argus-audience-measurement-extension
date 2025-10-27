@@ -1,7 +1,7 @@
 #ifndef TELEMETRY_H
 #define TELEMETRY_H
 
-#include "metrics_types.h"
+#include "metrics/metrics_types.h"
 
 // Abstract telemetry sink — plug implementations in .cpp (UDP/JSON, MQTT, etc.)
 class ITelemetrySink {

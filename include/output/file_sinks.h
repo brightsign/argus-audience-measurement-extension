@@ -3,7 +3,9 @@
 
 #include <string>
 #include <memory>
-#include "output_types.h"
+#include "output/output_types.h"
+#include "resources/resource_types.h"
+#include "pipeline/pipeline_types.h"
 
 // Writes annotated frames and performance logs to disk with simple rotation.
 // Implementation hides filesystem and encoding details (PNG/JPEG).

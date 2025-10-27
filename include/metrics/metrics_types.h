@@ -8,10 +8,29 @@
 // Optional forward-declare to avoid pulling health headers here.
 // If you include your health headers first, the real enum will be used.
 enum class Severity : uint8_t { Info=0, Warning=1, Error=2, Critical=3 };
+
+// Specific fault codes we may detect/receive
 enum class FaultCode : uint16_t {
-  None=0, GstError, GstEos, AppSinkStarvation, RtpJitterHigh,
-  DeviceGone, RepeatedReadFailures, NoFrames, DecodeFailure
+  None = 0,
+  // RTSP / GStreamer
+  GstError,
+  GstEos,
+  AppSinkStarvation,
+  RtpJitterHigh,
+  ClockDriftHigh,
+
+  // USB / V4L2
+  DeviceGone,
+  RepeatedReadFailures,
+
+  // Generic pipeline
+  BackPressure,
+  StageTimeout,
+  NoFrames,
+  DecodeFailure,
+  InferenceTimeout
 };
+
 
 enum class Stage : uint8_t {
   Capture=0, Convert, Preprocess, Inference, Postprocess, Publish, COUNT

@@ -1,7 +1,7 @@
 #ifndef INPUT_FILE_H
 #define INPUT_FILE_H
 
-#include "input_source.h"
+#include "input/input_source.h"
 #include <memory>
 #include <string>
 
@@ -22,6 +22,7 @@ public:
   void stop()  noexcept override;
   void close() noexcept override;
   FetchStatus tryFetch(FrameView& out) noexcept override;
+  FetchStatus fetch(FrameView& out, int timeout_ms) noexcept override; // added
   HealthInfo getHealth() const noexcept override;
 
 private:

@@ -2,64 +2,90 @@
 #define ORCHESTRATOR_H
 
 #include <atomic>
-#include <thread>
 #include <memory>
+#include <thread>
+#include <string>
+#include "input/input_factory.h"
+#include "health/health_manager.h"
+#include "config/model_spec.h"
+#include "models/model_runner.h"
 
-#include "model_spec.h"
-#include "input_source.h"
-#include "preprocessor.h"
-#include "model_runner.h"
-#include "postprocessor.h"
-#include "frame_queue.h"
-#include "queue.h"       // ThreadSafeQueue<InferenceResult>
+// Optional: describe how to build the pipeline
+struct PipelineConfig {
+  InputConfig input;           // from your existing config
+  // add preprocess / model configs as needed
+  int heartbeat_timeout_ms{1500}; // if worker misses heartbeats -> restart
+  ModelSpec model{};
+};
+
+enum class OrchestratorState : uint8_t {
+  Stopped, Starting, Running, Degraded, Recovering, Error
+};
 
 class Orchestrator {
 public:
-    Orchestrator(std::unique_ptr<IInputSource> source,
-                 std::unique_ptr<IPreprocessor> preproc,
-                 std::unique_ptr<IModelRunner> model,
-                 std::unique_ptr<IPostProcessor> post,
-                 ThreadSafeQueue<InferenceResult>& resultQ,
-                 std::atomic<bool>& running,
-                 int target_fps = 20);
+  explicit Orchestrator(PipelineConfig cfg) noexcept;
+  ~Orchestrator();
 
-    ~Orchestrator();
+  // not copyable/movable
+  Orchestrator(const Orchestrator&) = delete;
+  Orchestrator& operator=(const Orchestrator&) = delete;
 
-    // Start capture + pipeline threads
-    void start();
+  bool start() noexcept;                // spawn supervisor+worker
+  void request_stop() noexcept;         // ask threads to exit
+  void join() noexcept;                 // wait for threads
 
-    // Stop and join threads
-    void stop();
+  OrchestratorState state() const noexcept { return state_.load(std::memory_order_acquire); }
+
+  // Hot swap input (e.g., RTSP URL changed or USB device switched)
+  // Will trigger a controlled rebuild of the pipeline.
+  bool switch_input(const InputConfig& new_input) noexcept;
+
+  // Read-only snapshots for logging/metrics UIs
+  HealthSnapshot source_health() const noexcept { return source_health_.snapshot(); }
 
 private:
-    void captureThreadFn();
-    void preprocessThreadFn();
-    void inferenceThreadFn();
+  // ---- worker lifecycle ----
+  bool build_pipeline() noexcept;       // create InputSource + stage objects
+  void destroy_pipeline() noexcept;     // free in correct order
+  bool start_worker() noexcept;         // start frame loop thread
+  void stop_worker() noexcept;
+
+  // ---- threads ----
+  void supervisor_loop() noexcept;      // monitors health + heartbeats, triggers recovery
+  void worker_loop() noexcept;          // runs capture->infer loop
+
+  // ---- recovery helpers ----
+  void mark_broken(FaultCode code, int64_t now_ns) noexcept;
+  bool recover_pipeline(int64_t now_ns) noexcept;
 
 private:
-    std::unique_ptr<IInputSource> source_;
-    std::unique_ptr<IPreprocessor> preproc_;
-    std::unique_ptr<IModelRunner>  model_;
-    std::unique_ptr<IPostProcessor> post_;
+  PipelineConfig cfg_;
+  std::atomic<OrchestratorState> state_{OrchestratorState::Stopped};
 
-    ThreadSafeQueue<InferenceResult>& resultQ_;
-    std::atomic<bool>& running_;
-    int target_fps_{20};
+  // pipeline
+  std::unique_ptr<IInputSource> input_;
+  // add preprocess/model runners here (unique_ptr<...>)
 
-    // Queues between stages
-    OverwriteQueue<CaptureFrame>  q_cap_{2};
-    OverwriteQueue<Preprocessed>  q_pre_{1};
+  // health/backoff for the source pipeline (one per input)
+  HealthManager source_health_{SourceKind::Unknown};
 
-    // Threads
-    std::thread t_cap_;
-    std::thread t_pre_;
-    std::thread t_inf_;
+  // threads & control flags
+  std::thread supervisor_th_;
+  std::thread worker_th_;
+  std::atomic<bool> stop_{false};
 
-    // Stats
-    std::atomic<long long> cap_ns_{0};
-    std::atomic<long long> pre_ns_{0};
-    std::atomic<long long> inf_ns_{0};
+  // heartbeat from worker → supervisor
+  std::atomic<int64_t> last_heartbeat_ns_{0};
+
+  // cached input kind for HealthManager
+  SourceKind detect_source_kind(const InputConfig& ic) const noexcept {
+    if (!ic.rtsp_url.empty()) return SourceKind::RTSP;
+    if (!ic.usb_device.empty()) return SourceKind::USB;
+    if (!ic.file_path.empty()) return SourceKind::File;
+    return SourceKind::Unknown;
+  }
+  std::unique_ptr<IModelRunner> runner_;
 };
 
 #endif // ORCHESTRATOR_H
-

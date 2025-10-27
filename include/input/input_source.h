@@ -4,15 +4,11 @@
 #include <cstdint>
 #include <string>
 #include <memory>
-
+#include <chrono> // added for steady_clock::time_point
+#include "config/config_common.h"
 // ---- Common types -----------------------------------------------------------
 
-enum class PixelFormat : uint8_t {
-  NV12,
-  RGB24,
-  BGR24,
-  UNKNOWN
-};
+//enum class PixelFormat : uint8_t { NV12, RGB24, BGR24 };
 
 struct FrameView {
   PixelFormat fmt{PixelFormat::NV12};
@@ -23,6 +19,22 @@ struct FrameView {
   uint8_t* plane0{nullptr};
   uint8_t* plane1{nullptr};       // nullptr when single-planar
   int64_t pts_ns{0};              // capture PTS in nanoseconds
+  //ColorLayout fmt{ColorLayout::NV12};
+};
+
+struct CaptureFrame {
+  int width{0};
+  int height{0};
+  PixelFormat fmt{PixelFormat::BGR24};   // <-- was BGR, fix to BGR24
+  std::vector<uint8_t> data;             // width*height*3 for *24 formats
+  std::chrono::steady_clock::time_point ts;
+};
+
+// --- Per-source option structs ---
+struct UsbOptions {
+  int width{640};
+  int height{480};
+  int fps{30};
 };
 
 enum class HealthStatus : uint8_t {
@@ -48,10 +60,10 @@ enum class InputType : uint8_t {
 };
 
 enum class FetchStatus : uint8_t {
-  Ok,          // frame filled
-  NoFrame,     // nothing available right now (non-blocking)
-  Eos,         // end-of-stream (mainly for File)
-  Broken       // pipeline broken; likely needs restart
+  Ok,
+  Timeout,
+  Error,
+  Broken
 };
 
 // ---- Interface --------------------------------------------------------------
@@ -77,6 +89,8 @@ public:
   // Implementations SHOULD avoid allocation and fill 'out' to point at
   // internal buffers valid until the next tryFetch() call.
   virtual FetchStatus tryFetch(FrameView& out) noexcept = 0;
+
+  virtual FetchStatus fetch(FrameView& out, int timeout_ms) noexcept = 0;
 
   // Lightweight snapshot; must not block for long.
   virtual HealthInfo getHealth() const noexcept = 0;

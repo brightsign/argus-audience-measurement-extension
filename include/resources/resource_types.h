@@ -3,10 +3,9 @@
 
 #include <cstdint>
 #include <cstddef>
+#include "config/config_common.h"
+#include "input/input_source.h"
 
-enum class PixelFormat : uint8_t { NV12, RGB24, BGR24, GRAY8, UNKNOWN };
-
-struct Size2i { int w{0}; int h{0}; };
 struct Rect2i { int x{0}, y{0}, w{0}, h{0}; };
 
 struct Strides {
@@ -14,15 +13,6 @@ struct Strides {
   int s1{0}; // plane 1 (NV12 UV)
 };
 
-// Non-owning view over image planes (valid until next producer write)
-struct FrameView {
-  PixelFormat fmt{PixelFormat::NV12};
-  int width{0}, height{0};
-  Strides stride{};
-  uint8_t* plane0{nullptr};
-  uint8_t* plane1{nullptr};
-  int64_t pts_ns{0};
-};
 
 // Owning buffer (from a pool); may be single or bi-planar
 struct ImageBuffer {
