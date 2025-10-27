@@ -3,18 +3,9 @@
 
 #include <cstdint>
 #include <memory>
-#include "model_spec.h"
+#include "config/model_spec.h"
+#include "input/input_source.h"
 
-// Lightweight frame view (aligns with your InputSource::FrameView)
-struct FrameView {
-  // NOTE: keep this in sync with your input_source.h version
-  int width{0}, height{0};
-  int stride0{0}, stride1{0};
-  uint8_t* plane0{nullptr};
-  uint8_t* plane1{nullptr};
-  int64_t pts_ns{0};
-  ColorLayout fmt{ColorLayout::NV12};
-};
 
 // Minimal generic outputs (non-owning where possible)
 struct Detection {

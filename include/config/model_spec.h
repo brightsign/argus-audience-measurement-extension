@@ -3,12 +3,11 @@
 
 #include <string>
 #include <array>
-#include "model_types.h"
+#include "models/model_types.h"
+#include "config/config_common.h"
 
 enum class ColorLayout : uint8_t { RGB, BGR, NV12, GRAY };
 enum class ChannelOrder : uint8_t { HWC, CHW };
-
-struct Size2i { int w{0}; int h{0}; };
 
 struct Normalization {
   // If used, mean/std sizes should match channels (1, 3, or 4).

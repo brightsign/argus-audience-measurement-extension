@@ -4,25 +4,12 @@
 #include <cstdint>
 #include <atomic>
 #include <cstring>
-#include "backoff.h"
+#include "health/backoff.h"
+#include "metrics/metrics_types.h"
 
 // Keep enums tiny & explicit, to match your inference.cpp style
 enum class SourceKind : uint8_t { Unknown=0, RTSP=1, USB=2, File=3 };
-enum class Severity  : uint8_t { Info=0, Warning=1, Error=2, Critical=3 };
-enum class FaultCode : uint8_t {
-  None=0,
-  // RTSP / GStreamer
-  GstError,
-  GstEos,
-  AppSinkStarvation,
-  RtpJitterHigh,
-  // USB
-  DeviceGone,
-  RepeatedReadFailures,
-  // Generic
-  NoFrames,
-  DecodeFailure
-};
+
 
 // Compact snapshot for logging/telemetry
 struct HealthSnapshot {
@@ -50,7 +37,16 @@ struct HealthSnapshot {
 
 class HealthManager {
 public:
-  explicit HealthManager(SourceKind k) noexcept : kind_(k) {}
+  explicit HealthManager(SourceKind k = SourceKind::Unknown) noexcept : kind_(k) {}
+
+  void reinit(SourceKind k) noexcept {
+    kind_ = k;
+    broken_.store(false, std::memory_order_relaxed);
+    last_fault_.store(FaultCode::None, std::memory_order_relaxed);
+    backoff_.reset();                 // if you have a Backoff helper
+    // reset any counters/timestamps you track:
+    last_ok_ns_.store(0, std::memory_order_relaxed);
+  }
 
   // ---- RTSP events ----
   void onBusError(int64_t now_ns, const char* msg = nullptr) noexcept {

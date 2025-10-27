@@ -2,7 +2,8 @@
 #define ANNOTATOR_H
 
 #include <memory>
-#include "output_types.h"
+#include "output/output_types.h"
+#include "input/input_source.h"
 
 // Forward decls to avoid heavy deps:
 struct PipelineResult;

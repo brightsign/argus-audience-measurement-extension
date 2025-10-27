@@ -4,9 +4,9 @@
 #include <atomic>
 #include <thread>
 #include <memory>
-#include "pipeline_types.h"
-#include "input_source.h"       // your IInputSource
-#include "frame_queue.h"
+#include "pipeline/pipeline_types.h"
+#include "input/input_source.h" 
+#include "pipeline/frame_queue.h"
 
 class CaptureWorker {
 public:

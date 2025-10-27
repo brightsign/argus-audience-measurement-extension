@@ -4,9 +4,9 @@
 #include <atomic>
 #include <thread>
 #include <functional>
-#include "pipeline_types.h"
-#include "frame_queue.h"
-#include "processing_params.h"     // thresholds + NMS from config
+#include "pipeline/pipeline_types.h"
+#include "pipeline/frame_queue.h"
+#include "config/processing_params.h"     // thresholds + NMS from config
 
 using ResultCallback = std::function<void(const PipelineResult&)>;
 

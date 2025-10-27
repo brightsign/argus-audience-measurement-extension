@@ -4,8 +4,6 @@
 #include "model_runner.h"
 #include <memory>
 #include <vector>
-
-// RKNN types are hidden in the Impl to avoid leaking heavy headers here.
 class RKNNRetinafaceRunner final : public IModelRunner {
 public:
   RKNNRetinafaceRunner() noexcept;
@@ -21,11 +19,15 @@ public:
   int64_t last_infer_ns() const noexcept override { return infer_ns_; }
   int64_t last_post_ns()  const noexcept override { return post_ns_; }
 
+  // Access raw retinaface results for drawing overlays (valid until next infer())
+  // Returns const retinaface_result* (cast as needed from void*)
+  const void* get_last_result() const noexcept;
+
 private:
   struct Impl;                    // defined in .cpp; holds rknn_app_context_t etc.
   std::unique_ptr<Impl> p_;
   ModelSpec spec_;
-
+  
   // scratch ownership for outputs (valid until next infer())
   std::vector<Detection> dets_;
   std::vector<Landmarks> lms_;

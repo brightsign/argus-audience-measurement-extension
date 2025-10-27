@@ -4,21 +4,12 @@
 #include <memory>
 #include <vector>
 #include <string>
-#include "model_types.h"
-#include "model_spec.h"
-#include "model_runner.h"
-#include "model_runner_retinaface.h"
+#include "models/model_types.h"
+#include "config/model_spec.h"
+#include "models/model_runner.h"
+#include "models/model_runner_retinaface.h"
 
-inline std::unique_ptr<IModelRunner> make_model_runner(const ModelSpec& spec) {
-  switch (spec.family) {
-    case ModelFamily::RetinaFace:
-      return std::make_unique<RKNNRetinafaceRunner>();
-    // case ModelFamily::YOLOX:
-    //   return std::make_unique<RKNNYoloxRunner>();
-    default:
-      return nullptr;
-  }
-}
+std::unique_ptr<IModelRunner> make_model_runner(const ModelSpec& spec);
 
 // Convenience: build multiple runners from a list of specs
 inline std::vector<std::unique_ptr<IModelRunner>>

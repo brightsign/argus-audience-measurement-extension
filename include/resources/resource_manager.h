@@ -2,10 +2,10 @@
 #define RESOURCE_MANAGER_H
 
 #include <memory>
-#include "resource_types.h"
-#include "mem_pool.h"
-#include "rga_context.h"
-#include "tensor_manager.h"
+#include "resources/resource_types.h"
+#include "resources/memory_pool.h"
+#include "resources/rga_context.h"
+#include "resources/tensor_manager.h"
 
 // Aggregates RGA, scratch pools, and RKNN tensor manager.
 // One instance per pipeline is typical.

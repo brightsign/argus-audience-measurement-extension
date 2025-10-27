@@ -1,7 +1,7 @@
 #ifndef PUBLISHER_CONFIG_H
 #define PUBLISHER_CONFIG_H
 
-#include "config_common.h"
+#include "config/config_common.h"
 #include <string>
 
 struct UdpPublisher {

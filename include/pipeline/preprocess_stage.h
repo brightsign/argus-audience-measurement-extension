@@ -4,10 +4,10 @@
 #include <atomic>
 #include <thread>
 #include <memory>
-#include "pipeline_types.h"
-#include "frame_queue.h"
-#include "resource_manager.h"    // RGA + pools + tensors
-#include "model_spec.h"          // input size/layout + normalization
+#include "pipeline/pipeline_types.h"
+#include "pipeline/frame_queue.h"
+#include "resources/resource_manager.h"    // RGA + pools + tensors
+#include "config/model_spec.h"          // input size/layout + normalization
 
 struct PreprocessConfig {
   bool  keep_aspect{true};       // letterbox vs stretch

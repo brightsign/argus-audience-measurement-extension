@@ -4,9 +4,9 @@
 #include <atomic>
 #include <thread>
 #include <memory>
-#include "pipeline_types.h"
-#include "frame_queue.h"
-#include "model_runner.h"        // IModelRunner
+#include "pipeline/pipeline_types.h"
+#include "pipeline/frame_queue.h"
+#include "models/model_runner.h"
 
 class InferenceStage {
 public:

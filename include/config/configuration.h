@@ -1,12 +1,12 @@
 #ifndef CONFIGURATION_H
 #define CONFIGURATION_H
 
-#include "config_common.h"
-#include "model_spec.h"
-#include "processing_params.h"
-#include "publisher_config.h"
-#include "runtime_settings.h"
-#include "input_factory.h"   // reuse your InputConfig (RTSP/USB/File + options)
+#include "config/config_common.h"
+#include "config/model_spec.h"
+#include "config/processing_params.h"
+#include "config/publisher_config.h"
+#include "config/runtime_settings.h"
+#include "input/input_factory.h"   // reuse your InputConfig (RTSP/USB/File + options)
 
 #include <string>
 #include <vector>

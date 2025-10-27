@@ -3,6 +3,7 @@
 
 #include <cstdint>
 #include <string>
+#include "metrics/metrics_types.h"
 
 // Keep aligned with your existing HealthStatus from input_source.h if included elsewhere
 enum class HealthStatus : uint8_t {
@@ -24,34 +25,7 @@ enum class StageType : uint8_t {
   Output
 };
 
-enum class Severity : uint8_t {
-  Info = 0,
-  Warning,
-  Error,
-  Critical
-};
 
-// Specific fault codes we may detect/receive
-enum class FaultCode : uint16_t {
-  None = 0,
-  // RTSP / GStreamer
-  GstError,
-  GstEos,
-  AppSinkStarvation,
-  RtpJitterHigh,
-  ClockDriftHigh,
-
-  // USB / V4L2
-  DeviceGone,
-  RepeatedReadFailures,
-
-  // Generic pipeline
-  BackPressure,
-  StageTimeout,
-  NoFrames,
-  DecodeFailure,
-  InferenceTimeout
-};
 
 struct StageKey {
   StageType type{StageType::Unknown};

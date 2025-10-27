@@ -4,7 +4,9 @@
 #include <cstdint>
 #include <cstddef>
 #include <memory>
-#include "output_types.h"
+#include "output/output_types.h"
+#include "pipeline/pipeline_types.h"
+#include "metrics/metrics_types.h"
 
 // forward decls to avoid heavy includes
 struct PipelineResult;

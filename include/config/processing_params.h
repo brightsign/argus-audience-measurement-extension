@@ -1,7 +1,7 @@
 #ifndef PROCESSING_PARAMS_H
 #define PROCESSING_PARAMS_H
 
-#include "config_common.h"
+#include "config/config_common.h"
 
 struct Thresholds {
   float score{0.5f};          // detection/confidence threshold

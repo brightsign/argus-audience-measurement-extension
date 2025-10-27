@@ -6,7 +6,7 @@
 #include <vector>
 
 enum class PixelFormat : uint8_t { NV12, RGB24, BGR24, GRAY8, UNKNOWN };
-enum class ChannelOrder : uint8_t { CHW, HWC };
+//enum class ChannelOrder : uint8_t { CHW, HWC };
 enum class Normalize : uint8_t { None, MeanStd, Range01, RangeM11 };
 
 enum class NmsMethod : uint8_t { Greedy, Soft };

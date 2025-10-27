@@ -3,10 +3,11 @@
 
 #include <memory>
 #include <vector>
-#include "publisher.h"
-#include "udp_json_publisher.h"
-#include "brightsign_v3_publisher.h"
-#include "publisher_config.h"  // from your Configuration module
+#include "output/publisher_v2.h"
+#include "output/async_publisher.h"
+#include "output/udp_json_publisher.h"
+#include "output/brightsign_v3_publisher.h"
+#include "config/publisher_config.h"  // from your Configuration module
 
 // Build one publisher from config
 inline PublisherPtr make_publisher(const PublisherConfig& cfg) {

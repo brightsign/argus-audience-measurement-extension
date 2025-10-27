@@ -2,7 +2,7 @@
 #define DIAGNOSTICS_H
 
 #include <memory>
-#include "output_types.h"
+#include "output/output_types.h"
 
 // Optional diagnostics interface for development builds.
 // Could stream RTSP/PCAP stats, store short rolling traces, etc.

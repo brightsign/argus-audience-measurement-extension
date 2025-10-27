@@ -3,7 +3,7 @@
 
 #include <cstdint>
 #include <chrono>
-#include "metrics_types.h"
+#include "metrics/metrics_types.h"
 
 // Manual timer per stage (no allocations)
 class StageTimer {

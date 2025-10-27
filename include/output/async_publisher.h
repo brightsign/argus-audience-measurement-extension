@@ -6,7 +6,8 @@
 #include <vector>
 #include <variant>
 #include <memory>
-#include "publisher.h"
+#include "output/publisher_v2.h"
+
 
 // Asynchronous wrapper with a bounded queue and drop-old policy.
 // Ensures the pipeline never blocks on slow sinks.
@@ -16,8 +17,8 @@ public:
     size_t queue_capacity{64};   // number of messages buffered
   };
 
-  explicit AsyncPublisher(PublisherPtr inner, Config cfg = {}) noexcept
-  : inner_(std::move(inner)), cfg_(cfg) {}
+  explicit AsyncPublisher(PublisherPtr inner) noexcept;                    // uses default Config{}
+  AsyncPublisher(PublisherPtr inner, const Config& cfg) noexcept;          // explicit cfg
 
   ~AsyncPublisher() override { stop(); }
 

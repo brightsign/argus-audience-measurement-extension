@@ -3,7 +3,7 @@
 
 #include <memory>
 #include <string>
-#include "publisher.h"
+#include "output/publisher_v2.h"
 
 // BrightSign V3 integration.
 // Typical patterns: BrightScript variables/events via local endpoints,

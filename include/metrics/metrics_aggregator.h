@@ -5,7 +5,7 @@
 #include <vector>
 #include <memory>
 #include <atomic>
-#include "metrics_types.h"
+#include "metrics/metrics_types.h"
 
 // Lightweight per-stage histogram with uniform bins
 class UniformHistogram {

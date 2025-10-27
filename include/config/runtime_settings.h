@@ -2,6 +2,7 @@
 #define RUNTIME_SETTINGS_H
 
 #include <cstdint>
+#include <cstdlib>
 
 struct RuntimeSettings {
   // Performance vs quality trade-offs
