@@ -30,6 +30,20 @@ public:
   void setPreferredResolution(int w, int h);
   void setPreferredFps(double fps);
 
+  // Called by orchestrator before stopping worker to unblock any blocking read()
+  void request_stop() noexcept {
+    stopping_.store(true, std::memory_order_release);
+    // Note: Do NOT release cap_ here! The worker thread is still in tryFetch().
+    // Instead, we'll close the device file to interrupt any blocking V4L2 ioctl.
+    try {
+      if (cap_.isOpened()) {
+        // Release will close the file descriptor, unblocking any read/ioctl
+        cap_.release();
+
+      }
+    } catch (...) {}
+  }
+
 private:
   std::string      device_;
   cv::VideoCapture cap_;
@@ -39,6 +53,7 @@ private:
   double           pref_fps_{0.0};
   std::vector<uint8_t> scratch_bgr_;
 
+  std::atomic<bool>     stopping_{false};    // NEW: for graceful shutdown
   std::atomic<bool>     broken_{false};
   std::atomic<bool>     connected_{false};
   std::atomic<uint64_t> frames_ok_{0};

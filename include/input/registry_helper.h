@@ -1,5 +1,26 @@
 #pragma once
 #include <string>
+#include <cstdlib>
+#include <cstdio>
+#include <cstring>
+#include <iostream>
+#include <thread>
+#include <vector>
+#include <memory>
+#include <atomic>
+#include <algorithm>
+#include <chrono>
+#include <dirent.h>
+#include <errno.h>
+#include <unistd.h>
+#include <sys/stat.h>
+
+#include "opencv2/core/core.hpp"
+#include "opencv2/imgproc/imgproc.hpp"
+#include <opencv2/highgui.hpp>
+#include <opencv2/imgcodecs.hpp>
+#include <opencv2/videoio.hpp>
+
 
 // Minimal helper to read BrightSign registry values via the `registry extension` CLI.
 // Matches your previous main.cpp snippet and adds getVideoDevice().
@@ -26,6 +47,7 @@ public:
     //   "/dev/videoX" or numeric "0","1" (if user sets device explicitly)
     // Falls back to "usb_camera" if empty/invalid.
     static std::string getVideoDevice();
+    static std::string findWorkingCameraDevice();
 
 private:
     static std::string executeCommand(const std::string& command);

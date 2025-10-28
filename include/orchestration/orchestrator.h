@@ -53,7 +53,10 @@ private:
 
   // ---- threads ----
   void supervisor_loop() noexcept;      // monitors health + heartbeats, triggers recovery
-  void worker_loop() noexcept;          // runs capture->infer loop
+  void worker_loop() noexcept;          // runs capture->infer loop (wrapper)
+  void worker_loop_threadfn(
+      std::shared_ptr<IInputSource> in,
+      std::shared_ptr<IModelRunner> run) noexcept;  // actual worker logic
 
   // ---- recovery helpers ----
   void mark_broken(FaultCode code, int64_t now_ns) noexcept;
@@ -63,9 +66,9 @@ private:
   PipelineConfig cfg_;
   std::atomic<OrchestratorState> state_{OrchestratorState::Stopped};
 
-  // pipeline
-  std::unique_ptr<IInputSource> input_;
-  // add preprocess/model runners here (unique_ptr<...>)
+  // pipeline (now shared_ptr so zombie threads can keep resources alive safely)
+  std::shared_ptr<IInputSource> input_;
+  // add preprocess/model runners here (shared_ptr<...>)
 
   // health/backoff for the source pipeline (one per input)
   HealthManager source_health_{SourceKind::Unknown};
@@ -73,7 +76,9 @@ private:
   // threads & control flags
   std::thread supervisor_th_;
   std::thread worker_th_;
-  std::atomic<bool> stop_{false};
+  std::atomic<bool> orchestrator_stop_{false};  // controls supervisor loop lifetime
+  std::atomic<bool> stop_worker_flag_{false};   // controls ONLY current worker thread loop
+  std::atomic<bool> worker_exited_{true};  // true when worker thread has exited; allows non-blocking join check
 
   // heartbeat from worker → supervisor
   std::atomic<int64_t> last_heartbeat_ns_{0};
@@ -85,7 +90,7 @@ private:
     if (!ic.file_path.empty()) return SourceKind::File;
     return SourceKind::Unknown;
   }
-  std::unique_ptr<IModelRunner> runner_;
+  std::shared_ptr<IModelRunner> runner_;
 };
 
 #endif // ORCHESTRATOR_H
