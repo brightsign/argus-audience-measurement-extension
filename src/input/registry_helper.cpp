@@ -58,6 +58,57 @@ std::string RegistryHelper::getVideoDevice() {
     return std::string("usb_camera");
 }
 
+ std::string RegistryHelper::findWorkingCameraDevice() {
+    std::vector<std::string> devices;
+    if (DIR* dir = opendir("/dev")) {
+        if (dirent* e; (e = readdir(dir)) != nullptr) {
+            do {
+                std::string name = e->d_name;
+                if (name.rfind("video", 0) == 0) devices.emplace_back("/dev/" + name);
+            } while ((e = readdir(dir)) != nullptr);
+        }
+        closedir(dir);
+    }
+    std::sort(devices.begin(), devices.end());
+    
+    if (devices.empty()) {
+        std::printf("DEBUG: findWorkingCameraDevice: no /dev/video* nodes found\n");
+        return "";
+    }
+    
+    std::printf("DEBUG: findWorkingCameraDevice: probing %zu candidates:\n", devices.size());
+    for (const auto& dev : devices) {
+        std::printf("DEBUG: findWorkingCameraDevice:  candidate %s\n", dev.c_str());
+    }
+    
+    for (const auto& dev : devices) {
+        // Check read permission
+        if (access(dev.c_str(), R_OK) != 0) {
+            std::printf("DEBUG: findWorkingCameraDevice: %s - permission denied\n", dev.c_str());
+            continue;
+        }
+        
+        // Try to open with OpenCV
+        cv::VideoCapture cap(dev, cv::CAP_V4L2);
+        if (!cap.isOpened()) {
+            std::printf("DEBUG: findWorkingCameraDevice: %s - did not open (cv::VideoCapture)\n", dev.c_str());
+            continue;
+        }
+        
+        // Try to grab one frame
+        cv::Mat f;
+        if (!cap.read(f) || f.empty()) {
+            std::printf("DEBUG: findWorkingCameraDevice: %s - opened but no frame (or empty frame)\n", dev.c_str());
+            continue;
+        }
+        
+        std::printf("DEBUG: findWorkingCameraDevice: %s WORKS (%dx%d frames)\n", dev.c_str(), f.cols, f.rows);
+        return dev;
+    }
+    
+    std::printf("DEBUG: findWorkingCameraDevice: no working device found\n");
+    return "";
+}
 // -------- private --------
 
 std::string RegistryHelper::executeCommand(const std::string& command) {

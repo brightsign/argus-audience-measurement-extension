@@ -26,6 +26,7 @@ UsbInputSource::~UsbInputSource() { close(); }
 bool UsbInputSource::open() noexcept {
   close();
   broken_.store(false);
+  stopping_.store(false);
   frames_ok_.store(0);
   connected_.store(false);
   last_ok_ns_.store(to_ns(SteadyClock::now()));
@@ -54,6 +55,7 @@ bool UsbInputSource::open() noexcept {
           (int)cap_.get(cv::CAP_PROP_FRAME_WIDTH),
           (int)cap_.get(cv::CAP_PROP_FRAME_HEIGHT),
           cap_.get(cv::CAP_PROP_FPS));
+  
   return true;
 }
 
@@ -74,54 +76,100 @@ void UsbInputSource::close() noexcept {
   connected_.store(false);
 }
 
-#if 0
 FetchStatus UsbInputSource::tryFetch(FrameView& out) noexcept {
-  if (!cap_.isOpened() || broken_.load()) return FetchStatus::Error;
-  
-  // OpenCV's cap_.read() can block indefinitely on slow V4L2 drivers
-  // Use grab() which is non-blocking, then retrieve() on success
-  // If no frame is ready after grab(), return Timeout (not Error)
-  // This prevents marking the source as broken during normal buffering delays
-  
-  cv::Mat bgr;
-  
-  // Try to grab the next frame (non-blocking)
-  // grab() returns false if no frame is ready yet
-  if (!cap_.grab()) {
-    // No frame available at this moment; will retry soon
-    return FetchStatus::Timeout;
+  // If we're being told to stop, exit immediately
+  if (stopping_.load(std::memory_order_relaxed)) {
+    LG_INFO("tryFetch:exiting immediately due to stopping flag\n");
+    return FetchStatus::Broken;
   }
-  
-  // We grabbed a frame; now retrieve it (should be fast)
-  if (!cap_.retrieve(bgr) || bgr.empty()) {
-    // Frame was grabbed but retrieval failed or empty
-    broken_.store(true);
-    return FetchStatus::Error;
-  }
-  
-  // Success: store frame and populate output
-  last_frame_ = bgr;
-  out.width  = bgr.cols;
-  out.height = bgr.rows;
-  out.fmt    = PixelFormat::BGR24;
-  out.plane0 = last_frame_.data;
-  out.plane1 = nullptr;
-  out.stride0 = static_cast<int>(bgr.step); // bytes per row
-  out.stride1 = 0;
-  out.pts_ns = to_ns(SteadyClock::now());
-  frames_ok_.fetch_add(1, std::memory_order_relaxed);
-  last_ok_ns_.store(out.pts_ns, std::memory_order_relaxed);
-  return FetchStatus::Ok;
-}
-#endif
 
-FetchStatus UsbInputSource::tryFetch(FrameView& out) noexcept {
+  if (!cap_.isOpened() || broken_.load(std::memory_order_relaxed)) {
+    LG_INFO("tryFetch:cap not open or broken (isOpened=%d, broken=%d)\n", 
+            cap_.isOpened(), broken_.load(std::memory_order_relaxed));
+    return FetchStatus::Broken;
+  }
+
+  cv::Mat bgr;
+  auto fetch_start = std::chrono::steady_clock::now();
+
+  // We'll poll up to ~50ms total.
+  // 10 attempts * 5ms sleep = ~50ms worst case.
+  // This prevents blocking indefinitely on stubborn V4L2 drivers.
+  for (int attempt = 0; attempt < 10; ++attempt) {
+    // Check stopping flag frequently
+    if (stopping_.load(std::memory_order_relaxed)) {
+      auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now() - fetch_start).count();
+      LG_WARN("tryFetch:stopping flag detected in loop at attempt %d (elapsed=%ldms)\n",
+              attempt, elapsed);
+      return FetchStatus::Broken;
+    }
+    if (!cap_.isOpened()) {
+      auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+          std::chrono::steady_clock::now() - fetch_start).count();
+      LG_WARN("tryFetch:cap closed in loop at attempt %d (elapsed=%ldms)\n",
+              attempt, elapsed);
+      return FetchStatus::Broken;
+    }
+
+    // Try to grab a frame (non-blocking or fast)
+    bool got = cap_.grab();
+    if (got) {
+      // Now retrieve the grabbed frame (fast copy from buffer)
+      if (!cap_.retrieve(bgr) || bgr.empty()) {
+        // Something went wrong pulling the data
+        broken_.store(true, std::memory_order_relaxed);
+        return FetchStatus::Broken;
+      }
+
+      // Success path: package it, update health, return Ok
+      const size_t need_sz = size_t(bgr.cols) * size_t(bgr.rows) * 3;
+      if (scratch_bgr_.size() != need_sz) {
+        scratch_bgr_.resize(need_sz);
+      }
+      std::memcpy(scratch_bgr_.data(), bgr.data, need_sz);
+
+      const int64_t now_ns_val =
+          std::chrono::duration_cast<std::chrono::nanoseconds>(
+              std::chrono::steady_clock::now().time_since_epoch()
+          ).count();
+
+      out.fmt     = PixelFormat::BGR24;
+      out.width   = bgr.cols;
+      out.height  = bgr.rows;
+      out.stride0 = bgr.cols * 3;
+      out.stride1 = 0;
+      out.plane0  = scratch_bgr_.data();
+      out.plane1  = nullptr;
+      out.pts_ns  = now_ns_val;
+
+      frames_ok_.fetch_add(1, std::memory_order_relaxed);
+      last_ok_ns_.store(now_ns_val, std::memory_order_relaxed);
+      connected_.store(true, std::memory_order_relaxed);
+
+      return FetchStatus::Ok;
+    }
+
+    // If grab() failed, don't block forever. Sleep a bit, check stop again, try again.
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+
+  // If we get here after 10 attempts (~50ms), camera isn't giving frames right now.
+  // This is typically temporary (between frames or buffer empty).
+  auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+      std::chrono::steady_clock::now() - fetch_start).count();
+  LG_INFO("tryFetch:timeout after ~50ms (actual=%ldms), returning Timeout\n", elapsed);
+  return FetchStatus::Timeout;
+}
+
+#if 0  // Blocking approach (commented out - don't use)
+FetchStatus UsbInputSource::tryFetch_old(FrameView& out) noexcept {
     if (!cap_.isOpened() || broken_.load()) {
         return FetchStatus::Broken;
     }
 
     cv::Mat bgr;
-    if (!cap_.read(bgr) || bgr.empty()) {
+    if (!cap_.read(bgr) || bgr.empty()) {  // THIS BLOCKS INDEFINITELY!
         broken_.store(true);
         return FetchStatus::Broken;
     }
@@ -151,6 +199,7 @@ FetchStatus UsbInputSource::tryFetch(FrameView& out) noexcept {
 
     return FetchStatus::Ok;
 }
+#endif
 
 FetchStatus UsbInputSource::fetch(FrameView& out, int timeout_ms) noexcept {
   auto start = SteadyClock::now();
