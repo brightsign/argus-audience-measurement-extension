@@ -335,10 +335,19 @@ copy_models() {
         cp "examples/${MODEL_DIR}/model/${soc_upper}/${OUTPUT_NAME}" "../../install/${soc_upper}/model/"
         
         log "Copied ${MODEL_DIR} model to install/${soc_upper}/model/"
+        
+        # Copy COCO labels if compiling YOLOX (labels are used by postprocess.cc)
+        if [ "$MODEL" = "yolox" ]; then
+            if [ -f "examples/yolox/model/coco_80_labels_list.txt" ]; then
+                # Convert spaces to underscores in labels as per original script
+                sed 's/ /_/g' "examples/yolox/model/coco_80_labels_list.txt" > "../../install/${soc_upper}/model/coco_80_labels_list.txt"
+                log "Copied COCO labels to install/${soc_upper}/model/coco_80_labels_list.txt"
+            fi
+        fi
     done
     
     cd "${SCRIPT_DIR}"
-    success "Models copied to install directories"
+    success "Models and labels copied to install directories"
 }
 
 # Clean all models (both RetinaFace and YOLOX)

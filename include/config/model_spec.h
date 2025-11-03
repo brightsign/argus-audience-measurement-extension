@@ -38,6 +38,10 @@ struct ModelSpec {
   float conf_threshold{0.5f};
   float nms_threshold{0.45f};
 
+  // NPU core affinity (for multi-core inference)
+  // -1 = auto (runner picks best), 0/1/2 = pin to specific core
+  int   npu_core{-1};
+
   // Basic validation; no throws
   bool validate(char* err, size_t err_sz) const noexcept;
 };

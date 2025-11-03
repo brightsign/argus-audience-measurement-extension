@@ -9,10 +9,6 @@
 #include "image_utils.h"
 #include "rknn_box_priors.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 #define NMS_THRESHOLD 0.4
 #define CONF_THRESHOLD 0.5
 #define VIS_THRESHOLD 0.4
@@ -206,7 +202,7 @@ static int post_process_retinaface(rknn_app_context_t *app_ctx, image_buffer_t *
     return 0;
 }
 
-int init_retinaface_model(const char *model_path, rknn_app_context_t *app_ctx) {
+int init_retinaface_model(const char *model_path, rknn_app_context_t *app_ctx, int npu_core) {
     int ret;
     int model_len = 0;
     char *model;
@@ -229,6 +225,23 @@ int init_retinaface_model(const char *model_path, rknn_app_context_t *app_ctx) {
         return -1;
     }
     // printf("model freed\n");
+
+    // Pin RetinaFace to specified NPU core (from config, or default to core 2)
+    if (npu_core >= 0) {
+        rknn_core_mask core_mask;
+        switch (npu_core) {
+            case 0: core_mask = RKNN_NPU_CORE_0; break;
+            case 1: core_mask = RKNN_NPU_CORE_1; break;
+            case 2: core_mask = RKNN_NPU_CORE_2; break;
+            default: core_mask = RKNN_NPU_CORE_0_1_2; break;  // Use all cores if invalid
+        }
+        ret = rknn_set_core_mask(ctx, core_mask);
+        if (ret != RKNN_SUCC) {
+            printf("rknn_set_core_mask(core %d) failed: %d\n", npu_core, ret);
+        } else {
+            printf("RetinaFace pinned to NPU core %d\n", npu_core);
+        }
+    }
 
     // Get Model Input Output Number
     rknn_input_output_num io_num;
@@ -286,6 +299,20 @@ int init_retinaface_model(const char *model_path, rknn_app_context_t *app_ctx) {
         app_ctx->model_width   = input_attrs[0].dims[2];
         app_ctx->model_channel = input_attrs[0].dims[3];
     }
+
+    // Preallocate reusable input buffer (CPU optimization: avoid malloc/free per frame)
+    app_ctx->prealloc_img.width = app_ctx->model_width;
+    app_ctx->prealloc_img.height = app_ctx->model_height;
+    app_ctx->prealloc_img.format = IMAGE_FORMAT_RGB888;
+    app_ctx->prealloc_img.size = get_image_size(&app_ctx->prealloc_img);
+    app_ctx->prealloc_img_data = (unsigned char *)malloc(app_ctx->prealloc_img.size);
+    if (!app_ctx->prealloc_img_data) {
+        printf("ERROR: failed to preallocate input buffer for retinaface\n");
+        return -1;
+    }
+    app_ctx->prealloc_img.virt_addr = app_ctx->prealloc_img_data;
+    printf("RetinaFace preallocated input buffer: %dx%d RGB (%d bytes)\n", 
+           app_ctx->model_width, app_ctx->model_height, app_ctx->prealloc_img.size);
     // printf("model input height=%d, width=%d, channel=%d\n",
     //        app_ctx->model_height, app_ctx->model_width, app_ctx->model_channel);
 
@@ -301,6 +328,11 @@ int release_retinaface_model(rknn_app_context_t *app_ctx) {
         free(app_ctx->output_attrs);
         app_ctx->output_attrs = NULL;
     }
+    if (app_ctx->prealloc_img_data != NULL) {
+        free(app_ctx->prealloc_img_data);
+        app_ctx->prealloc_img_data = NULL;
+        app_ctx->prealloc_img.virt_addr = NULL;
+    }
     if (app_ctx->rknn_ctx != 0) {
         rknn_destroy(app_ctx->rknn_ctx);
         app_ctx->rknn_ctx = 0;
@@ -310,29 +342,21 @@ int release_retinaface_model(rknn_app_context_t *app_ctx) {
 
 int inference_retinaface_model(rknn_app_context_t *app_ctx, image_buffer_t *src_img, retinaface_result *out_result) {
     int ret;
-    image_buffer_t img;
     letterbox_t letter_box;
     rknn_input inputs[1];
     rknn_output outputs[app_ctx->io_num.n_output];
-    memset(&img, 0, sizeof(image_buffer_t));
     memset(inputs, 0, sizeof(inputs));
     memset(outputs, 0, sizeof(rknn_output) * 3);
     memset(&letter_box, 0, sizeof(letterbox_t));
     int bg_color = 114;//letterbox background pixel
 
-    // Pre Process
-    img.width = app_ctx->model_width;
-    img.height = app_ctx->model_height;
-    img.format = IMAGE_FORMAT_RGB888;
-    img.size = get_image_size(&img);
-    img.virt_addr = (unsigned char *)malloc(img.size);
-
-    if (img.virt_addr == NULL) {
-        printf("malloc buffer size:%d fail!\n", img.size);
+    // Pre Process - USE PREALLOCATED BUFFER (CPU optimization: no malloc/free per frame)
+    if (!app_ctx->prealloc_img_data) {
+        printf("ERROR: prealloc_img_data not initialized\n");
         return -1;
     }
 
-    ret = convert_image_with_letterbox(src_img, &img, &letter_box, bg_color);
+    ret = convert_image_with_letterbox(src_img, &app_ctx->prealloc_img, &letter_box, bg_color);
     if (ret < 0) {
         printf("convert_image fail! ret=%d\n", ret);
         return -1;
@@ -343,7 +367,7 @@ int inference_retinaface_model(rknn_app_context_t *app_ctx, image_buffer_t *src_
     inputs[0].type  = RKNN_TENSOR_UINT8;
     inputs[0].fmt   = RKNN_TENSOR_NHWC;
     inputs[0].size  = app_ctx->model_width * app_ctx->model_height * app_ctx->model_channel;
-    inputs[0].buf   = img.virt_addr;
+    inputs[0].buf   = app_ctx->prealloc_img.virt_addr;
 
     ret = rknn_inputs_set(app_ctx->rknn_ctx, 1, inputs);
     if (ret < 0) {
@@ -367,7 +391,7 @@ int inference_retinaface_model(rknn_app_context_t *app_ctx, image_buffer_t *src_
     ret = rknn_outputs_get(app_ctx->rknn_ctx, 3, outputs, NULL);
     if (ret < 0) {
         printf("rknn_outputs_get fail! ret=%d\n", ret);
-        goto out;
+        return -1;
     }
 
     ret = post_process_retinaface(app_ctx, src_img, outputs, out_result, &letter_box);
@@ -378,14 +402,6 @@ int inference_retinaface_model(rknn_app_context_t *app_ctx, image_buffer_t *src_
     // Remeber to release rknn output
     rknn_outputs_release(app_ctx->rknn_ctx, 3, outputs);
 
-out:
-    if (img.virt_addr != NULL) {
-        free(img.virt_addr);
-    }
-
+    // No free needed - using preallocated buffer
     return ret;
 }
-
-#ifdef __cplusplus
-}
-#endif

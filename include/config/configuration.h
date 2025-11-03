@@ -27,6 +27,16 @@ struct AppConfig {
   // Outputs
   std::vector<PublisherConfig> publishers;  // support multiple sinks
 
+  // Test/Debug mode
+  bool test_face_only{false};   // Enable only RetinaFace model (disable YOLOX)
+  bool test_yolo_only{false};   // Enable only YOLOX model (disable RetinaFace)
+  
+  // Frame output options (optional)
+  bool enable_frame_output{false};  // Enable decorated frame writing
+  std::string output_dir{};         // Directory for decorated frames
+  int max_frames{0};                // Max frames to keep (0 = no limit)
+  int frame_quality{85};            // JPEG quality (1-100)
+  
   // Optional: diagnostic logging
   std::string log_dir{"/storage/sd/logs"};
   bool        log_json{true};

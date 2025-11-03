@@ -12,6 +12,9 @@ typedef struct {
     int model_channel;
     int model_width;
     int model_height;
+    // Preallocated buffers to avoid malloc/free per frame
+    image_buffer_t prealloc_img;
+    unsigned char *prealloc_img_data;  // backing buffer for prealloc_img
 } rknn_app_context_t;
 
 typedef struct box_rect_t {
@@ -42,7 +45,7 @@ typedef struct {
 extern "C" {
 #endif
 
-int init_retinaface_model(const char *model_path, rknn_app_context_t *app_ctx);
+int init_retinaface_model(const char *model_path, rknn_app_context_t *app_ctx, int npu_core);
 
 int release_retinaface_model(rknn_app_context_t *app_ctx);
 
