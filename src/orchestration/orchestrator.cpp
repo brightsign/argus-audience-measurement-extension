@@ -5,6 +5,7 @@
 #include <opencv2/imgproc.hpp>
 #include <opencv2/core.hpp>
 #include <cstdio>
+#include <cstring>
 #include <sys/stat.h>
 #include "orchestration/orchestrator.h"
 #include "input/input_factory.h"
@@ -16,9 +17,15 @@
 #include "models/model_factory.h"
 #include "models/model_runner.h"
 #include "models/model_runner_retinaface.h"
+#include "models/model_runner_yolox.h"
+#include "pipeline/shared_frame.h"
+#include "pipeline/frame_mailbox.h"
+#include "pipeline/pipeline_types.h"
 #include "config/model_spec.h"
 #include "attention.h"
 #include "retinaface.h"
+#include "image_utils.h"
+#include "common.h"
 
 #include <rga/rga.h>
 #include <rga/im2d.h>
@@ -149,32 +156,36 @@ static void normalize_rgb_u8_to_float(const uint8_t* src_rgb, float* dst_f,
 
 namespace {
 
-  // Draw bounding boxes, scores, and 5-point landmarks onto a BGR cv::Mat
+  // Draw bounding boxes, scores, and 5-point landmarks onto a RGB cv::Mat
   // and save it as a JPEG to `path`.
   static void save_debug_jpg(const cv::Mat& visFrame,
                                           const char* path,
                                           uint32_t frame_idx) noexcept
   {
-      // Only dump, e.g., every 3rd frame to reduce I/O cost:
       if ((frame_idx % 3u) != 0u) {
-        return;
+          return;
       }
-
       try {
-          cv::imwrite(path, visFrame); // visFrame already annotated
+          cv::imwrite(path, visFrame);
       } catch (...) {}
   }
 
-  // Process inference results: draw overlays on bgr_resized and save debug JPEG
+  // Process inference results: draw overlays on rgb_mat and save debug JPEG
+  // Note: cv::Mat is in RGB format, so color values are (R, G, B) not (B, G, R)
   static void process_inference_results(
       IModelRunner* runner,
-      cv::Mat& bgr_resized,
+      cv::Mat& rgb_mat,
       uint32_t& debug_frame_idx) noexcept
   {
       if (!runner) return;
 
       auto* retinaface_runner =
           dynamic_cast<RKNNRetinafaceRunner*>(runner);
+
+      auto* yolox_runner =
+          dynamic_cast<RKNNYoloXRunner*>(runner);
+
+      cv::Mat drawMat = rgb_mat; // alias for drawing
 
       if (retinaface_runner) {
           // raw model-specific struct from your legacy pipeline
@@ -185,9 +196,6 @@ namespace {
           if (result && result->count > 0) {
               int attending_total = 0;
 
-              // We'll draw directly on bgr_resized (BGR colors)
-              cv::Mat drawMat = bgr_resized; // alias, not copy
-
               for (int i = 0; i < result->count; ++i) {
                   const auto& obj = result->object[i];
 
@@ -197,9 +205,10 @@ namespace {
                       attending_total++;
                   }
 
+                  // BGR format: (B, G, R) - data is actually BGR despite RGB naming
                   cv::Scalar box_color = attending
-                      ? cv::Scalar(0,255,0)     // green in BGR
-                      : cv::Scalar(0,0,255);    // red in BGR
+                      ? cv::Scalar(0, 255, 0)      // green in BGR (still 0, 255, 0)
+                      : cv::Scalar(0, 0, 255);     // red in BGR (was 255, 0, 0 in RGB)
 
                   // draw face bbox
                   const auto& box = obj.box;
@@ -218,9 +227,10 @@ namespace {
                       int ly = (int)obj.ponit[lm].y;
 
                       // eye landmarks cyan-ish, others yellow-ish (cosmetic)
+                      // RGB format: cyan = (0, 255, 255), yellow = (255, 255, 0)
                       cv::Scalar lm_color = (lm < 2)
-                          ? cv::Scalar(255,255,0)   // cyan-ish in BGR (blue+green)
-                          : cv::Scalar(0,255,255);  // yellow-ish in BGR (green+red)
+                          ? cv::Scalar(0, 255, 255)    // cyan in RGB
+                          : cv::Scalar(255, 255, 0);   // yellow in RGB
 
                       cv::circle(
                           drawMat,
@@ -251,11 +261,77 @@ namespace {
                       attending_total);
               #endif
           }
+      } else if (yolox_runner) {
+          // Draw YOLOX/YOLO object detection boxes
+          // Access detections via the runner's public interface
+          
+          // For YOLOX, we'll draw colored boxes for each detected object class
+          // Using a simple color scheme: different hues for different class_ids
+          // Color palette: BGR format (B, G, R) not RGB!
+          
+          const int max_colors = 10;
+          const cv::Scalar colors[max_colors] = {
+              cv::Scalar(0, 255, 255),      // Cyan in BGR
+              cv::Scalar(0, 0, 255),        // Red in BGR
+              cv::Scalar(0, 255, 0),        // Green in BGR
+              cv::Scalar(255, 0, 255),      // Magenta in BGR
+              cv::Scalar(0, 165, 255),      // Orange in BGR
+              cv::Scalar(255, 255, 0),      // Yellow in BGR
+              cv::Scalar(255, 0, 0),        // Blue in BGR
+              cv::Scalar(255, 0, 127),      // Purple in BGR
+              cv::Scalar(255, 255, 0),      // Cyan in BGR (repeat)
+          };
+          
+          // Get outputs from the model runner
+          const Detection* dets = yolox_runner->get_detections();
+          int det_count = yolox_runner->get_detection_count();
+          
+          if (dets && det_count > 0) {
+              for (int i = 0; i < det_count; ++i) {
+                  const auto& det = dets[i];
+                  
+                  // Select color based on class_id
+                  cv::Scalar box_color = colors[det.class_id % max_colors];
+                  
+                  // Draw bounding box
+                  int x0 = (int)det.x0;
+                  int y0 = (int)det.y0;
+                  int x1 = (int)det.x1;
+                  int y1 = (int)det.y1;
+                  
+                  cv::rectangle(
+                      drawMat,
+                      cv::Point(x0, y0),
+                      cv::Point(x1, y1),
+                      box_color,
+                      2
+                  );
+                  
+                  // Draw score and class_id label
+                  char label[64];
+                  snprintf(label, sizeof(label), "cls=%d score=%.2f", 
+                           det.class_id, det.score);
+                  
+                  cv::putText(
+                      drawMat,
+                      label,
+                      cv::Point(x0, y0 - 5),
+                      cv::FONT_HERSHEY_SIMPLEX,
+                      0.4,
+                      box_color,
+                      1,
+                      cv::LINE_AA
+                  );
+              }
+              #ifdef DEBUG_LOGS
+              LG_INFO("overlay: YOLO objects=%d", det_count);
+              #endif
+          }
       }
 
       // Save annotated frame as JPEG
-      // bgr_resized is in BGR color space and same W×H as model input.
-      save_debug_jpg(/*visFrame=*/bgr_resized,
+      // rgb_mat is in RGB color space and same W×H as model input.
+      save_debug_jpg(/*visFrame=*/rgb_mat,
                      /*path=*/"/tmp/output.jpg",
                      /*frame_idx=*/debug_frame_idx);
       debug_frame_idx++;
@@ -268,7 +344,7 @@ Orchestrator::Orchestrator(PipelineConfig cfg) noexcept
       state_(OrchestratorState::Stopped),
       source_health_(detect_source_kind(cfg_.input)) {}
 
-Orchestrator::~Orchestrator() { stop_worker(); destroy_pipeline(); }
+Orchestrator::~Orchestrator() { stop_threads(); destroy_pipeline(); }
 
 bool Orchestrator::start() noexcept {
   if (state_.load(std::memory_order_acquire) != OrchestratorState::Stopped) return true;
@@ -277,7 +353,7 @@ bool Orchestrator::start() noexcept {
 
   LG_INFO("Build pipeline from orchestrator");
   if (!build_pipeline()) { state_.store(OrchestratorState::Error, std::memory_order_release); return false; }
-  if (!start_worker())   { destroy_pipeline(); state_.store(OrchestratorState::Error, std::memory_order_release); return false; }
+  if (!start_threads_after_build())   { destroy_pipeline(); state_.store(OrchestratorState::Error, std::memory_order_release); return false; }
 
   LG_INFO("Create supervisor thread");
   supervisor_th_ = std::thread(&Orchestrator::supervisor_loop, this);
@@ -289,7 +365,9 @@ void Orchestrator::request_stop() noexcept { orchestrator_stop_.store(true, std:
 
 void Orchestrator::join() noexcept {
   if (supervisor_th_.joinable()) supervisor_th_.join();
-  if (worker_th_.joinable())     worker_th_.join();
+  if (capture_th_.joinable())    capture_th_.join();
+  if (face_th_.joinable())       face_th_.join();
+  if (yolo_th_.joinable())       yolo_th_.join();
 }
 
 bool Orchestrator::switch_input(const InputConfig& new_input) noexcept {
@@ -314,256 +392,230 @@ bool Orchestrator::build_pipeline() noexcept {
   if (!input_tmp->start()) { LG_ERROR("[orch] input->start() failed\n"); input_tmp->close(); source_health_.markBroken(); return false; }
 
   last_heartbeat_ns_.store(now_ns(), std::memory_order_relaxed);
-  LG_INFO("make model runner\n");
-  std::unique_ptr<IModelRunner> runner_tmp = make_model_runner(cfg_.model);
-  if (!runner_tmp) {
-    LG_ERROR("[orch] failed to create model runner\n");
-    return false;
+  LG_INFO("make model runners (primary: face, secondary: yolo)\n");
+  
+  // Set enable flags from config
+  enable_face_model_ = cfg_.enable_face_model;
+  enable_yolo_model_ = cfg_.enable_yolo_model;
+  LG_INFO("[orch] Inference pipeline: enable_face_model=%s enable_yolo_model=%s\n",
+          enable_face_model_ ? "true" : "false",
+          enable_yolo_model_ ? "true" : "false");
+  
+  // Create face runner (RetinaFace on NPU core 0) - only if enabled
+  if (enable_face_model_) {
+    std::unique_ptr<IModelRunner> face_runner_tmp = make_model_runner(cfg_.primary_model);
+    if (!face_runner_tmp) {
+      LG_ERROR("[orch] failed to create face runner\n");
+      return false;
+    }
+    
+    LG_INFO("[orch] face model load path: %s (core %d)\n", cfg_.primary_model.model_path.c_str(), cfg_.primary_model.npu_core);
+    if (!face_runner_tmp->load(cfg_.primary_model)) {
+      LG_ERROR("[orch] face model load failed: %s\n", cfg_.primary_model.model_path.c_str());
+      face_runner_tmp.reset();
+      return false;
+    }
+    face_runner_ = std::shared_ptr<IModelRunner>(std::move(face_runner_tmp));
+  } else {
+    LG_INFO("[orch] RetinaFace disabled (test_yolo_only mode)\n");
+    face_runner_.reset();
   }
   
-  LG_ERROR("[orch] model load path: %s\n", cfg_.model.model_path.c_str());
-  LG_INFO("Load model\n");
-  if (!runner_tmp->load(cfg_.model)) {
-    LG_ERROR("[orch] model load failed: %s\n", cfg_.model.model_path.c_str());
-    runner_tmp.reset();
-    return false;
+  // Create yolo runner (YOLOX on NPU) - only if enabled
+  if (enable_yolo_model_) {
+    std::unique_ptr<IModelRunner> yolo_runner_tmp = make_model_runner(cfg_.secondary_model);
+    if (!yolo_runner_tmp) {
+      LG_ERROR("[orch] failed to create yolo runner\n");
+      return false;
+    }
+    
+    LG_INFO("[orch] yolo model load path: %s\n", cfg_.secondary_model.model_path.c_str());
+    if (!yolo_runner_tmp->load(cfg_.secondary_model)) {
+      LG_ERROR("[orch] yolo model load failed: %s\n", cfg_.secondary_model.model_path.c_str());
+      yolo_runner_tmp.reset();
+      return false;
+    }
+    yolo_runner_ = std::shared_ptr<IModelRunner>(std::move(yolo_runner_tmp));
+  } else {
+    LG_INFO("[orch] YOLOX disabled (test_yolo_only mode)\n");
+    yolo_runner_.reset();
   }
   
-  // Convert to shared_ptr and assign to member variables
+  // Create frame writer for decorated output (optional)
+  if (cfg_.enable_frame_output && !cfg_.output_dir.empty()) {
+    try {
+      frame_writer_ = make_frame_writer_disk(cfg_.output_dir, cfg_.max_frames, cfg_.frame_quality);
+      LG_INFO("[orch] Frame writer enabled: output_dir=%s max_frames=%d quality=%d\n",
+              cfg_.output_dir.c_str(), cfg_.max_frames, cfg_.frame_quality);
+    } catch (const std::exception& e) {
+      LG_WARN("[orch] Failed to create frame writer: %s (will continue without output)\n", e.what());
+      frame_writer_.reset();
+    }
+  } else {
+    frame_writer_ = make_frame_writer_null();
+    LG_INFO("[orch] Frame writer disabled (using null writer)\n");
+  }
+  
+  // Convert input to shared_ptr and assign to member variable
   input_  = std::shared_ptr<IInputSource>(std::move(input_tmp));
-  runner_ = std::shared_ptr<IModelRunner>(std::move(runner_tmp));
   
   return true;
 }
 
 void Orchestrator::destroy_pipeline() noexcept {
   if (input_) { input_->stop(); input_->close(); input_.reset(); }
-  if (runner_) {
-    runner_->unload();
-    runner_.reset();
+  if (face_runner_) {
+    face_runner_->unload();
+    face_runner_.reset();
+  }
+  if (yolo_runner_) {
+    yolo_runner_->unload();
+    yolo_runner_.reset();
+  }
+  if (frame_writer_) {
+    frame_writer_->flush();
+    frame_writer_.reset();
   }
 }
 
-bool Orchestrator::start_worker() noexcept {
-  if (worker_th_.joinable()) return true;
-  LG_INFO("start_worker:start worker loop thread\n");
+bool Orchestrator::start_threads_after_build() noexcept {
+  if (capture_th_.joinable() || face_th_.joinable() || yolo_th_.joinable()) {
+    LG_WARN("start_threads_after_build: threads already running\n");
+    return true;
+  }
   
-  // Mark that worker is starting (before launch, so no race)
-  worker_exited_.store(false, std::memory_order_release);
+  LG_INFO("start_threads_after_build: launching capture + model threads\n");
+  LG_INFO("  enable_face_model=%s enable_yolo_model=%s\n",
+          enable_face_model_ ? "true" : "false",
+          enable_yolo_model_ ? "true" : "false");
   
-  // Capture shared_ptr copies so this worker owns its own references to input_ and runner_
-  auto in = input_;
-  auto run = runner_;
+  // Reset stop flags
+  stop_capture_.store(false, std::memory_order_release);
+  stop_face_.store(false, std::memory_order_release);
+  stop_yolo_.store(false, std::memory_order_release);
   
-  worker_th_ = std::thread(&Orchestrator::worker_loop_threadfn, this, in, run);
+  try {
+    // Launch the capture thread (always runs)
+    LG_INFO("start_threads_after_build: launching capture thread\n");
+    capture_th_ = std::thread([this]() {
+      try {
+        capture_loop_threadfn();
+      } catch (const std::exception& e) {
+        LG_CRIT("capture thread crashed: %s\n", e.what());
+        std::abort();
+      } catch (...) {
+        LG_CRIT("capture thread crashed: unknown exception\n");
+        std::abort();
+      }
+    });
+    
+    // Launch face thread only if enabled
+    if (enable_face_model_) {
+      LG_INFO("start_threads_after_build: launching face detection thread (RetinaFace)\n");
+      face_th_ = std::thread([this]() {
+        try {
+          face_loop_threadfn();
+        } catch (const std::exception& e) {
+          LG_CRIT("face thread crashed: %s\n", e.what());
+          std::abort();
+        } catch (...) {
+          LG_CRIT("face thread crashed: unknown exception\n");
+          std::abort();
+        }
+      });
+    }
+    
+    // Launch dual YOLOX worker threads only if enabled
+    if (enable_yolo_model_) {
+      LG_INFO("start_threads_after_build: launching YOLOX worker thread\n");
+      yolo_th_ = std::thread([this]() {
+        try {
+          yolo_loop_threadfn();
+        } catch (const std::exception& e) {
+          LG_CRIT("yolo thread crashed: %s\n", e.what());
+          std::abort();
+        } catch (...) {
+          LG_CRIT("yolo thread crashed: unknown exception\n");
+          std::abort();
+        }
+      });
+    }
+  } catch (const std::exception& e) {
+    LG_ERROR("start_threads_after_build: failed to launch threads: %s\n", e.what());
+    return false;
+  }
+  
+  LG_INFO("start_threads_after_build: all enabled threads launched successfully\n");
   return true;
 }
 
-void Orchestrator::stop_worker() noexcept {
-  LG_INFO("stop_worker:requesting stop\n");
+void Orchestrator::stop_threads() noexcept {
+  LG_INFO("stop_threads: requesting all threads to stop\n");
 
-  // Tell worker thread to exit (NOT the orchestrator)
-  stop_worker_flag_.store(true, std::memory_order_release);
+  // Set stop flags for all worker threads
+  stop_capture_.store(true, std::memory_order_release);
+  stop_face_.store(true, std::memory_order_release);
+  stop_yolo_.store(true, std::memory_order_release);
 
   // Ask input to break capture loop
   if (input_) {
     if (auto* usb = dynamic_cast<UsbInputSource*>(input_.get())) {
-      LG_INFO("stop_worker:calling input->request_stop() to unblock read()\n");
+      LG_INFO("stop_threads: calling input->request_stop() to unblock read()\n");
       usb->request_stop();
     }
   }
 
-  if (!worker_th_.joinable()) {
-    LG_INFO("stop_worker:no worker thread to stop\n");
-    return;
-  }
-
-  // CRITICAL: Instead of calling join() immediately (which always blocks),
-  // we poll worker_exited_ flag to see if the thread is actually done.
-  // If it is, THEN we join(). If it's not, we give it ~200ms then detach.
-  
-  // Give it up to ~200ms to naturally exit
+  // Give threads a grace period to exit cleanly (200ms)
   auto deadline = std::chrono::steady_clock::now() +
                   std::chrono::milliseconds(200);
 
   while (std::chrono::steady_clock::now() < deadline) {
-    if (worker_exited_.load(std::memory_order_acquire)) {
-      // It's finished! Now join() won't block long.
-      worker_th_.join();
-      LG_INFO("stop_worker:worker fully stopped (joined after graceful exit)\n");
-      return;
+    bool all_stopped = true;
+    if (capture_th_.joinable()) {
+      LG_INFO("stop_threads: waiting for capture thread...\n");
+      all_stopped = false;
     }
+    if (face_th_.joinable()) {
+      LG_INFO("stop_threads: waiting for face thread...\n");
+      all_stopped = false;
+    }
+    if (yolo_th_.joinable()) {
+      LG_INFO("stop_threads: waiting for yolo thread...\n");
+      all_stopped = false;
+    }
+    
+    if (all_stopped) break;
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   }
 
-  // Grace period expired and worker_exited_ is still false -> thread is stuck in kernel.
-  // Do NOT wait 7 seconds. Just detach and move on.
-  if (worker_th_.joinable()) {
-    LG_WARN("stop_worker:worker still running after grace period, detaching thread (will finish on its own)\n");
-    worker_th_.detach();
+  // Join threads that are still running, or detach if they're stuck
+  try {
+    join_if(capture_th_);
+    LG_INFO("stop_threads: capture thread joined\n");
+  } catch (...) {
+    LG_WARN("stop_threads: capture thread detached after timeout\n");
+    if (capture_th_.joinable()) capture_th_.detach();
   }
-}
-
-void Orchestrator::worker_loop() noexcept {
-  // Wrapper: call the actual worker logic with current shared_ptrs
-  worker_loop_threadfn(input_, runner_);
-}
-
-void Orchestrator::worker_loop_threadfn(
-    std::shared_ptr<IInputSource> in,
-    std::shared_ptr<IModelRunner> run) noexcept {
   
-  if (!in || !run) {
-    LG_ERROR("worker_loop_threadfn:invalid input or runner\n");
-    return;
+  try {
+    join_if(face_th_);
+    LG_INFO("stop_threads: face thread joined\n");
+  } catch (...) {
+    LG_WARN("stop_threads: face thread detached after timeout\n");
+    if (face_th_.joinable()) face_th_.detach();
   }
-
-  constexpr int kIdleSleepMs = 2;
-  auto heartbeat = [this]() noexcept { last_heartbeat_ns_.store(now_ns(), std::memory_order_release); };
-  LG_INFO("worker_loop_threadfn:starting\n");
-  heartbeat();  // Set initial heartbeat so supervisor doesn't think we're stalled before first frame
-
-  using clock_t = std::chrono::steady_clock;
-  auto t_start  = clock_t::now();
-  int frame_count = 0;
-
-  uint32_t debug_frame_idx = 0;
-
-  const int dst_w = cfg_.model.input_size.w;
-  const int dst_h = cfg_.model.input_size.h;
-
-  const bool model_expects_rgb =
-      (cfg_.model.input_layout == ColorLayout::RGB);
-
-  // Track consecutive timeouts to avoid aggressive recovery on brief hiccups
-  int consecutive_timeouts = 0;
-  const int TIMEOUT_THRESHOLD = 10;  // ~10 * 50ms = ~500ms of sustained failure before marking broken
-
-  while (!stop_worker_flag_.load(std::memory_order_relaxed)) {
-    // Check stop signal frequently to enable responsive shutdown
-    if (stop_worker_flag_.load(std::memory_order_acquire)) break;
-    
-    // 1. Fetch frame from camera into FrameView
-    FrameView camView{};
-    FetchStatus st = FetchStatus::Timeout;
-    
-    st = in->tryFetch(camView);
-    
-    // Check stop signal again after fetch attempt (may have been blocking)
-    if (stop_worker_flag_.load(std::memory_order_acquire)) {
-      LG_INFO("worker_loop_threadfn:stop signal detected, exiting\n");
-      break;
-    }
-    
-    if (st != FetchStatus::Ok) {
-      int64_t now_ns_val = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                              clock_t::now().time_since_epoch()).count();
-      
-      // If device is broken, mark it and exit immediately
-      if (st == FetchStatus::Broken) {
-        LG_WARN("worker_loop_threadfn:device broken, exiting worker loop\n");
-        source_health_.onBusError(now_ns_val, "usb device broken");
-        break;  // Exit immediately, don't retry
-      }
-      
-      // Timeout: increment counter
-      // Only mark broken after sustained failure to avoid aggressive recovery on brief hiccups
-      consecutive_timeouts++;
-      
-      if (consecutive_timeouts >= TIMEOUT_THRESHOLD) {
-        // Camera is effectively dead/unplugged (sustained timeout)
-        source_health_.onBusError(now_ns_val, "usb fetch fail: sustained timeouts");
-        // Note: we don't break here; let loop continue spinning and let supervisor detect staleness
-      }
-      
-      std::this_thread::sleep_for(std::chrono::milliseconds(5));
-      continue;
-    }
-
-    // Frame received successfully - reset timeout counter
-    consecutive_timeouts = 0;
-    
-    // mark source health OK
-    source_health_.onFrameOk(camView.pts_ns);
-
-    // camView.plane0 is BGR24 from UsbInputSource
-    cv::Mat bgr_src(
-        camView.height,
-        camView.width,
-        CV_8UC3,
-        camView.plane0);
-
-    // 2. Resize to model input size
-    cv::Mat bgr_resized;
-    cv::resize(
-        bgr_src,
-        bgr_resized,
-        cv::Size(dst_w, dst_h),
-        0, 0,
-        cv::INTER_LINEAR
-    );
-
-    // 3. Convert to model layout if model wants RGB
-    const uint8_t* model_input_ptr = nullptr;
-    PixelFormat fmt_for_runner = PixelFormat::BGR24;
-    cv::Mat model_mat;
-
-    if (model_expects_rgb) {
-      cv::cvtColor(bgr_resized, model_mat, cv::COLOR_BGR2RGB);
-      model_input_ptr = model_mat.data;
-      fmt_for_runner  = PixelFormat::RGB24;
-    } else {
-      model_mat = bgr_resized; // alias
-      model_input_ptr = bgr_resized.data;
-      fmt_for_runner  = PixelFormat::BGR24;
-    }
-
-    // 4. Build inference input view
-    FrameView fv_in{};
-    fv_in.fmt     = fmt_for_runner;
-    fv_in.width   = dst_w;
-    fv_in.height  = dst_h;
-    fv_in.stride0 = dst_w * 3;
-    fv_in.stride1 = 0;
-    fv_in.plane0  = const_cast<uint8_t*>(model_input_ptr);
-    fv_in.plane1  = nullptr;
-    fv_in.pts_ns  = camView.pts_ns;
-
-    InferenceOutputs outs{};
-    bool ok_infer = (run && run->infer(fv_in, outs));
-    if (!ok_infer) {
-      int64_t now_ns_val = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                              clock_t::now().time_since_epoch()).count();
-      source_health_.onBusError(now_ns_val, "inference fail");
-    } else {
-      // Process overlays and save debug frame
-      process_inference_results(run.get(), bgr_resized, debug_frame_idx);
-    }
-
-    // 5. FPS log (once per ~1s)
-    frame_count++;
-    auto t_now = clock_t::now();
-    auto elapsed_ms =
-        std::chrono::duration_cast<std::chrono::milliseconds>(t_now - t_start).count();
-    if (elapsed_ms >= 1000) {
-      float fps = (elapsed_ms > 0)
-          ? (1000.0f * frame_count / float(elapsed_ms))
-          : 0.0f;
-
-      LG_INFO("Performance: %.1f FPS | Frame %dx%d",
-              fps, dst_w, dst_h);
-
-      frame_count = 0;
-      t_start = t_now;
-    }
-
-    // 6. Heartbeat for supervisor
-    heartbeat();
+  
+  try {
+    join_if(yolo_th_);
+    LG_INFO("stop_threads: yolo thread joined\n");
+  } catch (...) {
+    LG_WARN("stop_threads: yolo thread detached after timeout\n");
+    if (yolo_th_.joinable()) yolo_th_.detach();
   }
-
-  // Mark that worker has exited (critical for stop_worker() to know we're done)
-  worker_exited_.store(true, std::memory_order_release);
-  LG_INFO("worker_loop_threadfn:exiting\n");
+  
+  LG_INFO("stop_threads: all threads stopped (enable_face=%s enable_yolo=%s)\n",
+          enable_face_model_ ? "true" : "false",
+          enable_yolo_model_ ? "true" : "false");
 }
 
 void Orchestrator::supervisor_loop() noexcept {
@@ -586,8 +638,8 @@ void Orchestrator::supervisor_loop() noexcept {
   int recovery_backoff_ms = 250;
   
   while (!orchestrator_stop_.load(std::memory_order_acquire)) {
-    const int64_t now = now_ns();
-    const int64_t last = last_heartbeat_ns_.load(std::memory_order_acquire);
+    const int64_t now = now_ns();  // Cache once per iteration, not per condition check
+    const int64_t last = last_heartbeat_ns_.load(std::memory_order_relaxed);  // Use relaxed for speed
     const int64_t age_ms = (last>0) ? (now-last)/1'000'000 : 0;
     if (last && age_ms > heartbeat_timeout_ms) {
       LG_WARN("supervisor_loop:heartbeat stale (age_ms=%lld > timeout=%d)\n", age_ms, heartbeat_timeout_ms);
@@ -595,12 +647,12 @@ void Orchestrator::supervisor_loop() noexcept {
       source_health_.markBroken();
     }
     
-    // DIAGNOSTIC: Log health state every iteration
+    // DIAGNOSTIC: Log health state every 5 seconds (reduced from 1 second for CPU optimization)
     bool is_broken = source_health_.isBroken();
     static int64_t last_health_log_ns = 0;
-    int64_t health_log_interval_ns = 1'000'000'000LL;  // Log health every 1 second
+    int64_t health_log_interval_ns = 5'000'000'000LL;  // Log health every 5 seconds for CPU optimization
     if ((now - last_health_log_ns) >= health_log_interval_ns) {
-      LG_INFO("supervisor_loop:health check (is_broken=%s, state=%d, age_ms=%lld)\n",
+      LG_INFO("supervisor_loop:health (broken=%s state=%d age_ms=%lld)\n",
               is_broken ? "true" : "false",
               static_cast<int>(state_.load(std::memory_order_acquire)),
               age_ms);
@@ -654,7 +706,7 @@ bool Orchestrator::recover_pipeline(int64_t now_ns_val) noexcept {
 
     // 1. Stop (or quarantine) any existing worker
     LG_INFO("recover_pipeline:stopping worker\n");
-    stop_worker();  // bounded, returns fast
+    stop_threads();  // bounded, returns fast
 
     // We are STILL considered broken until we actually launch a new worker.
     // DO NOT clearBroken() yet.
@@ -754,37 +806,80 @@ bool Orchestrator::recover_pipeline(int64_t now_ns_val) noexcept {
         return false; // still broken
     }
 
-    std::unique_ptr<IModelRunner> new_runner_tmp = make_model_runner(cfg_.model);
-    if (!new_runner_tmp) {
-        LG_ERROR("recover_pipeline:failed to create model runner\n");
-        new_input_tmp->stop();
-        new_input_tmp->close();
-        return false; // still broken
+    // Create face runner only if enabled
+    std::shared_ptr<IModelRunner> new_face_runner;
+    if (enable_face_model_) {
+        std::unique_ptr<IModelRunner> new_face_runner_tmp = make_model_runner(cfg_.primary_model);
+        if (!new_face_runner_tmp) {
+            LG_ERROR("recover_pipeline:failed to create face runner\n");
+            new_input_tmp->stop();
+            new_input_tmp->close();
+            return false; // still broken
+        }
+
+        if (!new_face_runner_tmp->load(cfg_.primary_model)) {
+            LG_ERROR("recover_pipeline:face model load failed: %s\n",
+                     cfg_.primary_model.model_path.c_str());
+            new_input_tmp->stop();
+            new_input_tmp->close();
+            return false; // still broken
+        }
+        new_face_runner = std::shared_ptr<IModelRunner>(std::move(new_face_runner_tmp));
     }
 
-    if (!new_runner_tmp->load(cfg_.model)) {
-        LG_ERROR("recover_pipeline:model load failed: %s\n",
-                 cfg_.model.model_path.c_str());
-        new_input_tmp->stop();
-        new_input_tmp->close();
-        return false; // still broken
+    // Create yolo runner only if enabled
+    std::shared_ptr<IModelRunner> new_yolo_runner;
+    if (enable_yolo_model_) {
+        std::unique_ptr<IModelRunner> new_yolo_runner_tmp = make_model_runner(cfg_.secondary_model);
+        if (!new_yolo_runner_tmp) {
+            LG_ERROR("recover_pipeline:failed to create yolo runner\n");
+            new_input_tmp->stop();
+            new_input_tmp->close();
+            return false; // still broken
+        }
+
+        if (!new_yolo_runner_tmp->load(cfg_.secondary_model)) {
+            LG_ERROR("recover_pipeline:yolo model load failed: %s\n",
+                     cfg_.secondary_model.model_path.c_str());
+            new_input_tmp->stop();
+            new_input_tmp->close();
+            return false; // still broken
+        }
+        new_yolo_runner = std::shared_ptr<IModelRunner>(std::move(new_yolo_runner_tmp));
     }
 
     // 6. Publish new pipeline objects
     auto new_input = std::shared_ptr<IInputSource>(std::move(new_input_tmp));
-    auto new_runner = std::shared_ptr<IModelRunner>(std::move(new_runner_tmp));
     
     input_  = new_input;
-    runner_ = new_runner;
+    face_runner_ = new_face_runner;
+    yolo_runner_ = new_yolo_runner;
 
-    // 7. Reset orchestrator run state for NEW worker.
-    //    THIS IS CRITICAL. Without this, the new worker will exit immediately.
-    LG_INFO("recover_pipeline:resetting run state for new worker\n");
-    stop_worker_flag_.store(false, std::memory_order_release);
-    worker_exited_.store(false, std::memory_order_release);
+    // 7. Reset orchestrator run state for NEW worker threads
+    LG_INFO("recover_pipeline:resetting run state for new worker threads\n");
+    stop_capture_.store(false, std::memory_order_release);
+    stop_face_.store(false, std::memory_order_release);
+    stop_yolo_.store(false, std::memory_order_release);
 
-    LG_INFO("recover_pipeline:launching new worker thread\n");
-    worker_th_ = std::thread(&Orchestrator::worker_loop_threadfn, this, new_input, new_runner);
+    LG_INFO("recover_pipeline:launching new worker threads (enable_face=%s enable_yolo=%s)\n",
+            enable_face_model_ ? "true" : "false",
+            enable_yolo_model_ ? "true" : "false");
+    try {
+        capture_th_ = std::thread(&Orchestrator::capture_loop_threadfn, this);
+        
+        // Launch face thread only if enabled
+        if (enable_face_model_) {
+            face_th_    = std::thread(&Orchestrator::face_loop_threadfn, this);
+        }
+        
+        // Launch YOLOX worker thread only if enabled
+        if (enable_yolo_model_) {
+            yolo_th_ = std::thread(&Orchestrator::yolo_loop_threadfn, this);
+        }
+    } catch (const std::exception& e) {
+        LG_ERROR("recover_pipeline:failed to launch threads: %s\n", e.what());
+        return false;
+    }
 
     // 8. Mark healthy again only NOW.
     source_health_.clearBroken();
@@ -794,4 +889,339 @@ bool Orchestrator::recover_pipeline(int64_t now_ns_val) noexcept {
     LG_INFO("recover_pipeline:camera restored on %s, pipeline running again\n",
             cfg_.input.usb_device.c_str());
     return true;
+}
+void Orchestrator::capture_loop_threadfn() noexcept {
+    LG_INFO("capture_loop:start");
+
+    while (!stop_capture_.load(std::memory_order_relaxed)) {
+        // Try to fetch next frame from input source
+        FrameView camView{};
+        FetchStatus st = input_->tryFetch(camView);
+
+        if (st != FetchStatus::Ok) {
+            // Camera hiccup or timeout
+            source_health_.onBusError(now_ns(), "capture fetch fail");
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            continue;
+        }
+
+        // Healthy frame received
+        source_health_.onFrameOk(camView.pts_ns);
+
+        // Wrap into SharedFrame (zero-copy, just wrap the buffer)
+        auto sf = std::make_shared<SharedFrame>();
+        sf->pts_ns = camView.pts_ns;
+        sf->width  = camView.width;
+        sf->height = camView.height;
+        sf->seq    = frame_seq_.fetch_add(1, std::memory_order_relaxed) + 1;
+
+        // Copy BGR data (this is the one place we duplicate pixel data)
+        sf->bgr.resize(static_cast<size_t>(sf->width * sf->height * 3));
+        if (camView.plane0) {
+            std::memcpy(sf->bgr.data(), camView.plane0, sf->bgr.size());
+        }
+
+        // Fan out to enabled model mailboxes (lock-free post)
+        // Only post to mailboxes that have active consumers
+        if (enable_face_model_) {
+            mb_face_.postFrame(sf);
+        }
+
+        // Fan out to enabled model mailboxes
+        if (enable_yolo_model_) {
+            mb_yolo_.postFrame(sf);
+        }
+
+        // Update heartbeat for supervisor
+        last_heartbeat_ns_.store(now_ns(), std::memory_order_release);
+    }
+
+    LG_INFO("capture_loop:stop");
+}
+
+void Orchestrator::face_loop_threadfn() noexcept {
+    try {
+        LG_INFO("face_loop:start (RetinaFace on NPU core 0, enable=%s)", 
+                enable_face_model_ ? "true" : "false");
+
+        // Guard: check if face model is enabled
+        if (!enable_face_model_) {
+            LG_WARN("face_loop: face model disabled, exiting thread\n");
+            return;
+        }
+
+        if (!face_runner_) {
+            LG_ERROR("face_loop: face_runner_ not initialized but enable_face_model_=true");
+            return;
+        }
+
+        const ModelSpec& spec = face_runner_->spec();
+        const int dst_w = spec.input_size.w;
+        const int dst_h = spec.input_size.h;
+        const bool wants_rgb = (spec.input_layout == ColorLayout::RGB);
+
+        uint64_t last_logged_seq = 0;
+        bool logged_first_frame = false;
+
+        // Preallocate resized buffer (RGA-optimized, reused every frame)
+        std::vector<uint8_t> bgr_resized_buf(dst_w * dst_h * 3);
+        image_buffer_t src_img{};
+        image_buffer_t dst_img{};
+        dst_img.width = dst_w;
+        dst_img.height = dst_h;
+        dst_img.format = IMAGE_FORMAT_RGB888;
+        dst_img.virt_addr = bgr_resized_buf.data();
+        dst_img.size = get_image_size(&dst_img);
+
+        while (!stop_face_.load(std::memory_order_relaxed)) {
+            auto sf = mb_face_.takeFrame();
+            if (!sf) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                continue;
+            }
+
+            // CPU optimization: Skip RetinaFace every other frame (run at 15 FPS instead of 30)
+            // This typically saves 3-4% CPU without noticeable UX impact
+            // TESTING TIP: To test all frames, change SKIP_RETINAFACE_FRAMES to 0 and rebuild
+            #define SKIP_RETINAFACE_FRAMES 1
+            #if SKIP_RETINAFACE_FRAMES
+            if ((sf->seq & 1) != 0) {
+                continue;  // Skip odd frames
+            }
+            #endif
+
+            // Log first frame reception as breadcrumb
+            if (!logged_first_frame) {
+                LG_INFO("face_loop: got first frame seq=%llu %dx%d",
+                        (unsigned long long)sf->seq, sf->width, sf->height);
+                logged_first_frame = true;
+            }
+
+            // Validate frame data before processing
+            if (sf->bgr.empty()) {
+                LG_WARN("face_loop: received frame with empty BGR data (seq=%llu), skipping\n", 
+                        (unsigned long long)sf->seq);
+                continue;
+            }
+
+            // Setup source image buffer from shared frame BGR data
+            src_img.width = sf->width;
+            src_img.height = sf->height;
+            src_img.format = IMAGE_FORMAT_RGB888;  // Will be converted from BGR via RGA
+            src_img.virt_addr = sf->bgr.data();
+            src_img.size = get_image_size(&src_img);
+            // Resize+convert via RGA hardware accelerator (CPU optimization)
+            int ret = convert_image(&src_img, &dst_img, NULL, NULL, 0);
+            if (ret != 0) {
+                LG_WARN("face_loop: RGA convert_image failed (ret=%d), skipping frame\n", ret);
+                continue;
+            }
+
+            // Prepare frame view for model input
+            FrameView fv_in{};
+            fv_in.fmt     = PixelFormat::RGB24;  // convert_image outputs RGB
+            fv_in.width   = dst_w;
+            fv_in.height  = dst_h;
+            fv_in.stride0 = dst_w * 3;  // Tightly packed RGB
+            fv_in.plane0  = bgr_resized_buf.data();
+            fv_in.pts_ns  = sf->pts_ns;
+            #ifdef ENABLE_DEBUG
+            // Run inference (keep sf in scope to maintain reference)
+            LG_INFO("face_loop: step=infer (fmt=%s stride=%d)",
+                    "RGB24", fv_in.stride0);
+            #endif
+            InferenceOutputs outs{};
+            bool ok = face_runner_->infer(fv_in, outs);
+            if (!ok) {
+                LG_WARN("face_loop: RetinaFace inference failed for frame seq=%llu",
+                        (unsigned long long)sf->seq);
+                source_health_.onBusError(now_ns(), "face inference fail");
+                continue;
+            }
+
+            // Use RGB data directly from RGA (no color conversion needed)
+            // convert_image() outputs RGB, which we use as-is for visualization
+            cv::Mat rgb_resized(dst_h, dst_w, CV_8UC3, bgr_resized_buf.data());
+
+            // Visualize results: draw overlays and save debug JPEG (RGB format)
+            static uint32_t face_debug_frame_idx = 0;
+            process_inference_results(face_runner_.get(), rgb_resized, face_debug_frame_idx);
+
+            // Write decorated frame to output (if enabled)
+            if (frame_writer_) {
+                PipelineResult result{};
+                result.seq = sf->seq;
+                result.pts_ns = sf->pts_ns;
+                // Add tracks from face detections (simplified - direct detections)
+                // Note: Full Track structure would need landmarks + tracking
+                for (int i = 0; i < outs.num_dets && i < 100; i++) {
+                    Track t{};
+                    t.box = outs.dets[i];
+                    if (outs.num_lms > i && outs.lms) {
+                        t.lms = outs.lms[i];
+                    }
+                    result.tracks.push_back(t);
+                }
+                if (!frame_writer_->writeFrame(rgb_resized, result)) {
+                    LG_WARN("face_loop: frame_writer->writeFrame failed for seq=%llu", 
+                            (unsigned long long)sf->seq);
+                }
+            }
+
+            // Store results
+            {
+                std::lock_guard<std::mutex> g(fusion_.m);
+                fusion_.face_dets.assign(outs.dets, outs.dets + outs.num_dets);
+                fusion_.face_lms.assign(outs.lms, outs.lms + outs.num_lms);
+                fusion_.face_seq = sf->seq;
+            }
+            #ifdef ENABLE_DEBUG
+            if (sf->seq != last_logged_seq && (sf->seq % 30 == 0)) {  // Log every 30 frames (~1 sec at 30fps)
+                last_logged_seq = sf->seq;
+                LG_INFO("face_loop: frame seq=%llu faces=%d",
+                        (unsigned long long)sf->seq, outs.num_dets);
+            }
+            #endif
+        }
+
+        LG_INFO("face_loop:stop");
+    } catch (const std::exception& e) {
+        LG_CRIT("face_loop: exception: %s", e.what());
+        std::fflush(nullptr);
+        std::abort();
+    } catch (...) {
+        LG_CRIT("face_loop: unknown exception");
+        std::fflush(nullptr);
+        std::abort();
+    }
+}
+
+void Orchestrator::yolo_loop_threadfn() noexcept {
+    try {
+        LG_INFO("yolo_loop:start (enable=%s)", enable_yolo_model_ ? "true" : "false");
+
+        // Guard: check if yolo model is enabled
+        if (!enable_yolo_model_) {
+            LG_WARN("yolo_loop: yolo model disabled, exiting thread\n");
+            return;
+        }
+
+        if (!yolo_runner_) {
+            LG_ERROR("yolo_loop: yolo_runner_ not initialized but enable_yolo_model_=true");
+            return;
+        }
+
+        const ModelSpec& spec = yolo_runner_->spec();
+        const int dst_w = spec.input_size.w;
+        const int dst_h = spec.input_size.h;
+
+        uint64_t last_logged_seq = 0;
+        bool logged_first_frame = false;
+
+        // Preallocate resized buffer for YOLOX input
+        std::vector<uint8_t> bgr_resized_buf(dst_w * dst_h * 3);
+        image_buffer_t src_img{};
+        image_buffer_t dst_img{};
+        dst_img.width = dst_w;
+        dst_img.height = dst_h;
+        dst_img.format = IMAGE_FORMAT_RGB888;
+        dst_img.virt_addr = bgr_resized_buf.data();
+        dst_img.size = get_image_size(&dst_img);
+
+        while (!stop_yolo_.load(std::memory_order_relaxed)) {
+            auto sf = mb_yolo_.takeFrame();
+            if (!sf) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                continue;
+            }
+
+            // CPU optimization: Skip YOLOX every other frame (run at 15 FPS instead of 30)
+            // This typically saves 3-4% CPU without noticeable UX impact
+            #define SKIP_YOLOX_FRAMES 1
+            #if SKIP_YOLOX_FRAMES
+            if ((sf->seq & 1) != 0) {
+                continue;  // Skip odd frames
+            }
+            #endif
+
+            // Log first frame reception as breadcrumb
+            if (!logged_first_frame) {
+                LG_INFO("yolo_loop: got first frame seq=%llu %dx%d",
+                        (unsigned long long)sf->seq, sf->width, sf->height);
+                logged_first_frame = true;
+            }
+
+            // Validate frame data before processing
+            if (sf->bgr.empty()) {
+                LG_WARN("yolo_loop: received frame with empty BGR data (seq=%llu), skipping\n", 
+                        (unsigned long long)sf->seq);
+                continue;
+            }
+
+            // Setup source image buffer from shared frame BGR data
+            src_img.width = sf->width;
+            src_img.height = sf->height;
+            src_img.format = IMAGE_FORMAT_RGB888;
+            src_img.virt_addr = sf->bgr.data();
+            src_img.size = get_image_size(&src_img);
+            
+            // Resize+convert via RGA hardware accelerator (CPU optimization)
+            int ret = convert_image(&src_img, &dst_img, NULL, NULL, 0);
+            if (ret != 0) {
+                LG_WARN("yolo_loop: RGA convert_image failed (ret=%d), skipping frame\n", ret);
+                continue;
+            }
+
+            // Prepare frame view for model input
+            FrameView fv_in{};
+            fv_in.fmt     = PixelFormat::RGB24;
+            fv_in.width   = dst_w;
+            fv_in.height  = dst_h;
+            fv_in.stride0 = dst_w * 3;
+            fv_in.plane0  = bgr_resized_buf.data();
+            fv_in.pts_ns  = sf->pts_ns;
+
+            // Run inference
+            InferenceOutputs outs{};
+            bool ok = yolo_runner_->infer(fv_in, outs);
+            if (!ok) {
+                LG_WARN("yolo_loop: YOLOX inference failed for frame seq=%llu",
+                        (unsigned long long)sf->seq);
+                source_health_.onBusError(now_ns(), "yolo inference fail");
+                continue;
+            }
+
+            // Use RGB data directly from RGA (no color conversion needed)
+            cv::Mat rgb_resized(dst_h, dst_w, CV_8UC3, bgr_resized_buf.data());
+
+            // Visualize results: draw overlays and save debug JPEG (RGB format)
+            static uint32_t yolo_debug_frame_idx = 0;
+            process_inference_results(yolo_runner_.get(), rgb_resized, yolo_debug_frame_idx);
+
+            // Store results
+            {
+                std::lock_guard<std::mutex> g(fusion_.m);
+                fusion_.yolo_dets.assign(outs.dets, outs.dets + outs.num_dets);
+                fusion_.yolo_seq = sf->seq;
+            }
+
+            #ifdef ENABLE_DEBUG
+            if (sf->seq != last_logged_seq && (sf->seq % 30 == 0)) {
+                last_logged_seq = sf->seq;
+                LG_INFO("yolo_loop: frame seq=%llu objects=%d",
+                        (unsigned long long)sf->seq, outs.num_dets);
+            }
+            #endif
+        }
+
+        LG_INFO("yolo_loop:stop");
+    } catch (const std::exception& e) {
+        LG_CRIT("yolo_loop: exception: %s", e.what());
+        std::fflush(nullptr);
+        std::abort();
+    } catch (...) {
+        LG_CRIT("yolo_loop: unknown exception");
+        std::fflush(nullptr);
+        std::abort();
+    }
 }

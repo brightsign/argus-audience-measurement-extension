@@ -4,8 +4,8 @@
 #include <math.h>
 #include <sys/time.h>
 
-#include "im2d.h"
-#include "drmrga.h"
+#include <rga/im2d.h>
+#include <rga/drmrga.h>
 
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_NO_THREAD_LOCALS

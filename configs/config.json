@@ -1,0 +1,79 @@
+{
+  "input": {
+    "rtsp_url": "",
+    "usb_device": "/dev/video0",
+    "file_path": "",
+
+    "usb": {
+      "width": 640,
+      "height": 480,
+      "fps": 30
+    },
+    "rtsp": {
+      "latency_ms": 100
+    },
+    "file": {
+      "loop": true
+    }
+  },
+
+  "primary_model": {
+    "name": "retinaface",
+    "model_path": "model/retinaface.rknn",
+    "input_size": [320, 320],
+    "npu_core": 1,
+    "norm": {
+      "mean": [123.675, 116.28, 103.53],
+      "std":  [58.395, 57.12, 57.375]
+    },
+    "conf_threshold": 0.5,
+    "nms_threshold": 0.45
+  },
+
+  "secondary_models": [
+    {
+      "name": "yolox",
+      "model_path": "model/yolox_s.rknn",
+      "input_size": [640, 640],
+      "npu_core": 0,
+      "norm": {
+        "mean": [0, 0, 0],
+        "std": [1, 1, 1]
+      },
+      "conf_threshold": 0.5,
+      "nms_threshold": 0.45
+    }
+  ],
+
+  "processing": {
+    "th": { "score": 0.5, "iou": 0.45 },
+    "nms_max_dets": 100
+  },
+
+  "runtime": {
+    "target_fps": 30,
+    "heartbeat_ms": 1000
+  },
+
+  "publishers": [
+    {
+      "kind": "udp",
+      "udp": { "host": "127.0.0.1", "port": 5555 }
+    }
+  ],
+
+  "log_dir": "/storage/sd/logs",
+  "log_json": true,
+
+  "test_face_only": true,
+  "test_yolo_only": true,
+
+  "_test_mode_notes": {
+    "description": "Test mode configuration for debugging individual models",
+    "test_face_only": "Set to true to run ONLY RetinaFace (disable YOLOX). Default: false",
+    "test_yolo_only": "Set to true to run ONLY YOLOX (disable RetinaFace). Default: false",
+    "note": "Both can be false (default) to run both models in parallel on separate NPU cores (production mode)",
+    "usage": "See TEST_MODES.md for detailed usage examples and debugging workflows"
+  }
+}
+

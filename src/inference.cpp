@@ -594,7 +594,7 @@ MLInferenceThread::MLInferenceThread(
     printf("Initializing ML model from: %s\n", model_path);
 
     memset(&rknn_app_ctx, 0, sizeof(rknn_app_ctx));
-    int ret = init_retinaface_model(model_path, &rknn_app_ctx);
+    int ret = init_retinaface_model(model_path, &rknn_app_ctx, -1);  // Use default core selection
     if (ret != 0) {
         printf("ERROR: Failed to initialize RetinaFace model! ret=%d\n", ret);
     } else {

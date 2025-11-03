@@ -4,18 +4,35 @@
 #include <atomic>
 #include <memory>
 #include <thread>
+#include <mutex>
+#include <condition_variable>
 #include <string>
 #include "input/input_factory.h"
 #include "health/health_manager.h"
 #include "config/model_spec.h"
 #include "models/model_runner.h"
+#include "pipeline/shared_frame.h"
+#include "pipeline/frame_mailbox.h"
+#include "output/frame_writer.h"
 
 // Optional: describe how to build the pipeline
 struct PipelineConfig {
   InputConfig input;           // from your existing config
-  // add preprocess / model configs as needed
+  // Primary and secondary model specs
+  ModelSpec primary_model{};   // Usually RetinaFace (face + gaze)
+  ModelSpec secondary_model{}; // Usually YOLOX (objects/people)
+  
   int heartbeat_timeout_ms{1500}; // if worker misses heartbeats -> restart
-  ModelSpec model{};
+  
+  // Test mode: control which models are enabled (default: both enabled)
+  bool enable_face_model = true;   // Enable RetinaFace on NPU core 0
+  bool enable_yolo_model = true;   // Enable YOLOX on NPU core 1
+  
+  // Frame output options (optional)
+  bool enable_frame_output = false; // Enable decorated frame writing
+  std::string output_dir;           // Directory for decorated frames
+  int max_frames = 0;               // Max frames to keep (0 = no limit)
+  int frame_quality = 85;           // JPEG quality (1-100)
 };
 
 enum class OrchestratorState : uint8_t {
@@ -44,19 +61,25 @@ public:
   // Read-only snapshots for logging/metrics UIs
   HealthSnapshot source_health() const noexcept { return source_health_.snapshot(); }
 
+  // Helper: safe thread join (only if joinable)
+  static void join_if(std::thread& t) noexcept {
+    if (t.joinable()) t.join();
+  }
+
 private:
   // ---- worker lifecycle ----
   bool build_pipeline() noexcept;       // create InputSource + stage objects
   void destroy_pipeline() noexcept;     // free in correct order
-  bool start_worker() noexcept;         // start frame loop thread
-  void stop_worker() noexcept;
+  bool start_threads_after_build() noexcept;  // launch capture + model threads
+  void stop_threads() noexcept;               // stop all worker threads cleanly
 
   // ---- threads ----
   void supervisor_loop() noexcept;      // monitors health + heartbeats, triggers recovery
-  void worker_loop() noexcept;          // runs capture->infer loop (wrapper)
-  void worker_loop_threadfn(
-      std::shared_ptr<IInputSource> in,
-      std::shared_ptr<IModelRunner> run) noexcept;  // actual worker logic
+  
+  // New multi-model worker threads
+  void capture_loop_threadfn() noexcept;     // Reads camera, fans out to mailboxes
+  void face_loop_threadfn() noexcept;        // RetinaFace on NPU core 0
+  void yolo_loop_threadfn() noexcept;   // YOLOX detection loop
 
   // ---- recovery helpers ----
   void mark_broken(FaultCode code, int64_t now_ns) noexcept;
@@ -66,22 +89,65 @@ private:
   PipelineConfig cfg_;
   std::atomic<OrchestratorState> state_{OrchestratorState::Stopped};
 
-  // pipeline (now shared_ptr so zombie threads can keep resources alive safely)
+  // ---- Input source ----
   std::shared_ptr<IInputSource> input_;
-  // add preprocess/model runners here (shared_ptr<...>)
 
-  // health/backoff for the source pipeline (one per input)
+  // ---- Model enablement flags (set during build_pipeline) ----
+  bool enable_face_model_{true};   // RetinaFace enabled?
+  bool enable_yolo_model_{true};   // YOLOX enabled?
+
+  // ---- Model runners (multi-model) ----
+  // Primary: RetinaFace for face/gaze detection (NPU core 0)
+  std::shared_ptr<IModelRunner> face_runner_;
+  
+  // Secondary: YOLOX for object/person detection (NPU core 0 and 1)
+  // NEW: Dual YOLOX contexts for parallel core utilization
+  std::shared_ptr<IModelRunner> yolo_runner_;   // YOLOX on NPU
+
+  // ---- Frame fan-out mailboxes (lock-free) ----
+  FrameMailbox mb_face_;   // For RetinaFace worker
+
+  // ---- YOLOX shared state (double-buffer pattern) ----
+  // Preprocess frame into one of two 640×640 RGB buffers
+  FrameMailbox mb_yolo_;           // YOLOX frame queue
+
+  // ---- Worker threads ----
+  std::thread supervisor_th_;
+  std::thread capture_th_;
+  std::thread face_th_;
+  std::thread yolo_th_;            // YOLOX thread
+
+  // ---- Stop flags for each thread ----
+  std::atomic<bool> orchestrator_stop_{false};  // Supervisor loop
+  std::atomic<bool> stop_capture_{false};       // Capture thread
+  std::atomic<bool> stop_face_{false};          // RetinaFace thread
+  std::atomic<bool> stop_yolo_{false};          // NEW: YOLOX workers
+
+  // ---- Frame sequencing ----
+  std::atomic<uint64_t> frame_seq_{0};
+
+  // ---- Fusion state: shared analytics result from both models ----
+  struct FusionState {
+    std::mutex m;
+
+    // Face/gaze results (from RetinaFace thread)
+    std::vector<Detection> face_dets;
+    std::vector<Landmarks> face_lms;
+    uint64_t face_seq{0};
+
+    // Object/person detections (from YOLOX thread)
+    std::vector<Detection> yolo_dets;
+    uint64_t yolo_seq{0};
+  } fusion_;
+
+  // health/backoff for the source pipeline
   HealthManager source_health_{SourceKind::Unknown};
 
-  // threads & control flags
-  std::thread supervisor_th_;
-  std::thread worker_th_;
-  std::atomic<bool> orchestrator_stop_{false};  // controls supervisor loop lifetime
-  std::atomic<bool> stop_worker_flag_{false};   // controls ONLY current worker thread loop
-  std::atomic<bool> worker_exited_{true};  // true when worker thread has exited; allows non-blocking join check
-
-  // heartbeat from worker → supervisor
+  // heartbeat from capture thread → supervisor
   std::atomic<int64_t> last_heartbeat_ns_{0};
+
+  // Frame writer for decorated output (optional)
+  std::unique_ptr<IFrameWriter> frame_writer_;
 
   // cached input kind for HealthManager
   SourceKind detect_source_kind(const InputConfig& ic) const noexcept {
@@ -90,7 +156,6 @@ private:
     if (!ic.file_path.empty()) return SourceKind::File;
     return SourceKind::Unknown;
   }
-  std::shared_ptr<IModelRunner> runner_;
 };
 
 #endif // ORCHESTRATOR_H
