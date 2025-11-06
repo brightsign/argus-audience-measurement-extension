@@ -146,8 +146,9 @@ private:
   // heartbeat from capture thread → supervisor
   std::atomic<int64_t> last_heartbeat_ns_{0};
 
-  // Frame writer for decorated output (optional)
-  std::unique_ptr<IFrameWriter> frame_writer_;
+  // Frame writers for decorated output (optional) - separate per model
+  std::unique_ptr<IFrameWriter> frame_writer_face_;   // RetinaFace output
+  std::unique_ptr<IFrameWriter> frame_writer_yolo_;   // YOLOX output
 
   // cached input kind for HealthManager
   SourceKind detect_source_kind(const InputConfig& ic) const noexcept {

@@ -4,8 +4,10 @@
 #include <math.h>
 #include <sys/time.h>
 
+#ifndef DISABLE_RGA
 #include <rga/im2d.h>
 #include <rga/drmrga.h>
+#endif
 
 #define STB_IMAGE_IMPLEMENTATION
 #define STBI_NO_THREAD_LOCALS
@@ -450,22 +452,6 @@ static int convert_image_cpu(image_buffer_t *src, image_buffer_t *dst, image_rec
     return 0;
 }
 
-static int get_rga_fmt(image_format_t fmt) {
-    switch (fmt)
-    {
-    case IMAGE_FORMAT_RGB888:
-        return RK_FORMAT_RGB_888;
-    case IMAGE_FORMAT_RGBA8888:
-        return RK_FORMAT_RGBA_8888;
-    case IMAGE_FORMAT_YUV420SP_NV12:
-        return RK_FORMAT_YCbCr_420_SP;
-    case IMAGE_FORMAT_YUV420SP_NV21:
-        return RK_FORMAT_YCrCb_420_SP;
-    default:
-        return -1;
-    }
-}
-
 int get_image_size(const image_buffer_t* image)
 {
     if (image == NULL) {
@@ -483,7 +469,25 @@ int get_image_size(const image_buffer_t* image)
     case IMAGE_FORMAT_YUV420SP_NV21:
         return image->width * image->height * 3 / 2;
     default:
-        break;
+        return 0;
+    }
+}
+
+#ifndef DISABLE_RGA
+
+static int get_rga_fmt(image_format_t fmt) {
+    switch (fmt)
+    {
+    case IMAGE_FORMAT_RGB888:
+        return RK_FORMAT_RGB_888;
+    case IMAGE_FORMAT_RGBA8888:
+        return RK_FORMAT_RGBA_8888;
+    case IMAGE_FORMAT_YUV420SP_NV12:
+        return RK_FORMAT_YCbCr_420_SP;
+    case IMAGE_FORMAT_YUV420SP_NV21:
+        return RK_FORMAT_YCrCb_420_SP;
+    default:
+        return -1;
     }
 }
 
@@ -662,6 +666,8 @@ err:
     // printf("finish\n");
     return ret;
 }
+
+#endif  // !DISABLE_RGA
 
 int convert_image(image_buffer_t* src_img, image_buffer_t* dst_img, image_rect_t* src_box, image_rect_t* dst_box, char color)
 {
