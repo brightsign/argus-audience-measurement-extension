@@ -66,6 +66,9 @@ struct PipelineResult {
   std::vector<Track> tracks;
   int64_t pts_ns{0};
   uint64_t seq{0};
+  uint64_t ts_ns{0};        // timestamp in nanoseconds (for MQTT)
+  int people_count{0};      // YOLOX: person detections
+  int gaze_count{0};        // RetinaFace: faces looking at screen
   
   // Ensure proper default construction/destruction
   PipelineResult() = default;

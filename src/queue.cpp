@@ -1,4 +1,10 @@
 // Thread-safe queue implementation
+#include <queue>
+#include <mutex>
+#include <condition_variable>
+#include <atomic>
+#include <utility>
+
 template<typename T>
 class ThreadSafeQueue {
 private:

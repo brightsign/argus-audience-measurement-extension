@@ -134,6 +134,8 @@ FetchStatus UsbInputSource::tryFetch(FrameView& out) noexcept {
               std::chrono::steady_clock::now().time_since_epoch()
           ).count();
 
+      // Return full resolution frame without pre-scaling
+      // Let each inference worker (face/yolo) resize as needed
       out.fmt     = PixelFormat::BGR24;
       out.width   = bgr.cols;
       out.height  = bgr.rows;
@@ -162,44 +164,6 @@ FetchStatus UsbInputSource::tryFetch(FrameView& out) noexcept {
   return FetchStatus::Timeout;
 }
 
-#if 0  // Blocking approach (commented out - don't use)
-FetchStatus UsbInputSource::tryFetch_old(FrameView& out) noexcept {
-    if (!cap_.isOpened() || broken_.load()) {
-        return FetchStatus::Broken;
-    }
-
-    cv::Mat bgr;
-    if (!cap_.read(bgr) || bgr.empty()) {  // THIS BLOCKS INDEFINITELY!
-        broken_.store(true);
-        return FetchStatus::Broken;
-    }
-
-    // We will keep an internal scratch buffer so the data stays alive
-    // until the next call (store it as a member: std::vector<uint8_t> scratch_bgr_;).
-    if (scratch_bgr_.size() != size_t(bgr.cols * bgr.rows * 3)) {
-        scratch_bgr_.resize(size_t(bgr.cols * bgr.rows * 3));
-    }
-    std::memcpy(scratch_bgr_.data(), bgr.data, scratch_bgr_.size());
-
-    out.fmt     = PixelFormat::BGR24;
-    out.width   = bgr.cols;
-    out.height  = bgr.rows;
-    out.stride0 = bgr.cols * 3;
-    out.stride1 = 0;
-    out.plane0  = scratch_bgr_.data();
-    out.plane1  = nullptr;
-    out.pts_ns  = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                    std::chrono::steady_clock::now().time_since_epoch()).count();
-
-    // NOTE: if your FrameView struct does NOT have seq or pts_ns, we'll handle that below.
-
-    frames_ok_.fetch_add(1, std::memory_order_relaxed);
-    last_ok_ns_.store(out.pts_ns, std::memory_order_relaxed);
-    connected_.store(true, std::memory_order_relaxed);
-
-    return FetchStatus::Ok;
-}
-#endif
 
 FetchStatus UsbInputSource::fetch(FrameView& out, int timeout_ms) noexcept {
   auto start = SteadyClock::now();

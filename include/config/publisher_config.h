@@ -16,11 +16,16 @@ struct FilePublisher {
 };
 
 struct MqttPublisher {
-  std::string broker{"tcp://localhost:1883"};
-  std::string topic{"inference/detections"};
-  std::string client_id{"xt5-ml"};
+  std::string host{"127.0.0.1"};
+  int         port{1883};
+  std::string client_id{"xt5-gaze"};
+  std::string topic{"bs/xt5/device/analytics"};
+  int         qos{1};
   bool        retain{false};
-  bool        qos1{false};
+  int         period_ms{1000};
+  std::string username{};
+  std::string password{};
+  bool        clean_session{true};
 };
 
 struct PublisherConfig {

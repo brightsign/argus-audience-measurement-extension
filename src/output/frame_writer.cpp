@@ -4,6 +4,7 @@
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 #include <filesystem>
+#include <chrono>
 #include <ctime>
 #include <iomanip>
 #include <sstream>
@@ -22,7 +23,8 @@ public:
 class DiskFrameWriter final : public IFrameWriter {
 public:
   DiskFrameWriter(const std::string& output_dir, int max_frames, int quality) noexcept
-    : output_dir_(output_dir), max_frames_(max_frames), quality_(quality), frame_count_(0) {
+    : output_dir_(output_dir), max_frames_(max_frames), quality_(quality), frame_count_(0),
+      writes_count_(0), last_log_time_(std::chrono::steady_clock::now()) {
     try {
       fs::create_directories(output_dir_);
       LG_INFO("frame_writer: created output directory %s", output_dir_.c_str());
@@ -38,8 +40,8 @@ public:
     }
 
     // Skip most frames for performance (CPU optimization: reduce I/O)
-    // Only write every 10th frame to keep CPU <8%
-    if ((frame_count_++ % 10) != 0) {
+    // Only write every 3rd frame to match working_1 baseline (10 FPS output)
+    if ((frame_count_++ % 3) != 0) {
       return true;
     }
 
@@ -67,6 +69,19 @@ public:
       if (!cv::imwrite(filepath, img, compression_params)) {
         LG_WARN("frame_writer: failed to write frame to %s", filepath.c_str());
         return false;
+      }
+
+      // Track write count and log performance metrics every 1 second
+      writes_count_++;
+      auto now = std::chrono::steady_clock::now();
+      auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_log_time_).count();
+      
+      if (elapsed_ms >= 1000) {
+        float write_fps = (elapsed_ms > 0) ? (1000.0f * writes_count_ / elapsed_ms) : 0.0f;
+        LG_INFO("frame_writer: performance metrics (writes=%d, fps=%.1f, skip_ratio=1:3)",
+                writes_count_, write_fps);
+        writes_count_ = 0;
+        last_log_time_ = now;
       }
 
       #ifdef ENABLE_DEBUG
@@ -123,6 +138,8 @@ private:
   int max_frames_;
   int quality_;
   int frame_count_;
+  int writes_count_;
+  std::chrono::steady_clock::time_point last_log_time_;
 };
 
 }  // namespace

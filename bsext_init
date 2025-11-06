@@ -135,7 +135,8 @@ run_attention_demo() {
     # Default to running in foreground
     local background=$1
     
-    export LD_LIBRARY_PATH=./lib:$LD_LIBRARY_PATH
+    # LD_LIBRARY_PATH is already set by setup_gstreamer_env, which includes bin/ directory
+    # No need to override it here
     if [ "$background" = "true" ]; then
         # Run as a daemon in the background
         echo "DEBUG: Starting daemon with start-stop-daemon"
@@ -174,7 +175,9 @@ run_stream_server() {
 setup_gstreamer_env() {
     echo "Setting up GStreamer environment for SOC: $SOC_NAME"
     export GST_PLUGIN_PATH=/var/volatile/bsext/ext_npu_gaze/$SOC_NAME/lib/gstreamer-1.0:/usr/lib/gstreamer-1.0
-    export LD_LIBRARY_PATH=/var/volatile/bsext/ext_npu_gaze/$SOC_NAME/lib:/usr/lib:$LD_LIBRARY_PATH
+    # Include MQTT bin directory first so mosquitto utilities find their libraries
+    # Also include bin directory for all other shared libraries
+    export LD_LIBRARY_PATH=/var/volatile/bsext/ext_npu_gaze/$SOC_NAME/bin:/var/volatile/bsext/ext_npu_gaze/$SOC_NAME/lib:/usr/lib:$LD_LIBRARY_PATH
     export GST_REGISTRY="/tmp/gst-registry.bin"
     export GST_PLUGIN_SCANNER="/usr/libexec/gstreamer-1.0/gst-plugin-scanner"
     export GST_REGISTRY_REUSE_PLUGIN_SCANNER=1
@@ -184,6 +187,7 @@ setup_gstreamer_env() {
     echo "  GST_REGISTRY=$GST_REGISTRY"
     echo "  GST_PLUGIN_SCANNER=$GST_PLUGIN_SCANNER"
     echo "  GST_REGISTRY_REUSE_PLUGIN_SCANNER=$GST_REGISTRY_REUSE_PLUGIN_SCANNER"
+    echo "  MQTT utilities available in: /var/volatile/bsext/ext_npu_gaze/$SOC_NAME/bin/"
 }
 
 do_start() {
@@ -317,6 +321,14 @@ case "$ACTION" in
         echo "  bsext-gaze-video-device      RTSP URL or device name (e.g., rtsp://192.168.0.203:8554/mystream or /dev/video0)"
         echo "  bsext-gaze-rtsp-server       RTSP server IP:port (e.g., 192.168.0.203:8554)"
         echo "  bsext-gaze-disable-auto-start  Disable automatic startup (true/false)"
+        echo ""
+        echo "MQTT Utilities:"
+        echo "  The environment is configured with LD_LIBRARY_PATH for MQTT utilities."
+        echo "  You can run MQTT commands from any directory:"
+        echo ""
+        echo "  mosquitto_sub -h 127.0.0.1 -p 1883 -t 'bs/xt5/device/analytics' -v"
+        echo "  mosquitto_pub -h 127.0.0.1 -p 1883 -t 'test/topic' -m 'message'"
+        echo "  /var/volatile/bsext/ext_npu_gaze/RK3588/bin/mosquitto -v"
         echo ""
         echo "Examples:"
         echo "  # For automatic startup (survives reboot):"

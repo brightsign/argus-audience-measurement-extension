@@ -12,6 +12,7 @@
 #include "orchestration/orchestrator.h"
 #include "input/input_from_registry.h"
 #include "input/registry_helper.h"
+#include "output/mqtt_broker.h"
 #include "util/util.h"
 
 static std::atomic<bool> g_stop{false};
@@ -248,6 +249,16 @@ int main(int argc, char** argv) {
             pc.input.rtsp_url.c_str(),
             pc.input.file_path.c_str());
    
+    // ---- Start embedded MQTT broker ----
+    MqttBroker::Cfg broker_cfg;
+    broker_cfg.port = 1883;
+    broker_cfg.bind_address = "0.0.0.0";
+    broker_cfg.allow_anonymous = true;
+    MqttBroker broker{broker_cfg};
+    if (!broker.start()) {
+        LG_WARN("Failed to start embedded MQTT broker (continuing without it)");
+    }
+
     // ---- run ----
     Orchestrator orch{pc};
     if (!orch.start()) {

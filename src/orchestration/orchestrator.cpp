@@ -8,6 +8,8 @@
 #include <cstring>
 #include <sys/stat.h>
 #include "orchestration/orchestrator.h"
+#include "orchestration/visualization.h"
+#include "orchestration/inference_worker.h"
 #include "input/input_factory.h"
 #include "input/input_usb.h"
 #include "input/registry_helper.h"
@@ -27,10 +29,7 @@
 #include "image_utils.h"
 #include "common.h"
 
-#include <rga/rga.h>
-#include <rga/im2d.h>
 
-#define DEBUG_FPS 1
 
 namespace {
 using Clock = std::chrono::steady_clock;
@@ -38,6 +37,8 @@ inline int64_t now_ns() noexcept {
   return std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now().time_since_epoch()).count();
 }
 }
+
+// ...
 
 namespace {
 
@@ -154,191 +155,6 @@ static void normalize_rgb_u8_to_float(const uint8_t* src_rgb, float* dst_f,
 
 } // namespace
 
-namespace {
-
-  // Draw bounding boxes, scores, and 5-point landmarks onto a RGB cv::Mat
-  // and save it as a JPEG to `path`.
-  static void save_debug_jpg(const cv::Mat& visFrame,
-                                          const char* path,
-                                          uint32_t frame_idx) noexcept
-  {
-      if ((frame_idx % 3u) != 0u) {
-          return;
-      }
-      try {
-          cv::imwrite(path, visFrame);
-      } catch (...) {}
-  }
-
-  // Process inference results: draw overlays on rgb_mat and save debug JPEG
-  // Note: cv::Mat is in RGB format, so color values are (R, G, B) not (B, G, R)
-  static void process_inference_results(
-      IModelRunner* runner,
-      cv::Mat& rgb_mat,
-      uint32_t& debug_frame_idx) noexcept
-  {
-      if (!runner) return;
-
-      auto* retinaface_runner =
-          dynamic_cast<RKNNRetinafaceRunner*>(runner);
-
-      auto* yolox_runner =
-          dynamic_cast<RKNNYoloXRunner*>(runner);
-
-      cv::Mat drawMat = rgb_mat; // alias for drawing
-
-      if (retinaface_runner) {
-          // raw model-specific struct from your legacy pipeline
-          const retinaface_result* result =
-              static_cast<const retinaface_result*>(
-                  retinaface_runner->get_last_result());
-
-          if (result && result->count > 0) {
-              int attending_total = 0;
-
-              for (int i = 0; i < result->count; ++i) {
-                  const auto& obj = result->object[i];
-
-                  // choose box color: green if looking, red otherwise
-                  bool attending = face_is_looking_at_us(obj);
-                  if (attending) {
-                      attending_total++;
-                  }
-
-                  // BGR format: (B, G, R) - data is actually BGR despite RGB naming
-                  cv::Scalar box_color = attending
-                      ? cv::Scalar(0, 255, 0)      // green in BGR (still 0, 255, 0)
-                      : cv::Scalar(0, 0, 255);     // red in BGR (was 255, 0, 0 in RGB)
-
-                  // draw face bbox
-                  const auto& box = obj.box;
-                  cv::rectangle(
-                      drawMat,
-                      cv::Point((int)box.left,  (int)box.top),
-                      cv::Point((int)box.right, (int)box.bottom),
-                      box_color,
-                      2
-                  );
-
-                  // draw 5 landmarks
-                  // (assuming obj.ponit[0..4] are {x,y} in resized frame coords)
-                  for (int lm = 0; lm < 5; ++lm) {
-                      int lx = (int)obj.ponit[lm].x;
-                      int ly = (int)obj.ponit[lm].y;
-
-                      // eye landmarks cyan-ish, others yellow-ish (cosmetic)
-                      // RGB format: cyan = (0, 255, 255), yellow = (255, 255, 0)
-                      cv::Scalar lm_color = (lm < 2)
-                          ? cv::Scalar(0, 255, 255)    // cyan in RGB
-                          : cv::Scalar(255, 255, 0);   // yellow in RGB
-
-                      cv::circle(
-                          drawMat,
-                          cv::Point(lx, ly),
-                          2,
-                          lm_color,
-                          2,
-                          cv::LINE_AA
-                      );
-                  }
-
-                  // optional: put "attn" label
-                  if (attending) {
-                      cv::putText(drawMat,
-                                  "ATTN",
-                                  cv::Point((int)box.left,
-                                            (int)box.top - 4),
-                                  cv::FONT_HERSHEY_SIMPLEX,
-                                  0.4,
-                                  box_color,
-                                  1,
-                                  cv::LINE_AA);
-                  }
-              }
-              #ifdef DEBUG_LOGS
-              LG_INFO("overlay: faces=%d attending=%d",
-                      result->count,
-                      attending_total);
-              #endif
-          }
-      } else if (yolox_runner) {
-          // Draw YOLOX/YOLO object detection boxes
-          // Access detections via the runner's public interface
-          
-          // For YOLOX, we'll draw colored boxes for each detected object class
-          // Using a simple color scheme: different hues for different class_ids
-          // Color palette: BGR format (B, G, R) not RGB!
-          
-          const int max_colors = 10;
-          const cv::Scalar colors[max_colors] = {
-              cv::Scalar(0, 255, 255),      // Cyan in BGR
-              cv::Scalar(0, 0, 255),        // Red in BGR
-              cv::Scalar(0, 255, 0),        // Green in BGR
-              cv::Scalar(255, 0, 255),      // Magenta in BGR
-              cv::Scalar(0, 165, 255),      // Orange in BGR
-              cv::Scalar(255, 255, 0),      // Yellow in BGR
-              cv::Scalar(255, 0, 0),        // Blue in BGR
-              cv::Scalar(255, 0, 127),      // Purple in BGR
-              cv::Scalar(255, 255, 0),      // Cyan in BGR (repeat)
-          };
-          
-          // Get outputs from the model runner
-          const Detection* dets = yolox_runner->get_detections();
-          int det_count = yolox_runner->get_detection_count();
-          
-          if (dets && det_count > 0) {
-              for (int i = 0; i < det_count; ++i) {
-                  const auto& det = dets[i];
-                  
-                  // Select color based on class_id
-                  cv::Scalar box_color = colors[det.class_id % max_colors];
-                  
-                  // Draw bounding box
-                  int x0 = (int)det.x0;
-                  int y0 = (int)det.y0;
-                  int x1 = (int)det.x1;
-                  int y1 = (int)det.y1;
-                  
-                  cv::rectangle(
-                      drawMat,
-                      cv::Point(x0, y0),
-                      cv::Point(x1, y1),
-                      box_color,
-                      2
-                  );
-                  
-                  // Draw score and class_id label
-                  char label[64];
-                  snprintf(label, sizeof(label), "cls=%d score=%.2f", 
-                           det.class_id, det.score);
-                  
-                  cv::putText(
-                      drawMat,
-                      label,
-                      cv::Point(x0, y0 - 5),
-                      cv::FONT_HERSHEY_SIMPLEX,
-                      0.4,
-                      box_color,
-                      1,
-                      cv::LINE_AA
-                  );
-              }
-              #ifdef DEBUG_LOGS
-              LG_INFO("overlay: YOLO objects=%d", det_count);
-              #endif
-          }
-      }
-
-      // Save annotated frame as JPEG
-      // rgb_mat is in RGB color space and same W×H as model input.
-      save_debug_jpg(/*visFrame=*/rgb_mat,
-                     /*path=*/"/tmp/output.jpg",
-                     /*frame_idx=*/debug_frame_idx);
-      debug_frame_idx++;
-  }
-
-} // namespace
-
 Orchestrator::Orchestrator(PipelineConfig cfg) noexcept
     : cfg_(std::move(cfg)),
       state_(OrchestratorState::Stopped),
@@ -441,19 +257,27 @@ bool Orchestrator::build_pipeline() noexcept {
     yolo_runner_.reset();
   }
   
-  // Create frame writer for decorated output (optional)
+  // Create separate frame writers for each model (both write to same dir)
   if (cfg_.enable_frame_output && !cfg_.output_dir.empty()) {
     try {
-      frame_writer_ = make_frame_writer_disk(cfg_.output_dir, cfg_.max_frames, cfg_.frame_quality);
-      LG_INFO("[orch] Frame writer enabled: output_dir=%s max_frames=%d quality=%d\n",
+      // RetinaFace writer
+      frame_writer_face_ = make_frame_writer_disk(cfg_.output_dir, cfg_.max_frames, cfg_.frame_quality);
+      LG_INFO("[orch] Face frame writer enabled: output_dir=%s max_frames=%d quality=%d\n",
+              cfg_.output_dir.c_str(), cfg_.max_frames, cfg_.frame_quality);
+      
+      // YOLOX writer
+      frame_writer_yolo_ = make_frame_writer_disk(cfg_.output_dir, cfg_.max_frames, cfg_.frame_quality);
+      LG_INFO("[orch] YOLO frame writer enabled: output_dir=%s max_frames=%d quality=%d\n",
               cfg_.output_dir.c_str(), cfg_.max_frames, cfg_.frame_quality);
     } catch (const std::exception& e) {
-      LG_WARN("[orch] Failed to create frame writer: %s (will continue without output)\n", e.what());
-      frame_writer_.reset();
+      LG_WARN("[orch] Failed to create frame writers: %s (will continue without output)\n", e.what());
+      frame_writer_face_.reset();
+      frame_writer_yolo_.reset();
     }
   } else {
-    frame_writer_ = make_frame_writer_null();
-    LG_INFO("[orch] Frame writer disabled (using null writer)\n");
+    frame_writer_face_ = make_frame_writer_null();
+    frame_writer_yolo_ = make_frame_writer_null();
+    LG_INFO("[orch] Frame writers disabled (using null writers)\n");
   }
   
   // Convert input to shared_ptr and assign to member variable
@@ -472,9 +296,13 @@ void Orchestrator::destroy_pipeline() noexcept {
     yolo_runner_->unload();
     yolo_runner_.reset();
   }
-  if (frame_writer_) {
-    frame_writer_->flush();
-    frame_writer_.reset();
+  if (frame_writer_face_) {
+    frame_writer_face_->flush();
+    frame_writer_face_.reset();
+  }
+  if (frame_writer_yolo_) {
+    frame_writer_yolo_->flush();
+    frame_writer_yolo_.reset();
   }
 }
 
@@ -749,43 +577,65 @@ bool Orchestrator::recover_pipeline(int64_t now_ns_val) noexcept {
             }
         }
     } else if (reg_choice.rfind("rtsp://", 0) == 0) {
-        // TODO: handle RTSP recovery, skipping for now since you're testing USB.
-        LG_INFO("recover_pipeline:RTSP mode (%s) not yet implemented in hot-recover\n", reg_choice.c_str());
-        candidate_dev.clear();
+        // RTSP URL is directly usable
+        candidate_dev = reg_choice;
+        LG_INFO("recover_pipeline:using RTSP stream %s\n", reg_choice.c_str());
+    } else if (reg_choice.rfind("http://", 0) == 0 || reg_choice.rfind("https://", 0) == 0) {
+        // HTTP stream is also usable
+        candidate_dev = reg_choice;
+        LG_INFO("recover_pipeline:using HTTP stream %s\n", reg_choice.c_str());
     } else {
         // Could be file mode, or garbage.
         LG_WARN("recover_pipeline:unrecognized reg_choice '%s'\n", reg_choice.c_str());
         candidate_dev.clear();
     }
 
-    // 3. If we got something like /dev/videoX, remember it in cfg_.
-    if (!candidate_dev.empty() && candidate_dev.rfind("/dev/video", 0) == 0) {
-        cfg_.input.usb_device = candidate_dev;
+    // 3. Handle both device nodes and stream URLs
+    if (!candidate_dev.empty()) {
+        if (candidate_dev.rfind("/dev/video", 0) == 0) {
+            // USB device path
+            cfg_.input.usb_device = candidate_dev;
+            cfg_.input.rtsp_url.clear();
+        } else if (candidate_dev.rfind("rtsp://", 0) == 0 || 
+                   candidate_dev.rfind("http://", 0) == 0 ||
+                   candidate_dev.rfind("https://", 0) == 0) {
+            // Network stream URL
+            cfg_.input.rtsp_url = candidate_dev;
+            cfg_.input.usb_device.clear();
+        }
     }
 
-    // 4. Is that device actually present *right now*?
+    // 4. Is that device/stream actually accessible *right now*?
     bool device_available = false;
+    std::string device_desc;
+    
     if (!cfg_.input.usb_device.empty()) {
         struct stat st;
         if (stat(cfg_.input.usb_device.c_str(), &st) == 0) {
             device_available = true;
         }
-        LG_INFO("recover_pipeline:device %s %s\n",
+        device_desc = cfg_.input.usb_device;
+        LG_INFO("recover_pipeline:USB device %s %s\n",
                 cfg_.input.usb_device.c_str(),
                 device_available ? "available" : "not yet available");
+    } else if (!cfg_.input.rtsp_url.empty()) {
+        // For RTSP URLs, assume available (actual connection happens in open())
+        device_available = true;
+        device_desc = cfg_.input.rtsp_url;
+        LG_INFO("recover_pipeline:RTSP stream %s available for connection\n",
+                cfg_.input.rtsp_url.c_str());
     } else {
-        LG_INFO("recover_pipeline:cfg_.input.usb_device is empty, nothing to open yet\n");
+        LG_INFO("recover_pipeline:no device or stream configured, nothing to open yet\n");
     }
 
     if (!device_available) {
-        LG_INFO("recover_pipeline:device not yet available, will retry later\n");
+        LG_INFO("recover_pipeline:device/stream not yet available, will retry later\n");
         // We are still broken. Supervisor will call us again.
         return false;
     }
 
     // 5. Build brand new input source / runner using that device.
-    LG_INFO("recover_pipeline:rebuilding pipeline around %s\n",
-            cfg_.input.usb_device.c_str());
+    LG_INFO("recover_pipeline:rebuilding pipeline around %s\n", device_desc.c_str());
 
     std::unique_ptr<IInputSource> new_input_tmp;
     try { new_input_tmp = make_input(cfg_.input); } catch (...) { new_input_tmp.reset(); }
@@ -795,8 +645,7 @@ bool Orchestrator::recover_pipeline(int64_t now_ns_val) noexcept {
     }
 
     if (!new_input_tmp->open()) {
-        LG_ERROR("recover_pipeline:input->open() failed for %s\n",
-                 cfg_.input.usb_device.c_str());
+        LG_ERROR("recover_pipeline:input->open() failed for %s\n", device_desc.c_str());
         return false; // still broken
     }
 
@@ -886,8 +735,8 @@ bool Orchestrator::recover_pipeline(int64_t now_ns_val) noexcept {
     last_heartbeat_ns_.store(now_ns(), std::memory_order_release);
     state_.store(OrchestratorState::Running, std::memory_order_release);
 
-    LG_INFO("recover_pipeline:camera restored on %s, pipeline running again\n",
-            cfg_.input.usb_device.c_str());
+    LG_INFO("recover_pipeline:pipeline restored on %s, running again\n",
+            device_desc.c_str());
     return true;
 }
 void Orchestrator::capture_loop_threadfn() noexcept {
@@ -941,12 +790,11 @@ void Orchestrator::capture_loop_threadfn() noexcept {
 
 void Orchestrator::face_loop_threadfn() noexcept {
     try {
-        LG_INFO("face_loop:start (RetinaFace on NPU core 0, enable=%s)", 
-                enable_face_model_ ? "true" : "false");
+        LG_INFO("face_loop:start (RetinaFace on NPU core 0)");
 
         // Guard: check if face model is enabled
         if (!enable_face_model_) {
-            LG_WARN("face_loop: face model disabled, exiting thread\n");
+            LG_WARN("face_loop: face model disabled, exiting thread");
             return;
         }
 
@@ -955,134 +803,27 @@ void Orchestrator::face_loop_threadfn() noexcept {
             return;
         }
 
-        const ModelSpec& spec = face_runner_->spec();
-        const int dst_w = spec.input_size.w;
-        const int dst_h = spec.input_size.h;
-        const bool wants_rgb = (spec.input_layout == ColorLayout::RGB);
+        // Configure generic worker for face detection
+        inference_worker::WorkerConfig config{};
+        config.skip_frames = 2;  // Run at 15 FPS (skip every other frame for CPU optimization)
+        config.model_input_width = face_runner_->spec().input_size.w;
+        config.model_input_height = face_runner_->spec().input_size.h;
+        config.model_name = "RetinaFace";
 
-        uint64_t last_logged_seq = 0;
-        bool logged_first_frame = false;
+        // Wrap the member mailbox in a shared_ptr wrapper that doesn't own it
+        std::shared_ptr<FrameMailbox> mb_wrapper(
+            std::shared_ptr<FrameMailbox>{},
+            &mb_face_
+        );
 
-        // Preallocate resized buffer (RGA-optimized, reused every frame)
-        std::vector<uint8_t> bgr_resized_buf(dst_w * dst_h * 3);
-        image_buffer_t src_img{};
-        image_buffer_t dst_img{};
-        dst_img.width = dst_w;
-        dst_img.height = dst_h;
-        dst_img.format = IMAGE_FORMAT_RGB888;
-        dst_img.virt_addr = bgr_resized_buf.data();
-        dst_img.size = get_image_size(&dst_img);
-
-        while (!stop_face_.load(std::memory_order_relaxed)) {
-            auto sf = mb_face_.takeFrame();
-            if (!sf) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(2));
-                continue;
-            }
-
-            // CPU optimization: Skip RetinaFace every other frame (run at 15 FPS instead of 30)
-            // This typically saves 3-4% CPU without noticeable UX impact
-            // TESTING TIP: To test all frames, change SKIP_RETINAFACE_FRAMES to 0 and rebuild
-            #define SKIP_RETINAFACE_FRAMES 1
-            #if SKIP_RETINAFACE_FRAMES
-            if ((sf->seq & 1) != 0) {
-                continue;  // Skip odd frames
-            }
-            #endif
-
-            // Log first frame reception as breadcrumb
-            if (!logged_first_frame) {
-                LG_INFO("face_loop: got first frame seq=%llu %dx%d",
-                        (unsigned long long)sf->seq, sf->width, sf->height);
-                logged_first_frame = true;
-            }
-
-            // Validate frame data before processing
-            if (sf->bgr.empty()) {
-                LG_WARN("face_loop: received frame with empty BGR data (seq=%llu), skipping\n", 
-                        (unsigned long long)sf->seq);
-                continue;
-            }
-
-            // Setup source image buffer from shared frame BGR data
-            src_img.width = sf->width;
-            src_img.height = sf->height;
-            src_img.format = IMAGE_FORMAT_RGB888;  // Will be converted from BGR via RGA
-            src_img.virt_addr = sf->bgr.data();
-            src_img.size = get_image_size(&src_img);
-            // Resize+convert via RGA hardware accelerator (CPU optimization)
-            int ret = convert_image(&src_img, &dst_img, NULL, NULL, 0);
-            if (ret != 0) {
-                LG_WARN("face_loop: RGA convert_image failed (ret=%d), skipping frame\n", ret);
-                continue;
-            }
-
-            // Prepare frame view for model input
-            FrameView fv_in{};
-            fv_in.fmt     = PixelFormat::RGB24;  // convert_image outputs RGB
-            fv_in.width   = dst_w;
-            fv_in.height  = dst_h;
-            fv_in.stride0 = dst_w * 3;  // Tightly packed RGB
-            fv_in.plane0  = bgr_resized_buf.data();
-            fv_in.pts_ns  = sf->pts_ns;
-            #ifdef ENABLE_DEBUG
-            // Run inference (keep sf in scope to maintain reference)
-            LG_INFO("face_loop: step=infer (fmt=%s stride=%d)",
-                    "RGB24", fv_in.stride0);
-            #endif
-            InferenceOutputs outs{};
-            bool ok = face_runner_->infer(fv_in, outs);
-            if (!ok) {
-                LG_WARN("face_loop: RetinaFace inference failed for frame seq=%llu",
-                        (unsigned long long)sf->seq);
-                source_health_.onBusError(now_ns(), "face inference fail");
-                continue;
-            }
-
-            // Use RGB data directly from RGA (no color conversion needed)
-            // convert_image() outputs RGB, which we use as-is for visualization
-            cv::Mat rgb_resized(dst_h, dst_w, CV_8UC3, bgr_resized_buf.data());
-
-            // Visualize results: draw overlays and save debug JPEG (RGB format)
-            static uint32_t face_debug_frame_idx = 0;
-            process_inference_results(face_runner_.get(), rgb_resized, face_debug_frame_idx);
-
-            // Write decorated frame to output (if enabled)
-            if (frame_writer_) {
-                PipelineResult result{};
-                result.seq = sf->seq;
-                result.pts_ns = sf->pts_ns;
-                // Add tracks from face detections (simplified - direct detections)
-                // Note: Full Track structure would need landmarks + tracking
-                for (int i = 0; i < outs.num_dets && i < 100; i++) {
-                    Track t{};
-                    t.box = outs.dets[i];
-                    if (outs.num_lms > i && outs.lms) {
-                        t.lms = outs.lms[i];
-                    }
-                    result.tracks.push_back(t);
-                }
-                if (!frame_writer_->writeFrame(rgb_resized, result)) {
-                    LG_WARN("face_loop: frame_writer->writeFrame failed for seq=%llu", 
-                            (unsigned long long)sf->seq);
-                }
-            }
-
-            // Store results
-            {
-                std::lock_guard<std::mutex> g(fusion_.m);
-                fusion_.face_dets.assign(outs.dets, outs.dets + outs.num_dets);
-                fusion_.face_lms.assign(outs.lms, outs.lms + outs.num_lms);
-                fusion_.face_seq = sf->seq;
-            }
-            #ifdef ENABLE_DEBUG
-            if (sf->seq != last_logged_seq && (sf->seq % 30 == 0)) {  // Log every 30 frames (~1 sec at 30fps)
-                last_logged_seq = sf->seq;
-                LG_INFO("face_loop: frame seq=%llu faces=%d",
-                        (unsigned long long)sf->seq, outs.num_dets);
-            }
-            #endif
-        }
+        // Use generic inference worker loop (handles frame fetch, inference, visualization, storage)
+        inference_worker::run_inference_loop(
+            face_runner_.get(),
+            mb_wrapper,
+            reinterpret_cast<FusionResults*>(&fusion_),
+            frame_writer_face_.get(),  // Face model writes output (primary model)
+            config,
+            stop_face_);
 
         LG_INFO("face_loop:stop");
     } catch (const std::exception& e) {
@@ -1098,11 +839,11 @@ void Orchestrator::face_loop_threadfn() noexcept {
 
 void Orchestrator::yolo_loop_threadfn() noexcept {
     try {
-        LG_INFO("yolo_loop:start (enable=%s)", enable_yolo_model_ ? "true" : "false");
+        LG_INFO("yolo_loop:start (YOLOX detection)");
 
         // Guard: check if yolo model is enabled
         if (!enable_yolo_model_) {
-            LG_WARN("yolo_loop: yolo model disabled, exiting thread\n");
+            LG_WARN("yolo_loop: yolo model disabled, exiting thread");
             return;
         }
 
@@ -1111,108 +852,27 @@ void Orchestrator::yolo_loop_threadfn() noexcept {
             return;
         }
 
-        const ModelSpec& spec = yolo_runner_->spec();
-        const int dst_w = spec.input_size.w;
-        const int dst_h = spec.input_size.h;
+        // Configure generic worker for object detection
+        inference_worker::WorkerConfig config{};
+        config.skip_frames = 2;  // Run at 15 FPS (skip every other frame for CPU optimization)
+        config.model_input_width = yolo_runner_->spec().input_size.w;
+        config.model_input_height = yolo_runner_->spec().input_size.h;
+        config.model_name = "YOLOX";
 
-        uint64_t last_logged_seq = 0;
-        bool logged_first_frame = false;
+        // Wrap the member mailbox in a shared_ptr wrapper that doesn't own it
+        std::shared_ptr<FrameMailbox> mb_wrapper(
+            std::shared_ptr<FrameMailbox>{},
+            &mb_yolo_
+        );
 
-        // Preallocate resized buffer for YOLOX input
-        std::vector<uint8_t> bgr_resized_buf(dst_w * dst_h * 3);
-        image_buffer_t src_img{};
-        image_buffer_t dst_img{};
-        dst_img.width = dst_w;
-        dst_img.height = dst_h;
-        dst_img.format = IMAGE_FORMAT_RGB888;
-        dst_img.virt_addr = bgr_resized_buf.data();
-        dst_img.size = get_image_size(&dst_img);
-
-        while (!stop_yolo_.load(std::memory_order_relaxed)) {
-            auto sf = mb_yolo_.takeFrame();
-            if (!sf) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(2));
-                continue;
-            }
-
-            // CPU optimization: Skip YOLOX every other frame (run at 15 FPS instead of 30)
-            // This typically saves 3-4% CPU without noticeable UX impact
-            #define SKIP_YOLOX_FRAMES 1
-            #if SKIP_YOLOX_FRAMES
-            if ((sf->seq & 1) != 0) {
-                continue;  // Skip odd frames
-            }
-            #endif
-
-            // Log first frame reception as breadcrumb
-            if (!logged_first_frame) {
-                LG_INFO("yolo_loop: got first frame seq=%llu %dx%d",
-                        (unsigned long long)sf->seq, sf->width, sf->height);
-                logged_first_frame = true;
-            }
-
-            // Validate frame data before processing
-            if (sf->bgr.empty()) {
-                LG_WARN("yolo_loop: received frame with empty BGR data (seq=%llu), skipping\n", 
-                        (unsigned long long)sf->seq);
-                continue;
-            }
-
-            // Setup source image buffer from shared frame BGR data
-            src_img.width = sf->width;
-            src_img.height = sf->height;
-            src_img.format = IMAGE_FORMAT_RGB888;
-            src_img.virt_addr = sf->bgr.data();
-            src_img.size = get_image_size(&src_img);
-            
-            // Resize+convert via RGA hardware accelerator (CPU optimization)
-            int ret = convert_image(&src_img, &dst_img, NULL, NULL, 0);
-            if (ret != 0) {
-                LG_WARN("yolo_loop: RGA convert_image failed (ret=%d), skipping frame\n", ret);
-                continue;
-            }
-
-            // Prepare frame view for model input
-            FrameView fv_in{};
-            fv_in.fmt     = PixelFormat::RGB24;
-            fv_in.width   = dst_w;
-            fv_in.height  = dst_h;
-            fv_in.stride0 = dst_w * 3;
-            fv_in.plane0  = bgr_resized_buf.data();
-            fv_in.pts_ns  = sf->pts_ns;
-
-            // Run inference
-            InferenceOutputs outs{};
-            bool ok = yolo_runner_->infer(fv_in, outs);
-            if (!ok) {
-                LG_WARN("yolo_loop: YOLOX inference failed for frame seq=%llu",
-                        (unsigned long long)sf->seq);
-                source_health_.onBusError(now_ns(), "yolo inference fail");
-                continue;
-            }
-
-            // Use RGB data directly from RGA (no color conversion needed)
-            cv::Mat rgb_resized(dst_h, dst_w, CV_8UC3, bgr_resized_buf.data());
-
-            // Visualize results: draw overlays and save debug JPEG (RGB format)
-            static uint32_t yolo_debug_frame_idx = 0;
-            process_inference_results(yolo_runner_.get(), rgb_resized, yolo_debug_frame_idx);
-
-            // Store results
-            {
-                std::lock_guard<std::mutex> g(fusion_.m);
-                fusion_.yolo_dets.assign(outs.dets, outs.dets + outs.num_dets);
-                fusion_.yolo_seq = sf->seq;
-            }
-
-            #ifdef ENABLE_DEBUG
-            if (sf->seq != last_logged_seq && (sf->seq % 30 == 0)) {
-                last_logged_seq = sf->seq;
-                LG_INFO("yolo_loop: frame seq=%llu objects=%d",
-                        (unsigned long long)sf->seq, outs.num_dets);
-            }
-            #endif
-        }
+        // Use generic inference worker loop (handles frame fetch, inference, visualization, storage)
+        inference_worker::run_inference_loop(
+            yolo_runner_.get(),
+            mb_wrapper,
+            reinterpret_cast<FusionResults*>(&fusion_),
+            frame_writer_yolo_.get(),  // YOLOX also writes output (secondary model)
+            config,
+            stop_yolo_);
 
         LG_INFO("yolo_loop:stop");
     } catch (const std::exception& e) {
