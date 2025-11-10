@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-name=npu_gaze
+name=npu_argus
 mapper_vol_name=ext_${name}
 tmp_vol_name=tmp_${name}
 mount_name=ext_${name}
@@ -20,7 +20,7 @@ mkdir -p "${workdir}"
 # cat <<EOF >${workdir}bsext_init
 # #!/bin/sh
 # echo
-# echo "EXTENSION ${name} INIT built ${now} \$@"
+# echo "EXTENSION ${name} (Argus Detection) INIT built ${now} \$@"
 # echo -n "Now is: "; date
 # echo
 # EOF
@@ -114,5 +114,5 @@ chmod +x ${install_script}
 
 rm -rf ${workdir}
 echo
-echo "Extension ${name} squashfs: ext_${name}.squashfs"
+echo "Extension ${name} (Argus Detection) squashfs: ext_${name}.squashfs"
 echo "Development install script: ${install_script}"

@@ -4,7 +4,10 @@
 echo "=== GStreamer bbappend Syntax Validation ==="
 echo ""
 
-BBAPPEND_DIR="/home/sree/bs/ipstream/brightsign-npu-gaze-extension/brightsign-oe/meta-bs/recipes-multimedia/gstreamer"
+# Get the script directory and construct relative path
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+BBAPPEND_DIR="${PROJECT_ROOT}/brightsign-oe/meta-bs/recipes-multimedia/gstreamer"
 
 echo "=== Checking bbappend files ==="
 for file in gstreamer1.0-plugins-base_%.bbappend gstreamer1.0-plugins-good_%.bbappend gstreamer1.0-plugins-bad_%.bbappend; do

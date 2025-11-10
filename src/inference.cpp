@@ -61,7 +61,7 @@ static void gst_init_once() {
 // Minimal GST env wiring
 // ===============================
 static void ensure_gstreamer_runtime() {
-    const char* local = "/var/volatile/bsext/ext_npu_gaze/RK3588/lib/gstreamer-1.0";
+    const char* local = "/var/volatile/bsext/ext_npu_argus/RK3588/lib/gstreamer-1.0";
     const char* sys   = "/usr/lib/gstreamer-1.0";
     std::string plugin_path = std::string(local) + ":" + sys;
 

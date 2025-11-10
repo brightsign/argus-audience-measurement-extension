@@ -11,6 +11,7 @@
 #include "common.h"
 #include "metrics/log_global.h"
 #include <opencv2/core.hpp>
+#include <opencv2/imgproc.hpp>
 #include <rga/rga.h>
 #include <rga/im2d.h>
 #include <thread>
@@ -25,7 +26,7 @@ static bool should_process_frame(uint64_t seq, int skip_frames) noexcept {
     return (seq & (skip_frames - 1)) == 0;  // Bitmask for power-of-2 skip
 }
 
-// Local helper: Resize frame via RGA hardware acceleration
+// Local helper: Resize frame via RGA hardware acceleration (with OpenCV fallback)
 // Input is BGR24 (from USB/RTSP, already in model color space)
 // Output is BGR24 (ready for model inference)
 static bool resize_frame_rga(
@@ -44,7 +45,7 @@ static bool resize_frame_rga(
         return true;
     }
 
-    // Resize using RGA (BGR24 input → BGR24 output, no color conversion)
+    // Try RGA first (hardware acceleration)
     if (dst_buf.size() != size_t(dst_w) * dst_h * 3) {
         dst_buf.resize(size_t(dst_w) * dst_h * 3);
     }
@@ -58,7 +59,24 @@ static bool resize_frame_rga(
     double fy = dst_h / (double)src_h;
     int ret = imresize(src_rga, dst_rga, fx, fy, 0, IM_SYNC);
     
-    return (ret == IM_STATUS_SUCCESS);
+    if (ret == IM_STATUS_SUCCESS) {
+        return true;  // RGA succeeded
+    }
+    
+    // RGA failed, fall back to OpenCV (software resize)
+    // This is slower but works on all platforms (RK3576 RGA3 has issues with virtual addresses)
+    static bool logged_fallback = false;
+    if (!logged_fallback) {
+        LG_WARN("resize_frame_rga: RGA failed (%s), falling back to OpenCV resize (slower)",
+                imStrError((IM_STATUS)ret));
+        logged_fallback = true;
+    }
+    
+    cv::Mat src_mat(src_h, src_w, CV_8UC3, const_cast<uint8_t*>(src_bgr.data()));
+    cv::Mat dst_mat(dst_h, dst_w, CV_8UC3, dst_buf.data());
+    cv::resize(src_mat, dst_mat, cv::Size(dst_w, dst_h), 0, 0, cv::INTER_LINEAR);
+    
+    return true;
 }
 
 // Local helper: Prepare FrameView from resized BGR buffer
@@ -201,6 +219,8 @@ void run_inference_loop(
             // Store results in fusion output
             store_inference_results(runner, outs, fusion_output, sf->seq);
 
+            // Log periodically
+            #ifdef ENABLE_DEBUG
             // Log FPS metrics every second
             auto now = std::chrono::steady_clock::now();
             auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - fps_start_time).count();
@@ -217,8 +237,7 @@ void run_inference_loop(
                 fps_start_time = now;
             }
 
-            // Log periodically
-            #ifdef ENABLE_DEBUG
+            
             if (sf->seq != last_logged_seq && (sf->seq % 30 == 0)) {
                 last_logged_seq = sf->seq;
                 LG_INFO("inference_worker: seq=%llu detections=%d (%s)",

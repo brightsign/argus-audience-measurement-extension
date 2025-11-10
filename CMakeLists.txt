@@ -235,7 +235,7 @@ string(TOUPPER ${TARGET_SOC} SOC_DIR)
 # Build mosquitto broker (aarch64) from source for embedded deployment
 set(MOSQUITTO_SOURCE_DIR ${CMAKE_BINARY_DIR}/mosquitto-build)
 set(MOSQUITTO_BINARY ${MOSQUITTO_SOURCE_DIR}/bin/mosquitto)
-set(MOSQUITTO_SOURCE_TARBALL "/home/sree/bs/rtsp3_latest/brightsign-npu-gaze-extension/brightsign-oe/build/downloads/mosquitto-2.0.18.tar.gz")
+set(MOSQUITTO_SOURCE_TARBALL "${CMAKE_SOURCE_DIR}/brightsign-oe/build/downloads/mosquitto-2.0.18.tar.gz")
 
 add_custom_target(mosquitto_broker ALL
     COMMAND ${CMAKE_COMMAND} -E echo "Building mosquitto broker (aarch64)..."
