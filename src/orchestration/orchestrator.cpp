@@ -461,6 +461,12 @@ void Orchestrator::supervisor_loop() noexcept {
   
   LG_INFO("supervisor_loop:load (heartbeat_timeout_ms=%d)\n", heartbeat_timeout_ms);
   
+  // Startup grace period: Allow RTSP sources time for network wait + stream opening
+  // RTSP can take 60+ seconds if network is slow to initialize
+  // This prevents false "broken" detection during legitimate startup delays
+  const int64_t startup_grace_period_ns = 70'000'000'000LL;  // 70 seconds
+  const int64_t startup_deadline_ns = now_ns() + startup_grace_period_ns;
+  
   // For recovery attempts, track when we last tried
   int64_t last_recovery_attempt_ns = 0;
   int recovery_backoff_ms = 250;
@@ -469,7 +475,11 @@ void Orchestrator::supervisor_loop() noexcept {
     const int64_t now = now_ns();  // Cache once per iteration, not per condition check
     const int64_t last = last_heartbeat_ns_.load(std::memory_order_relaxed);  // Use relaxed for speed
     const int64_t age_ms = (last>0) ? (now-last)/1'000'000 : 0;
-    if (last && age_ms > heartbeat_timeout_ms) {
+    
+    // Skip heartbeat checks during startup grace period to allow RTSP network wait
+    const bool in_startup_grace = (now < startup_deadline_ns);
+    
+    if (!in_startup_grace && last && age_ms > heartbeat_timeout_ms) {
       LG_WARN("supervisor_loop:heartbeat stale (age_ms=%lld > timeout=%d)\n", age_ms, heartbeat_timeout_ms);
       source_health_.onAppsinkStarvation(now);
       source_health_.markBroken();
@@ -480,14 +490,17 @@ void Orchestrator::supervisor_loop() noexcept {
     static int64_t last_health_log_ns = 0;
     int64_t health_log_interval_ns = 5'000'000'000LL;  // Log health every 5 seconds for CPU optimization
     if ((now - last_health_log_ns) >= health_log_interval_ns) {
-      LG_INFO("supervisor_loop:health (broken=%s state=%d age_ms=%lld)\n",
+      LG_INFO("supervisor_loop:health (broken=%s state=%d age_ms=%lld grace=%s)\n",
               is_broken ? "true" : "false",
               static_cast<int>(state_.load(std::memory_order_acquire)),
-              age_ms);
+              age_ms,
+              in_startup_grace ? "active" : "expired");
       last_health_log_ns = now;
     }
     
-    if (is_broken) {
+    // Skip recovery attempts during startup grace period
+    // This allows RTSP sources time to complete network wait + stream opening
+    if (is_broken && !in_startup_grace) {
       state_.store(OrchestratorState::Recovering, std::memory_order_release);
       
       // Implement adaptive retry: keep trying with exponential backoff
@@ -805,7 +818,7 @@ void Orchestrator::face_loop_threadfn() noexcept {
 
         // Configure generic worker for face detection
         inference_worker::WorkerConfig config{};
-        config.skip_frames = 2;  // Run at 15 FPS (skip every other frame for CPU optimization)
+        config.skip_frames = 0;  // Process all frames (NPU has capacity - 19% load)
         config.model_input_width = face_runner_->spec().input_size.w;
         config.model_input_height = face_runner_->spec().input_size.h;
         config.model_name = "RetinaFace";
@@ -854,7 +867,7 @@ void Orchestrator::yolo_loop_threadfn() noexcept {
 
         // Configure generic worker for object detection
         inference_worker::WorkerConfig config{};
-        config.skip_frames = 2;  // Run at 15 FPS (skip every other frame for CPU optimization)
+        config.skip_frames = 0;  // Process all frames (NPU has capacity - 19% load)
         config.model_input_width = yolo_runner_->spec().input_size.w;
         config.model_input_height = yolo_runner_->spec().input_size.h;
         config.model_name = "YOLOX";

@@ -8,6 +8,6 @@ sdk/
 srv/
 brightsign-oe/
 brightsign-x86_64*.sh
-gaze-ext*.zip
-gaze-dev*.zip
+argus-ext*.zip
+argus-dev*.zip
 brightsign-*-src-*.tar.gz

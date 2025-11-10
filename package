@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# BrightSign Gaze Detection - Package Creation Script
+# BrightSign Argus Detection - Package Creation Script
 # Creates both development and extension packages with multi-SOC support
 
 set -e
@@ -45,9 +45,9 @@ success() {
 }
 
 # Configuration
-TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-DEVELOPMENT_PACKAGE="gaze-dev-${TIMESTAMP}.zip"
-EXTENSION_PACKAGE="gaze-ext-${TIMESTAMP}.zip"
+TIMESTAMP=$(date +%s)
+DEVELOPMENT_PACKAGE="argus-dev-${TIMESTAMP}.zip"
+EXTENSION_PACKAGE="argus-ext-${TIMESTAMP}.zip"
 
 # Supported SOCs and their mappings
 declare -A SOC_PLATFORMS=(
@@ -58,7 +58,7 @@ declare -A SOC_PLATFORMS=(
 
 usage() {
     echo "Usage: $0 [OPTIONS]"
-    echo "Package BrightSign Gaze Detection extension for deployment"
+    echo "Package BrightSign Argus Detection extension for deployment"
     echo ""
     echo "Options:"
     echo "  -d, --dev-only     Create development package only"
@@ -159,7 +159,7 @@ check_prerequisites() {
     fi
 
     if [[ "$found_binaries" != "true" ]]; then
-        error "No compiled binaries found. Please run build process for gaze extension first."
+        error "No compiled binaries found. Please run build process for argus extension first."
     fi
 
     # Check for compiled models
@@ -254,6 +254,14 @@ copy_binaries() {
             continue
         fi
 
+        # Copy image stream server binary
+        if [[ -f "$source_dir/image-stream-server" ]]; then
+            cp "$source_dir/image-stream-server" "$package_soc_dir/"
+            chmod +x "$package_soc_dir/image-stream-server"
+        else
+            warn "image-stream-server not found in $source_dir"
+        fi
+
         # Copy libraries
         mkdir -p "$package_soc_dir/lib"
         
@@ -307,7 +315,51 @@ copy_models() {
             warn "RetinaFace model not found for $soc"
         fi
 
+        # Copy YOLOX model
+        if [[ -f "$install_dir/model/yolox_s.rknn" ]]; then
+            cp "$install_dir/model/yolox_s.rknn" "$package_soc_dir/model/"
+            log "Copied YOLOX model for $soc"
+        else
+            warn "YOLOX model not found for $soc"
+        fi
+
+        # Copy COCO labels list
+        if [[ -f "$install_dir/model/coco_80_labels_list.txt" ]]; then
+            cp "$install_dir/model/coco_80_labels_list.txt" "$package_soc_dir/model/"
+            log "Copied COCO labels for $soc"
+        fi
+
         success "$soc models copied"
+    done
+}
+
+# Copy config files for each SOC
+copy_configs() {
+    log "Copying configuration files..."
+
+    for soc in "${!SOC_PLATFORMS[@]}"; do
+        if [[ -n "$SPECIFIC_SOC" && "$SPECIFIC_SOC" != "$soc" ]]; then
+            continue
+        fi
+        
+        local platform="${SOC_PLATFORMS[$soc]}"
+        local install_dir="install/$soc"
+        local package_soc_dir="staging/$soc"
+        
+        log "Copying $soc ($platform) configs from $install_dir..."
+        
+        if [[ ! -d "$install_dir/configs" ]]; then
+            warn "Config directory $install_dir/configs not found, skipping $soc configs"
+            continue
+        fi
+
+        mkdir -p "$package_soc_dir/configs"
+        
+        # Copy all config files
+        cp -r "$install_dir/configs"/* "$package_soc_dir/configs/"
+        log "Copied configs for $soc"
+
+        success "$soc configs copied"
     done
 }
 
@@ -394,7 +446,7 @@ generate_manifest() {
     
     # Extract key fields from config using jq
     local version=$(echo "$config_content" | jq -r '.extension.version // "1.0.0"')
-    local description=$(echo "$config_content" | jq -r '.extension.description // "NPU-accelerated gaze detection using RetinaFace"')
+    local description=$(echo "$config_content" | jq -r '.extension.description // "NPU-accelerated person detection using RetinaFace and YOLOX"')
     local author=$(echo "$config_content" | jq -c '.extension.author // {"name": "BrightSign LLC"}')
     local license=$(echo "$config_content" | jq -r '.extension.license // "Apache-2.0"')
     local homepage=$(echo "$config_content" | jq -r '.extension.homepage // "https://github.com/brightsign/brightsign-npu-gaze-extension"')
@@ -425,9 +477,9 @@ generate_manifest() {
   "manifestVersion": 1,
   
   "extension": {
-    "id": "com.brightsign.gaze-detection",
-    "name": "Gaze Detection",
-    "shortName": "Gaze",
+    "id": "com.brightsign.argus-detection",
+    "name": "Argus Detection",
+    "shortName": "Argus",
     "version": "$version",
     "description": "$description",
     "author": $author,
@@ -537,7 +589,15 @@ verify_package() {
             total_files=$((total_files + 1))
         fi
 
-        log "$soc ($platform): Binary + RetinaFace model"
+        # Check for YOLOX model
+        if [[ ! -f "$soc_dir/model/yolox_s.rknn" ]]; then
+            warn "Missing model: $soc_dir/model/yolox_s.rknn"
+            errors=$((errors + 1))
+        else
+            total_files=$((total_files + 1))
+        fi
+
+        log "$soc ($platform): Binary + RetinaFace + YOLOX models"
     done
 
     if [[ $errors -eq 0 ]]; then
@@ -565,7 +625,7 @@ create_development_package() {
     echo ""
     echo "Development Package Usage:"
     echo "1. Transfer $DEVELOPMENT_PACKAGE to player via DWS"
-    echo "2. On player: mkdir -p /usr/local/gaze && cd /usr/local/gaze"
+    echo "2. On player: mkdir -p /usr/local/argus && cd /usr/local/argus"
     echo "3. On player: unzip /storage/sd/$DEVELOPMENT_PACKAGE"
     echo "4. On player: ./bsext_init run"
     echo "Note: Development installation is volatile (lost on reboot)"
@@ -581,10 +641,10 @@ create_extension_package() {
     ../sh/make-extension-lvm || error "Extension creation failed"
 
     # Package the extension
-    zip "../$EXTENSION_PACKAGE" ext_npu_gaze* >/dev/null
+    zip "../$EXTENSION_PACKAGE" ext_npu_argus* >/dev/null
 
     # Clean up temporary files
-    rm -rf ext_npu_gaze*
+    rm -rf ext_npu_argus*
 
     cd ..
 
@@ -596,7 +656,7 @@ create_extension_package() {
     echo "1. Transfer $EXTENSION_PACKAGE to player via DWS"
     echo "2. On player: mkdir -p /usr/local && cd /usr/local"
     echo "3. On player: unzip /storage/sd/$EXTENSION_PACKAGE"
-    echo "4. On player: bash ./ext_npu_gaze_install-lvm.sh"
+    echo "4. On player: bash ./ext_npu_argus_install-lvm.sh"
     echo "5. On player: reboot"
     echo "Note: Extension installation is permanent (persists across reboots)"
 }
@@ -610,10 +670,38 @@ cleanup_staging() {
     fi
 }
 
+# Clean up old packages (keep only the latest)
+cleanup_old_packages() {
+    log "Cleaning up old packages..."
+    
+    local dev_count=$(ls -1 argus-dev-*.zip 2>/dev/null | wc -l)
+    local ext_count=$(ls -1 argus-ext-*.zip 2>/dev/null | wc -l)
+    
+    if [[ $dev_count -gt 0 ]]; then
+        log "Removing $dev_count old development package(s)..."
+        rm -f argus-dev-*.zip
+    fi
+    
+    if [[ $ext_count -gt 0 ]]; then
+        log "Removing $ext_count old extension package(s)..."
+        rm -f argus-ext-*.zip
+    fi
+    
+    if [[ $dev_count -gt 0 || $ext_count -gt 0 ]]; then
+        success "Old packages removed (dev: $dev_count, ext: $ext_count)"
+    else
+        log "No old packages found"
+    fi
+}
+
 # Main packaging function
 main() {
-    echo "BrightSign Gaze Detection - Package Creation"
-    echo "============================================"
+    echo "BrightSign Argus Detection - Package Creation"
+    echo "=============================================="
+    
+    # Clean up old packages first
+    cleanup_old_packages
+    echo ""
     
     # Show configuration
     echo "Configuration:"
@@ -629,6 +717,7 @@ main() {
     create_package_structure
     copy_binaries
     copy_models
+    copy_configs
     generate_manifest
     copy_extension_scripts
     echo ""
@@ -675,7 +764,7 @@ main() {
         fi
         
         local platform="${SOC_PLATFORMS[$soc]}"
-        echo "  🎯 $soc ($platform): Binary + RetinaFace model"
+        echo "  🎯 $soc ($platform): Binary + RetinaFace + YOLOX models"
     done
 
     echo ""

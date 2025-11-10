@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# BrightSign NPU Gaze Extension - Complete Build Script
+# BrightSign NPU Argus Extension - Complete Build Script
 # This script automates all the steps from the README.md
 
 set -e  # Exit on error
@@ -151,8 +151,10 @@ cleanup_all() {
     
     # Remove generated packages
     print_status "Removing generated packages..."
-    rm -f gaze-dev-*.zip
-    rm -f gaze-demo-*.zip
+    rm -f argus-dev-*.zip
+    rm -f argus-ext-*.zip
+    rm -f gaze-dev-*.zip  # Legacy cleanup
+    rm -f gaze-ext-*.zip  # Legacy cleanup
     
     # Clean install directory (but keep the directory itself)
     print_status "Cleaning install directory..."
@@ -490,37 +492,30 @@ step4_package() {
     print_header "STEP 4: Package the Extension"
     
     prompt_continue "This will:
-- Copy extension scripts to install directory
-- Create development package
-- Create production extension package"
+- Use package script to create packages
+- Create development package (argus-dev)
+- Create production extension package (argus-ext)"
 
     cd "$project_root"
     
-    # Copy extension scripts
-    cp bsext_init install/ && chmod +x install/bsext_init
-    cp sh/uninstall.sh install/ && chmod +x install/uninstall.sh
-
-    # Create development package
-    cd "$project_root/install"
-    rm -f ../gaze-dev-*.zip
-    zip -r "../gaze-dev-$(date +%s).zip" ./
-    
-    # Create production extension
-    ../sh/make-extension-lvm
-    rm -f ../gaze-ext-*.zip
-    zip "../gaze-ext-$(date +%s).zip" ext_npu_gaze*
-    rm -rf ext_npu_gaze*
-
-    cd "$project_root"
+    # Use the package script which handles everything correctly
+    if [ -f "./package" ]; then
+        chmod +x ./package
+        print_status "Running package script..."
+        ./package
+    else
+        print_error "package script not found!"
+        return 1
+    fi
     
     print_status "Step 4 completed successfully!"
-    print_status "Development package: gaze-dev-*.zip"
-    print_status "Production extension: gaze-ext-*.zip"
+    print_status "Development package: argus-dev-*.zip"
+    print_status "Production extension: argus-ext-*.zip"
 }
 
 # Main execution
 main() {
-    print_header "BrightSign NPU Gaze Extension - Complete Build"
+    print_header "BrightSign NPU Argus Extension - Complete Build"
     
     if [ "$AUTO_MODE" = true ]; then
         print_status "Running in automatic mode - no prompts"
@@ -549,8 +544,8 @@ main() {
     print_header "BUILD COMPLETE"
     print_status "All steps completed successfully!"
     print_status "Check the install directory for the built files"
-    print_status "Development package: gaze-dev-*.zip"
-    print_status "Production extension: gaze-ext-*.zip"
+    print_status "Development package: argus-dev-*.zip"
+    print_status "Production extension: argus-ext-*.zip"
     
     print_warning "Don't forget to unsecure your BrightSign player as described in the README!"
 }

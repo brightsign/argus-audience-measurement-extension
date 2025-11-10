@@ -127,11 +127,20 @@ static void draw_yolo_detections(
         cv::Scalar(0, 0, 0),          // Black
     };
 
+    int person_count = 0;
     for (int i = 0; i < det_count; ++i) {
         const auto& det = dets[i];
 
-        // Select color based on class_id
-        cv::Scalar box_color = colors[det.class_id % max_colors];
+        // Only draw bounding boxes for person (class_id = 0)
+        // Explicitly suppress other classes like tie (27), handbag (26), etc.
+        if (det.class_id != 0) {
+            continue;
+        }
+
+        person_count++;
+
+        // Yellow color for person
+        cv::Scalar box_color = cv::Scalar(0, 255, 255);  // Yellow in BGR
 
         // Draw bounding box
         int x0 = (int)det.x0;
@@ -147,10 +156,9 @@ static void draw_yolo_detections(
             2
         );
 
-        // Draw score and class_id label
+        // Draw score label (simplified - just show confidence)
         char label[64];
-        snprintf(label, sizeof(label), "cls=%d score=%.2f", 
-                 det.class_id, det.score);
+        snprintf(label, sizeof(label), "person %.2f", det.score);
 
         cv::putText(
             drawMat,
@@ -165,7 +173,7 @@ static void draw_yolo_detections(
     }
 
     #ifdef DEBUG_LOGS
-    LG_INFO("overlay: YOLO objects=%d", det_count);
+    LG_INFO("overlay: YOLO persons=%d (total_objects=%d)", person_count, det_count);
     #endif
 }
 

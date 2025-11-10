@@ -65,6 +65,9 @@
   "log_dir": "/storage/sd/logs",
   "log_json": true,
 
+  "enable_frame_output": true,
+  "output_dir": "/tmp",
+
   "test_face_only": true,
   "test_yolo_only": true,
 

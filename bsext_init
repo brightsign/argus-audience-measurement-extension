@@ -1,19 +1,19 @@
 #!/bin/bash
 ### BEGIN INIT INFO
-# Provides:          bsext-gaze
+# Provides:          bsext-argus
 # Required-Start:    $remote_fs $syslog
 # Required-Stop:     $remote_fs $syslog
 # Default-Start:     2 3 4 5
 # Default-Stop:      0 1 6
-# Short-Description: BrightSign Gaze Detection Extension
-# Description:       Runs the BrightSign NPU-based gaze detection service
+# Short-Description: BrightSign Argus Detection Extension
+# Description:       Runs the BrightSign NPU-based argus detection service
 ### END INIT INFO
 
 # Source function library if it exists
 [ -f /etc/init.d/functions ] && . /etc/init.d/functions
 
 SCRIPT_PATH=$(dirname $(realpath $0))
-DAEMON_NAME="bsext-gaze"
+DAEMON_NAME="bsext-argus"
 PIDFILE="/var/run/${DAEMON_NAME}.pid"
 STREAM_SERVER_PIDFILE="/var/run/bsext-image-stream-server.pid"
 
@@ -24,12 +24,12 @@ DISABLE_AUTO_START=false
 # Priority: Command line args > Registry settings > Auto-discovered RTSP > USB cameras > Default device
 # 
 # Registry settings:
-#   bsext-gaze-video-device : RTSP URL or device name (e.g., rtsp://192.168.0.203:8554/mystream or /dev/video0)
-#   bsext-gaze-rtsp-server  : RTSP server IP:port (e.g., 192.168.0.203:8554)
+#   bsext-argus-video-device : RTSP URL or device name (e.g., rtsp://192.168.0.203:8554/mystream or /dev/video0)
+#   bsext-argus-rtsp-server  : RTSP server IP:port (e.g., 192.168.0.203:8554)
 #
 # Examples:
-#   registry write extension bsext-gaze-rtsp-server 192.168.0.203:8554
-#   registry write extension bsext-gaze-video-device rtsp://192.168.0.203:8554/mystream
+#   registry write extension bsext-argus-rtsp-server 192.168.0.203:8554
+#   registry write extension bsext-argus-video-device rtsp://192.168.0.203:8554/mystream
 
 # Common setup function to determine SOC model and video device
 get_soc_name() {
@@ -157,10 +157,14 @@ run_attention_demo() {
 
 run_stream_server() {
     # Default to running in foreground
-    echo "run_stream_server called with background=$2"
+    echo "run_stream_server called with background=$1"
     local background=$1
     local port=$2
     echo "run_stream_server called with port=${port}"
+    
+    SOC_NAME=$(get_soc_name)
+    SOC_HOME=${SCRIPT_PATH}/${SOC_NAME}
+    
     if [ "$background" = "true" ]; then
         # Run as a daemon in the background
         echo "start-stop daemon =${SOC_HOME}/image-stream-server"
@@ -174,10 +178,10 @@ run_stream_server() {
 
 setup_gstreamer_env() {
     echo "Setting up GStreamer environment for SOC: $SOC_NAME"
-    export GST_PLUGIN_PATH=/var/volatile/bsext/ext_npu_gaze/$SOC_NAME/lib/gstreamer-1.0:/usr/lib/gstreamer-1.0
+    export GST_PLUGIN_PATH=/var/volatile/bsext/ext_npu_argus/$SOC_NAME/lib/gstreamer-1.0:/usr/lib/gstreamer-1.0
     # Include MQTT bin directory first so mosquitto utilities find their libraries
     # Also include bin directory for all other shared libraries
-    export LD_LIBRARY_PATH=/var/volatile/bsext/ext_npu_gaze/$SOC_NAME/bin:/var/volatile/bsext/ext_npu_gaze/$SOC_NAME/lib:/usr/lib:$LD_LIBRARY_PATH
+    export LD_LIBRARY_PATH=/var/volatile/bsext/ext_npu_argus/$SOC_NAME/bin:/var/volatile/bsext/ext_npu_argus/$SOC_NAME/lib:/usr/lib:$LD_LIBRARY_PATH
     export GST_REGISTRY="/tmp/gst-registry.bin"
     export GST_PLUGIN_SCANNER="/usr/libexec/gstreamer-1.0/gst-plugin-scanner"
     export GST_REGISTRY_REUSE_PLUGIN_SCANNER=1
@@ -187,7 +191,7 @@ setup_gstreamer_env() {
     echo "  GST_REGISTRY=$GST_REGISTRY"
     echo "  GST_PLUGIN_SCANNER=$GST_PLUGIN_SCANNER"
     echo "  GST_REGISTRY_REUSE_PLUGIN_SCANNER=$GST_REGISTRY_REUSE_PLUGIN_SCANNER"
-    echo "  MQTT utilities available in: /var/volatile/bsext/ext_npu_gaze/$SOC_NAME/bin/"
+    echo "  MQTT utilities available in: /var/volatile/bsext/ext_npu_argus/$SOC_NAME/bin/"
 }
 
 do_start() {
@@ -225,11 +229,75 @@ do_start() {
 }
 
 do_stop() {
-    start-stop-daemon --stop --pidfile ${PIDFILE}
-    rm -f ${PIDFILE}
+    echo "Stopping ${DAEMON_NAME} services..."
+    
+    # Stop attention_demo (try current name, then legacy name)
+    local stopped_demo=false
+    if [ -f "${PIDFILE}" ]; then
+        echo "Stopping attention_demo (PID file: ${PIDFILE})"
+        local pid=$(cat ${PIDFILE} 2>/dev/null)
+        if [ -n "$pid" ]; then
+            echo "Killing process $pid with SIGKILL..."
+            kill -9 $pid 2>/dev/null || true
+            # Also kill any child processes
+            pkill -9 -P $pid 2>/dev/null || true
+        fi
+        rm -f ${PIDFILE}
+        stopped_demo=true
+    fi
+    
+    # Also check for legacy bsext-gaze.pid
+    if [ -f "/var/run/bsext-gaze.pid" ]; then
+        echo "Stopping attention_demo (legacy PID file: /var/run/bsext-gaze.pid)"
+        local pid=$(cat /var/run/bsext-gaze.pid 2>/dev/null)
+        if [ -n "$pid" ]; then
+            echo "Killing process $pid with SIGKILL..."
+            kill -9 $pid 2>/dev/null || true
+            # Also kill any child processes
+            pkill -9 -P $pid 2>/dev/null || true
+        fi
+        rm -f /var/run/bsext-gaze.pid
+        stopped_demo=true
+    fi
+    
+    if [ "$stopped_demo" = "false" ]; then
+        echo "No PID file found for attention_demo, trying to kill by name..."
+        pkill -9 -f "attention_demo" || true
+    fi
+    
+    # Give it a moment and verify it's actually stopped
+    sleep 1
+    if pgrep -f "attention_demo" >/dev/null 2>&1; then
+        echo "WARNING: attention_demo still running, forcing kill by name..."
+        pkill -9 -f "attention_demo" || true
+        sleep 1
+    fi
 
-    start-stop-daemon --stop --pidfile ${STREAM_SERVER_PIDFILE}
-    rm -f ${STREAM_SERVER_PIDFILE}
+    # Stop image-stream-server
+    if [ -f "${STREAM_SERVER_PIDFILE}" ]; then
+        echo "Stopping image-stream-server (PID file: ${STREAM_SERVER_PIDFILE})"
+        local pid=$(cat ${STREAM_SERVER_PIDFILE} 2>/dev/null)
+        if [ -n "$pid" ]; then
+            echo "Killing process $pid with SIGKILL..."
+            kill -9 $pid 2>/dev/null || true
+            # Also kill any child processes
+            pkill -9 -P $pid 2>/dev/null || true
+        fi
+        rm -f ${STREAM_SERVER_PIDFILE}
+    else
+        echo "No PID file found for image-stream-server, trying to kill by name..."
+        pkill -9 -f "image-stream-server" || true
+    fi
+    
+    # Verify image-stream-server is stopped
+    sleep 1
+    if pgrep -f "image-stream-server" >/dev/null 2>&1; then
+        echo "WARNING: image-stream-server still running, forcing kill by name..."
+        pkill -9 -f "image-stream-server" || true
+        sleep 1
+    fi
+    
+    echo "Stop complete"
 }
 
 # Parse command line arguments first (they take priority over config file)
@@ -307,10 +375,10 @@ case "$ACTION" in
         echo "Usage: $0 {start|stop|restart|run|detect} [options]"
         echo ""
         echo "Actions:"
-        echo "  start     Start the gaze detection service as a daemon"
-        echo "  stop      Stop the gaze detection service"
-        echo "  restart   Restart the gaze detection service"
-        echo "  run       Run the gaze detection service in foreground"
+        echo "  start     Start the argus detection service as a daemon"
+        echo "  stop      Stop the argus detection service"
+        echo "  restart   Restart the argus detection service"
+        echo "  run       Run the argus detection service in foreground"
         echo "  detect    Detect available video sources"
         echo ""
         echo "Options (for manual use):"
@@ -318,9 +386,9 @@ case "$ACTION" in
         echo "  --rtsp-server HOST  RTSP server IP:port (e.g., 192.168.0.203:8554)"
         echo ""
         echo "Configuration via BrightSign registry:"
-        echo "  bsext-gaze-video-device      RTSP URL or device name (e.g., rtsp://192.168.0.203:8554/mystream or /dev/video0)"
-        echo "  bsext-gaze-rtsp-server       RTSP server IP:port (e.g., 192.168.0.203:8554)"
-        echo "  bsext-gaze-disable-auto-start  Disable automatic startup (true/false)"
+        echo "  bsext-argus-video-device      RTSP URL or device name (e.g., rtsp://192.168.0.203:8554/mystream or /dev/video0)"
+        echo "  bsext-argus-rtsp-server       RTSP server IP:port (e.g., 192.168.0.203:8554)"
+        echo "  bsext-argus-disable-auto-start  Disable automatic startup (true/false)"
         echo ""
         echo "MQTT Utilities:"
         echo "  The environment is configured with LD_LIBRARY_PATH for MQTT utilities."
@@ -328,16 +396,16 @@ case "$ACTION" in
         echo ""
         echo "  mosquitto_sub -h 127.0.0.1 -p 1883 -t 'bs/xt5/device/analytics' -v"
         echo "  mosquitto_pub -h 127.0.0.1 -p 1883 -t 'test/topic' -m 'message'"
-        echo "  /var/volatile/bsext/ext_npu_gaze/RK3588/bin/mosquitto -v"
+        echo "  /var/volatile/bsext/ext_npu_argus/RK3588/bin/mosquitto -v"
         echo ""
         echo "Examples:"
         echo "  # For automatic startup (survives reboot):"
-        echo "  registry write extension bsext-gaze-rtsp-server 192.168.0.203:8554"
-        echo "  registry write extension bsext-gaze-video-device rtsp://192.168.0.203:8554/mystream"
+        echo "  registry write extension bsext-argus-rtsp-server 192.168.0.203:8554"
+        echo "  registry write extension bsext-argus-video-device rtsp://192.168.0.203:8554/mystream"
         echo ""
         echo "  # To view current settings:"
-        echo "  registry read extension bsext-gaze-rtsp-server"
-        echo "  registry read extension bsext-gaze-video-device"
+        echo "  registry read extension bsext-argus-rtsp-server"
+        echo "  registry read extension bsext-argus-video-device"
         echo ""
         echo "  # For manual override:"
         echo "  $0 start --rtsp-server 192.168.0.203:8554"

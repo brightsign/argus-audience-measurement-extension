@@ -70,7 +70,7 @@ public:
         LG_WARN("frame_writer: failed to write frame to %s", filepath.c_str());
         return false;
       }
-
+      #ifdef ENABLE_DEBUG
       // Track write count and log performance metrics every 1 second
       writes_count_++;
       auto now = std::chrono::steady_clock::now();
@@ -84,7 +84,7 @@ public:
         last_log_time_ = now;
       }
 
-      #ifdef ENABLE_DEBUG
+      
       LG_DEBUG("frame_writer: wrote %s (seq=%llu tracks=%zu)",
                filepath.c_str(), (unsigned long long)result.seq, 
                (size_t)result.tracks.size());

@@ -17,6 +17,56 @@
 #include <rga/rga.h>
 #include <rga/im2d.h>
 
+#include <opencv2/core.hpp>
+#include <opencv2/imgproc.hpp>
+
+#include <ifaddrs.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+
+// ===============================
+// Network Wait Helpers
+// ===============================
+static bool any_interface_has_ip(std::string &iface_out, std::string &ip_out) {
+    struct ifaddrs *ifaddr, *ifa;
+    if (getifaddrs(&ifaddr) == -1) return false;
+    bool found = false;
+    for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next) {
+        if (!ifa->ifa_addr) continue;
+        if (ifa->ifa_addr->sa_family == AF_INET) {
+            if (strcmp(ifa->ifa_name, "lo") == 0) continue;
+            struct sockaddr_in *sa = (struct sockaddr_in*)ifa->ifa_addr;
+            char ip[INET_ADDRSTRLEN];
+            if (inet_ntop(AF_INET, &sa->sin_addr, ip, sizeof(ip))) {
+                if (strcmp(ip, "0.0.0.0") != 0) {
+                    iface_out = ifa->ifa_name;
+                    ip_out    = ip;
+                    found = true;
+                    break;
+                }
+            }
+        }
+    }
+    freeifaddrs(ifaddr);
+    return found;
+}
+
+static void wait_for_network_with_validation(int retries = 30, int delay_sec = 2) {
+    LG_INFO("input_rtsp:waiting for network connectivity...\n");
+    for (int i = 0; i < retries; i++) {
+        std::string iface, ip;
+        if (any_interface_has_ip(iface, ip)) {
+            LG_INFO("input_rtsp:network interface %s has IP %s\n", iface.c_str(), ip.c_str());
+            LG_INFO("input_rtsp:network connectivity established\n");
+            return;
+        }
+        LG_WARN("input_rtsp:waiting for network (attempt %d/%d)...\n", i+1, retries);
+        std::this_thread::sleep_for(std::chrono::seconds(delay_sec));
+    }
+    LG_ERROR("input_rtsp:no network interface got an IP after %d attempts\n", retries);
+}
+
 // ===============================
 // GStreamer One-time Init
 // ===============================
@@ -30,7 +80,7 @@ static void gst_init_once() {
 }
 
 static void ensure_gstreamer_runtime() {
-    const char* local = "/var/volatile/bsext/ext_npu_gaze/RK3588/lib/gstreamer-1.0";
+    const char* local = "/var/volatile/bsext/ext_npu_argus/RK3588/lib/gstreamer-1.0";
     const char* sys   = "/usr/lib/gstreamer-1.0";
     std::string plugin_path = std::string(local) + ":" + sys;
 
@@ -47,14 +97,16 @@ static void ensure_gstreamer_runtime() {
 static std::vector<std::string> build_rtsp_pipelines(const std::string& url_in) {
     auto make_url_variants = [&](const std::string& u) {
         std::vector<std::string> urls;
-        urls.push_back(u); // original
-        // Try /stream2 first if available (Tapo friendly)
+        urls.push_back(u); // original URL first (e.g., /stream1)
+        
+        // Try /stream2 as fallback if /stream1 was specified (Tapo cameras often have substream)
+        // But prioritize what the user explicitly configured
         try {
             auto pos = u.rfind("/stream1");
             if (pos != std::string::npos) {
                 std::string u2 = u;
                 u2.replace(pos, 8, "/stream2");
-                urls.insert(urls.begin(), u2);
+                urls.push_back(u2);  // Add as fallback, not first choice
             }
         } catch (...) {}
         return urls;
@@ -103,20 +155,16 @@ static std::vector<std::string> build_rtsp_pipelines(const std::string& url_in) 
     auto urls = make_url_variants(url_in);
 
     for (const auto& url : urls) {
-        // H264, HW decode, no scaling (fast)
-        p.push_back(mk(url, "udp", "H264", /*hw_decode=*/true,  /*scaled_320=*/false, /*hw_scale=*/false));
+        // Try most common configurations first (limit attempts to avoid overwhelming camera)
+        // TCP is more reliable than UDP for RTSP, so prioritize it
         p.push_back(mk(url, "tcp", "H264", /*hw_decode=*/true,  /*scaled_320=*/false, /*hw_scale=*/false));
-        // With upstream scaling
-        p.push_back(mk(url, "udp", "H264", /*hw_decode=*/true,  /*scaled_320=*/true,  /*hw_scale=*/true));
-        p.push_back(mk(url, "tcp", "H264", /*hw_decode=*/true,  /*scaled_320=*/true,  /*hw_scale=*/true));
-        p.push_back(mk(url, "udp", nullptr,/*hw_decode=*/true,  /*scaled_320=*/true,  /*hw_scale=*/true));
-        p.push_back(mk(url, "tcp", nullptr,/*hw_decode=*/true,  /*scaled_320=*/true,  /*hw_scale=*/true));
-        // Software decode fallback
+        p.push_back(mk(url, "udp", "H264", /*hw_decode=*/true,  /*scaled_320=*/false, /*hw_scale=*/false));
+        
+        // Try with auto-detect encoding (no specific codec)
+        p.push_back(mk(url, "tcp", nullptr,/*hw_decode=*/true,  /*scaled_320=*/false, /*hw_scale=*/false));
+        
+        // Software decode fallback (slower but more compatible)
         p.push_back(mk(url, "tcp", "H264", /*hw_decode=*/false, /*scaled_320=*/false, /*hw_scale=*/false));
-        p.push_back(mk(url, "tcp", "H264", /*hw_decode=*/false, /*scaled_320=*/true,  /*hw_scale=*/false));
-        // H265
-        p.push_back(mk(url, "tcp", "H265", /*hw_decode=*/true,  /*scaled_320=*/false, /*hw_scale=*/false));
-        p.push_back(mk(url, "tcp", "H265", /*hw_decode=*/true,  /*scaled_320=*/true,  /*hw_scale=*/true));
     }
     return p;
 }
@@ -138,6 +186,16 @@ public:
 
         for (const auto& pipeline_str : pipelines) {
             LG_INFO("input_rtsp:trying pipeline: %s\n", pipeline_str.substr(0, 120).c_str());
+
+            // Add delay between attempts to avoid overwhelming camera/network
+            // Tapo cameras can be sensitive to rapid connection attempts
+            static auto last_attempt = std::chrono::steady_clock::now();
+            auto now = std::chrono::steady_clock::now();
+            auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_attempt).count();
+            if (elapsed_ms < 500) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(500 - elapsed_ms));
+            }
+            last_attempt = std::chrono::steady_clock::now();
 
             err = nullptr;
             pipeline_ = gst_parse_launch(pipeline_str.c_str(), &err);
@@ -209,7 +267,13 @@ public:
             GstSample* sample = gst_app_sink_try_pull_sample(GST_APP_SINK(appsink_), first_frame_timeout_ms * GST_MSECOND);
             if (!sample) {
                 LG_WARN("input_rtsp:first-frame timeout (%d ms) on this pipeline\n", first_frame_timeout_ms);
-                close();
+                // Properly cleanup before trying next pipeline
+                bus_running_.store(false, std::memory_order_release);
+                if (bus_thread_.joinable()) bus_thread_.join();
+                gst_element_set_state(pipeline_, GST_STATE_NULL);
+                gst_object_unref(appsink_); appsink_ = nullptr;
+                gst_object_unref(bus_); bus_ = nullptr;
+                gst_object_unref(pipeline_); pipeline_ = nullptr;
                 continue;
             }
 
@@ -279,20 +343,43 @@ public:
 
             bool ok = false;
             do {
+                // Try RGA first (hardware acceleration)
                 // NV12 (W×H) -> NV12 (320×320) via RGA
                 rga_buffer_t src_nv12       = wrapbuffer_virtualaddr((void*)src_base, W, H, RK_FORMAT_YCbCr_420_SP);
                 rga_buffer_t dst_nv12_small = wrapbuffer_virtualaddr(nv12_small_.data(), 320, 320, RK_FORMAT_YCbCr_420_SP);
                 double fx = 320.0 / (double)W;
                 double fy = 320.0 / (double)H;
                 int ret = imresize(src_nv12, dst_nv12_small, fx, fy, 0, IM_SYNC);
-                if (ret != IM_STATUS_SUCCESS) break;
-
-                // NV12 (320×320) -> BGR (320×320) via RGA (to match USB camera BGR format)
-                rga_buffer_t src_small = wrapbuffer_virtualaddr(nv12_small_.data(), 320, 320, RK_FORMAT_YCbCr_420_SP);
-                rga_buffer_t dst_bgr   = wrapbuffer_virtualaddr(rgb_out_320x320, 320, 320, RK_FORMAT_BGR_888);
-                ret = imcvtcolor(src_small, dst_bgr, RK_FORMAT_YCbCr_420_SP, RK_FORMAT_BGR_888, IM_SYNC);
-                if (ret != IM_STATUS_SUCCESS) break;
-
+                
+                if (ret == IM_STATUS_SUCCESS) {
+                    // NV12 (320×320) -> BGR (320×320) via RGA
+                    rga_buffer_t src_small = wrapbuffer_virtualaddr(nv12_small_.data(), 320, 320, RK_FORMAT_YCbCr_420_SP);
+                    rga_buffer_t dst_bgr   = wrapbuffer_virtualaddr(rgb_out_320x320, 320, 320, RK_FORMAT_BGR_888);
+                    ret = imcvtcolor(src_small, dst_bgr, RK_FORMAT_YCbCr_420_SP, RK_FORMAT_BGR_888, IM_SYNC);
+                    
+                    if (ret == IM_STATUS_SUCCESS) {
+                        ok = true;
+                        break;  // RGA succeeded
+                    }
+                }
+                
+                // RGA failed, fall back to OpenCV (software processing for RK3576)
+                static bool logged_fallback = false;
+                if (!logged_fallback) {
+                    LG_WARN("input_rtsp:RGA failed, using OpenCV for NV12->BGR conversion (slower)\n");
+                    logged_fallback = true;
+                }
+                
+                // OpenCV NV12 -> BGR conversion
+                // NV12 has Y plane (W×H) followed by interleaved UV plane (W×H/2)
+                cv::Mat nv12_mat(H + H/2, W, CV_8UC1, (void*)src_base);
+                cv::Mat bgr_full(H, W, CV_8UC3);
+                cv::cvtColor(nv12_mat, bgr_full, cv::COLOR_YUV2BGR_NV12);
+                
+                // Resize to 320×320
+                cv::Mat bgr_small(320, 320, CV_8UC3, rgb_out_320x320);
+                cv::resize(bgr_full, bgr_small, cv::Size(320, 320), 0, 0, cv::INTER_LINEAR);
+                
                 ok = true;
             } while(false);
 
@@ -362,6 +449,10 @@ RtspInputSource::~RtspInputSource() { close(); }
 
 bool RtspInputSource::open() noexcept {
   if (p_->opened.load(std::memory_order_acquire)) return true;
+  
+  // Wait for network connectivity before attempting RTSP connection
+  LG_INFO("input_rtsp:checking network before opening RTSP stream\n");
+  wait_for_network_with_validation(30, 2);
   
   if (!p_->rtsp_helper->open(p_->url, 3000)) {
     LG_ERROR("input_rtsp:open failed for %s\n", p_->url.c_str());
