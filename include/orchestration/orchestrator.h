@@ -14,6 +14,8 @@
 #include "pipeline/shared_frame.h"
 #include "pipeline/frame_mailbox.h"
 #include "output/frame_writer.h"
+#include "config/publisher_config.h"
+#include "output/publisher_v2.h"
 
 // Optional: describe how to build the pipeline
 struct PipelineConfig {
@@ -33,6 +35,9 @@ struct PipelineConfig {
   std::string output_dir;           // Directory for decorated frames
   int max_frames = 0;               // Max frames to keep (0 = no limit)
   int frame_quality = 85;           // JPEG quality (1-100)
+  
+  // Publishers configuration
+  std::vector<PublisherConfig> publishers; // MQTT, UDP, File publishers
 };
 
 enum class OrchestratorState : uint8_t {
@@ -149,6 +154,9 @@ private:
   // Frame writers for decorated output (optional) - separate per model
   std::unique_ptr<IFrameWriter> frame_writer_face_;   // RetinaFace output
   std::unique_ptr<IFrameWriter> frame_writer_yolo_;   // YOLOX output
+  
+  // Publishers for analytics (MQTT, UDP, etc.)
+  std::vector<PublisherPtr> publishers_;
 
   // cached input kind for HealthManager
   SourceKind detect_source_kind(const InputConfig& ic) const noexcept {

@@ -159,6 +159,9 @@ set(CMAKE_INSTALL_RPATH "lib")
 # rknn_yolov5_demo
 include_directories( ${CMAKE_SOURCE_DIR}/include)
 
+# Enable MQTT publisher support
+add_definitions(-DHAVE_MOSQUITTO=1)
+
 add_executable(attention_demo
         src/main.cpp
         src/attention.cpp
@@ -227,6 +230,7 @@ target_link_libraries(attention_demo
   ${RGA_LIB}
   ${TURBOJPEG_LIB}
   ${MY_LIBS}
+  mosquitto
 )
 
 # Convert TARGET_SOC to uppercase for SOC_DIR
@@ -235,7 +239,33 @@ string(TOUPPER ${TARGET_SOC} SOC_DIR)
 # Build mosquitto broker (aarch64) from source for embedded deployment
 set(MOSQUITTO_SOURCE_DIR ${CMAKE_BINARY_DIR}/mosquitto-build)
 set(MOSQUITTO_BINARY ${MOSQUITTO_SOURCE_DIR}/bin/mosquitto)
-set(MOSQUITTO_SOURCE_TARBALL "${CMAKE_SOURCE_DIR}/brightsign-oe/build/downloads/mosquitto-2.0.18.tar.gz")
+
+# Allow environment variable override, otherwise search common locations
+if(DEFINED ENV{MOSQUITTO_SOURCE_TARBALL})
+    set(MOSQUITTO_SOURCE_TARBALL "$ENV{MOSQUITTO_SOURCE_TARBALL}")
+else()
+    # Try to find mosquitto tarball in common locations
+    set(MOSQUITTO_SEARCH_PATHS
+        "${CMAKE_SOURCE_DIR}/brightsign-oe/build/downloads/mosquitto-2.0.18.tar.gz"
+        "${CMAKE_SOURCE_DIR}/../brightsign-oe/build/downloads/mosquitto-2.0.18.tar.gz"
+        "${CMAKE_SOURCE_DIR}/downloads/mosquitto-2.0.18.tar.gz"
+    )
+    
+    foreach(SEARCH_PATH ${MOSQUITTO_SEARCH_PATHS})
+        if(EXISTS "${SEARCH_PATH}")
+            set(MOSQUITTO_SOURCE_TARBALL "${SEARCH_PATH}")
+            break()
+        endif()
+    endforeach()
+    
+    if(NOT MOSQUITTO_SOURCE_TARBALL)
+        message(WARNING "Mosquitto source tarball not found. Searched: ${MOSQUITTO_SEARCH_PATHS}")
+        message(WARNING "Set MOSQUITTO_SOURCE_TARBALL environment variable to specify location")
+        set(MOSQUITTO_SOURCE_TARBALL "mosquitto-2.0.18.tar.gz")
+    endif()
+endif()
+
+message(STATUS "Mosquitto source tarball: ${MOSQUITTO_SOURCE_TARBALL}")
 
 add_custom_target(mosquitto_broker ALL
     COMMAND ${CMAKE_COMMAND} -E echo "Building mosquitto broker (aarch64)..."
@@ -312,6 +342,13 @@ install(FILES ${CMAKE_BINARY_DIR}/image-stream-server
                    GROUP_READ GROUP_EXECUTE
                    WORLD_READ WORLD_EXECUTE
         OPTIONAL)
+
+# Install config.json to the install directory
+install(FILES ${CMAKE_SOURCE_DIR}/configs/config.json
+        DESTINATION ./configs
+        PERMISSIONS OWNER_READ OWNER_WRITE
+                   GROUP_READ
+                   WORLD_READ)
 
 # Use FILE(COPY) which preserves the actual files rather than symlinks
 install(CODE "

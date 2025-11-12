@@ -10,7 +10,7 @@ struct MqttPublisherCfg {
   std::string host{"127.0.0.1"};
   int         port{1883};
   std::string client_id{"xt5-gaze"};
-  std::string topic{"bs/xt5/device/analytics"};
+  std::string topic{"bs/argus/analytics"};
   int         qos{1};
   bool        retain{false};
   int         period_ms{1000};
