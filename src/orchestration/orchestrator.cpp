@@ -28,6 +28,7 @@
 #include "retinaface.h"
 #include "image_utils.h"
 #include "common.h"
+#include "output/publisher_factory.h"
 
 
 
@@ -283,6 +284,23 @@ bool Orchestrator::build_pipeline() noexcept {
   // Convert input to shared_ptr and assign to member variable
   input_  = std::shared_ptr<IInputSource>(std::move(input_tmp));
   
+  // Create and start publishers from configuration
+  if (!cfg_.publishers.empty()) {
+    LG_INFO("[orch] Creating %zu publisher(s) from configuration\n", cfg_.publishers.size());
+    auto pubs = make_async_publishers(cfg_.publishers);
+    for (auto& p : pubs) {
+      if (p && p->start()) {
+        publishers_.push_back(std::move(p));
+        LG_INFO("[orch] Started publisher successfully\n");
+      } else {
+        LG_WARN("[orch] Failed to start publisher\n");
+      }
+    }
+    LG_INFO("[orch] Active publishers: %zu\n", publishers_.size());
+  } else {
+    LG_INFO("[orch] No publishers configured\n");
+  }
+  
   return true;
 }
 
@@ -304,6 +322,14 @@ void Orchestrator::destroy_pipeline() noexcept {
     frame_writer_yolo_->flush();
     frame_writer_yolo_.reset();
   }
+  
+  // Stop and clear publishers
+  for (auto& pub : publishers_) {
+    if (pub) {
+      pub->stop();
+    }
+  }
+  publishers_.clear();
 }
 
 bool Orchestrator::start_threads_after_build() noexcept {
@@ -533,6 +559,57 @@ void Orchestrator::supervisor_loop() noexcept {
       recovery_backoff_ms = 250;  // Reset backoff when healthy
       last_recovery_attempt_ns = 0;
     }
+    
+    // Publish analytics results periodically (every second)
+    static int64_t last_publish_ns = 0;
+    static uint64_t last_publish_seq = 0;
+    const int64_t publish_interval_ns = 1'000'000'000LL;  // 1 second
+    if ((now - last_publish_ns) >= publish_interval_ns && !publishers_.empty()) {
+      const int64_t elapsed_ns = (last_publish_ns == 0) ? publish_interval_ns : (now - last_publish_ns);
+      const uint64_t current_seq = frame_seq_.load(std::memory_order_relaxed);
+      const uint64_t frames_processed = (last_publish_seq == 0) ? 0 : (current_seq - last_publish_seq);
+      
+      // Calculate actual FPS from frame processing
+      const int calculated_fps = (elapsed_ns > 0 && frames_processed > 0) 
+                                 ? static_cast<int>((frames_processed * 1'000'000'000LL) / elapsed_ns)
+                                 : 0;
+      
+      last_publish_ns = now;
+      last_publish_seq = current_seq;
+      
+      // Build PipelineResult from fusion state
+      PipelineResult result{};
+      {
+        std::lock_guard<std::mutex> lk(fusion_.m);
+        
+        // Count YOLOX person detections (class_id == 0 in COCO dataset)
+        // Also check confidence score to filter out low-confidence detections
+        int person_count = 0;
+        const float min_confidence = 0.5f;  // Minimum confidence threshold
+        for (const auto& det : fusion_.yolo_dets) {
+          if (det.class_id == 0 && det.score >= min_confidence) {  // 0 = person in COCO
+            person_count++;
+          }
+        }
+        result.people_count = person_count;
+        
+        // Count RetinaFace face detections (all faces are gaze candidates)
+        // RetinaFace detections already have confidence filtering applied
+        result.gaze_count = static_cast<int>(fusion_.face_dets.size());
+        
+        result.ts_ns = static_cast<uint64_t>(now);
+        result.seq = current_seq;
+        result.fps = calculated_fps;
+      }
+      
+      // Publish to all publishers
+      for (auto& pub : publishers_) {
+        if (pub) {
+          pub->publish_result(result);
+        }
+      }
+    }
+    
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
   }
 }

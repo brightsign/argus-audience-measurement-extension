@@ -69,6 +69,7 @@ struct PipelineResult {
   uint64_t ts_ns{0};        // timestamp in nanoseconds (for MQTT)
   int people_count{0};      // YOLOX: person detections
   int gaze_count{0};        // RetinaFace: faces looking at screen
+  int fps{0};               // Actual frame processing rate
   
   // Ensure proper default construction/destruction
   PipelineResult() = default;

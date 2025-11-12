@@ -239,6 +239,10 @@ int main(int argc, char** argv) {
         LG_INFO("Frame output not configured, enabling defaults: dir=/tmp max_frames=1 quality=85");
     }
     
+    // Copy publishers configuration
+    pc.publishers = appcfg.publishers;
+    LG_INFO("Configured %zu publisher(s)", pc.publishers.size());
+    
     if (pc.enable_frame_output && !pc.output_dir.empty()) {
         LG_INFO("Frame output enabled: dir=%s max_frames=%d quality=%d",
                 pc.output_dir.c_str(), pc.max_frames, pc.frame_quality);
@@ -249,15 +253,9 @@ int main(int argc, char** argv) {
             pc.input.rtsp_url.c_str(),
             pc.input.file_path.c_str());
    
-    // ---- Start embedded MQTT broker ----
-    MqttBroker::Cfg broker_cfg;
-    broker_cfg.port = 1883;
-    broker_cfg.bind_address = "0.0.0.0";
-    broker_cfg.allow_anonymous = true;
-    MqttBroker broker{broker_cfg};
-    if (!broker.start()) {
-        LG_WARN("Failed to start embedded MQTT broker (continuing without it)");
-    }
+    // ---- MQTT broker is managed by bsext_init (standalone daemon) ----
+    // No need to start embedded broker - connect to external broker instead
+    LG_INFO("MQTT broker is managed externally by bsext_init on port 1883");
 
     // ---- run ----
     Orchestrator orch{pc};

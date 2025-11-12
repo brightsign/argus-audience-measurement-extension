@@ -113,6 +113,55 @@ bool load_from_file(const std::string& path, AppConfig& out, bool /*strict*/, ch
       if (in.contains("file_path")) out.input.file_path = in["file_path"];
     }
     
+    // Parse publishers array
+    if (j.contains("publishers") && j["publishers"].is_array()) {
+      out.publishers.clear();
+      for (const auto& pub : j["publishers"]) {
+        PublisherConfig pc{};
+        
+        // Parse kind
+        if (pub.contains("kind") && pub["kind"].is_string()) {
+          std::string kind_str = pub["kind"].get<std::string>();
+          if (kind_str == "mqtt") pc.kind = PublisherKind::Mqtt;
+          else if (kind_str == "udp") pc.kind = PublisherKind::UDP;
+          else if (kind_str == "file") pc.kind = PublisherKind::File;
+          else if (kind_str == "stdout") pc.kind = PublisherKind::Stdout;
+        }
+        
+        // Parse MQTT config
+        if (pub.contains("mqtt") && pub["mqtt"].is_object()) {
+          const auto& mqtt = pub["mqtt"];
+          if (mqtt.contains("host")) pc.mqtt.host = mqtt["host"].get<std::string>();
+          if (mqtt.contains("port")) pc.mqtt.port = mqtt["port"].get<int>();
+          if (mqtt.contains("client_id")) pc.mqtt.client_id = mqtt["client_id"].get<std::string>();
+          if (mqtt.contains("topic")) pc.mqtt.topic = mqtt["topic"].get<std::string>();
+          if (mqtt.contains("qos")) pc.mqtt.qos = mqtt["qos"].get<int>();
+          if (mqtt.contains("retain")) pc.mqtt.retain = mqtt["retain"].get<bool>();
+          if (mqtt.contains("period_ms")) pc.mqtt.period_ms = mqtt["period_ms"].get<int>();
+          if (mqtt.contains("username")) pc.mqtt.username = mqtt["username"].get<std::string>();
+          if (mqtt.contains("password")) pc.mqtt.password = mqtt["password"].get<std::string>();
+          if (mqtt.contains("clean_session")) pc.mqtt.clean_session = mqtt["clean_session"].get<bool>();
+        }
+        
+        // Parse UDP config
+        if (pub.contains("udp") && pub["udp"].is_object()) {
+          const auto& udp = pub["udp"];
+          if (udp.contains("host")) pc.udp.host = udp["host"].get<std::string>();
+          if (udp.contains("port")) pc.udp.port = udp["port"].get<uint16_t>();
+        }
+        
+        // Parse File config
+        if (pub.contains("file") && pub["file"].is_object()) {
+          const auto& file = pub["file"];
+          if (file.contains("dir")) pc.file.dir = file["dir"].get<std::string>();
+          if (file.contains("rotate")) pc.file.rotate = file["rotate"].get<bool>();
+          if (file.contains("max_bytes")) pc.file.max_bytes = file["max_bytes"].get<size_t>();
+        }
+        
+        out.publishers.push_back(pc);
+      }
+    }
+    
     return true;
   } catch (const std::exception& ex) {
     if (err && err_sz) std::snprintf(err, err_sz, "JSON parse error: %s", ex.what());

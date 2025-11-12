@@ -73,8 +73,9 @@ bool MqttPublisher::publish_result(const PipelineResult& r) noexcept {
   // Collect people_count (YOLOX) and gaze_count (RetinaFace)
   people_       = r.people_count;
   gaze_         = r.gaze_count;
-  frames_accum_ += 1;
   last_ts_ns_   = r.ts_ns;
+  // Use FPS from PipelineResult instead of calculating from frames_accum_
+  frames_accum_ = r.fps;  // Store actual FPS in frames_accum_ for use in payload
   return true;
 }
 
@@ -86,8 +87,8 @@ bool MqttPublisher::publish_telemetry(const TelemetrySnapshot& t) noexcept {
 
 std::string MqttPublisher::make_payload_locked() const {
   // keep tiny and dependency-free (no nlohmann JSON)
-  const int fps = (frames_accum_ > 0 && cfg_.period_ms > 0)
-                ? (1000 * frames_accum_) / cfg_.period_ms : 0;
+  // Use frames_accum_ which now stores the actual FPS from PipelineResult
+  const int fps = frames_accum_;
   char buf[256];
   std::snprintf(buf, sizeof(buf),
     "{\"ts\":%llu,\"people\":%d,\"gaze\":%d,\"fps\":%d}",
@@ -102,7 +103,7 @@ void MqttPublisher::tick_publish() noexcept {
   {
     std::lock_guard<std::mutex> lk(m_);
     payload = make_payload_locked();
-    frames_accum_ = 0;
+    // Don't reset frames_accum_ here anymore - it holds the actual FPS
   }
   const int rc = mosquitto_publish(mq_, nullptr, cfg_.topic.c_str(),
                                    int(payload.size()), payload.data(),

@@ -16,6 +16,7 @@ SCRIPT_PATH=$(dirname $(realpath $0))
 DAEMON_NAME="bsext-argus"
 PIDFILE="/var/run/${DAEMON_NAME}.pid"
 STREAM_SERVER_PIDFILE="/var/run/bsext-image-stream-server.pid"
+MQTT_BROKER_PIDFILE="/var/run/bsext-mosquitto.pid"
 
 # defaults -- these can be overridden by environment variables
 DISABLE_AUTO_START=false
@@ -176,6 +177,38 @@ run_stream_server() {
     fi
 }
 
+run_mqtt_broker() {
+    echo "run_mqtt_broker called with background=$1"
+    local background=$1
+    local port=${2:-1883}  # Default MQTT port
+    echo "run_mqtt_broker called with port=${port}"
+    
+    SOC_NAME=$(get_soc_name)
+    SOC_HOME=${SCRIPT_PATH}/${SOC_NAME}
+    
+    # Create minimal mosquitto config if it doesn't exist
+    local mqtt_conf="/tmp/mosquitto_${port}.conf"
+    cat > ${mqtt_conf} <<EOF
+# Minimal mosquitto configuration for extension
+listener ${port} 0.0.0.0
+allow_anonymous true
+persistence false
+log_dest stdout
+log_type error
+log_type warning
+EOF
+    
+    if [ "$background" = "true" ]; then
+        # Run as a daemon in the background
+        echo "Starting MQTT broker on port ${port}"
+        start-stop-daemon --start --background --make-pidfile --pidfile ${MQTT_BROKER_PIDFILE} \
+                          --exec ${SOC_HOME}/bin/mosquitto -- -c ${mqtt_conf}
+    else
+        # Run directly in foreground
+        ${SOC_HOME}/bin/mosquitto -c ${mqtt_conf}
+    fi
+}
+
 setup_gstreamer_env() {
     echo "Setting up GStreamer environment for SOC: $SOC_NAME"
     export GST_PLUGIN_PATH=/var/volatile/bsext/ext_npu_argus/$SOC_NAME/lib/gstreamer-1.0:/usr/lib/gstreamer-1.0
@@ -208,6 +241,20 @@ do_start() {
 
     SOC_NAME=$(get_soc_name)
     setup_gstreamer_env
+
+    # Start MQTT broker first (so it's ready when attention_demo starts)
+    MQTT_PORT=1883  # default MQTT port
+    reg_mqtt_port=$(registry networking bs-mqtt-broker-port)
+    if [ -n "${reg_mqtt_port}" ] && [ "${reg_mqtt_port}" != "0" ]; then
+        MQTT_PORT=${reg_mqtt_port}
+    fi
+    
+    if [ "${MQTT_PORT}" != "0" ]; then
+        echo "Starting MQTT broker on port ${MQTT_PORT}"
+        run_mqtt_broker true ${MQTT_PORT}
+    else
+        echo "MQTT broker is disabled (port set to 0)"
+    fi
 
     # Start the attention_demo process as a daemon
     run_attention_demo true
@@ -294,6 +341,30 @@ do_stop() {
     if pgrep -f "image-stream-server" >/dev/null 2>&1; then
         echo "WARNING: image-stream-server still running, forcing kill by name..."
         pkill -9 -f "image-stream-server" || true
+        sleep 1
+    fi
+
+    # Stop mosquitto broker
+    if [ -f "${MQTT_BROKER_PIDFILE}" ]; then
+        echo "Stopping mosquitto broker (PID file: ${MQTT_BROKER_PIDFILE})"
+        local pid=$(cat ${MQTT_BROKER_PIDFILE} 2>/dev/null)
+        if [ -n "$pid" ]; then
+            echo "Killing process $pid with SIGKILL..."
+            kill -9 $pid 2>/dev/null || true
+            # Also kill any child processes
+            pkill -9 -P $pid 2>/dev/null || true
+        fi
+        rm -f ${MQTT_BROKER_PIDFILE}
+    else
+        echo "No PID file found for mosquitto, trying to kill by name..."
+        pkill -9 -f "mosquitto" || true
+    fi
+    
+    # Verify mosquitto is stopped
+    sleep 1
+    if pgrep -f "mosquitto" >/dev/null 2>&1; then
+        echo "WARNING: mosquitto still running, forcing kill by name..."
+        pkill -9 -f "mosquitto" || true
         sleep 1
     fi
     
@@ -394,7 +465,7 @@ case "$ACTION" in
         echo "  The environment is configured with LD_LIBRARY_PATH for MQTT utilities."
         echo "  You can run MQTT commands from any directory:"
         echo ""
-        echo "  mosquitto_sub -h 127.0.0.1 -p 1883 -t 'bs/xt5/device/analytics' -v"
+        echo "  mosquitto_sub -h 127.0.0.1 -p 1883 -t 'bs/argus/analytics' -v"
         echo "  mosquitto_pub -h 127.0.0.1 -p 1883 -t 'test/topic' -m 'message'"
         echo "  /var/volatile/bsext/ext_npu_argus/RK3588/bin/mosquitto -v"
         echo ""

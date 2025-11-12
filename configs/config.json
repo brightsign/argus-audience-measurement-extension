@@ -57,8 +57,15 @@
 
   "publishers": [
     {
-      "kind": "udp",
-      "udp": { "host": "127.0.0.1", "port": 5555 }
+      "kind": "mqtt",
+      "mqtt": {
+        "host": "localhost",
+        "port": 1883,
+        "topic": "bs/argus/analytics",
+        "qos": 0,
+        "retain": false,
+        "period_ms": 1000
+      }
     }
   ],
 
