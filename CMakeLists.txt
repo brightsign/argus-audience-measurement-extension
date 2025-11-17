@@ -239,6 +239,7 @@ target_link_libraries(attention_demo
 string(TOUPPER ${TARGET_SOC} SOC_DIR)
 
 # Build mosquitto broker (aarch64) from source for embedded deployment
+set(MOSQUITTO_VERSION "2.0.18")
 set(MOSQUITTO_SOURCE_DIR ${CMAKE_BINARY_DIR}/mosquitto-build)
 set(MOSQUITTO_BINARY ${MOSQUITTO_SOURCE_DIR}/bin/mosquitto)
 
@@ -248,9 +249,10 @@ if(DEFINED ENV{MOSQUITTO_SOURCE_TARBALL})
 else()
     # Try to find mosquitto tarball in common locations
     set(MOSQUITTO_SEARCH_PATHS
-        "${CMAKE_SOURCE_DIR}/brightsign-oe/build/downloads/mosquitto-2.0.18.tar.gz"
-        "${CMAKE_SOURCE_DIR}/../brightsign-oe/build/downloads/mosquitto-2.0.18.tar.gz"
-        "${CMAKE_SOURCE_DIR}/downloads/mosquitto-2.0.18.tar.gz"
+        "${CMAKE_SOURCE_DIR}/brightsign-oe/build/downloads/mosquitto-${MOSQUITTO_VERSION}.tar.gz"
+        "${CMAKE_SOURCE_DIR}/../brightsign-oe/build/downloads/mosquitto-${MOSQUITTO_VERSION}.tar.gz"
+        "${CMAKE_SOURCE_DIR}/downloads/mosquitto-${MOSQUITTO_VERSION}.tar.gz"
+        "${CMAKE_BINARY_DIR}/mosquitto-${MOSQUITTO_VERSION}.tar.gz"
     )
     
     foreach(SEARCH_PATH ${MOSQUITTO_SEARCH_PATHS})
@@ -260,10 +262,10 @@ else()
         endif()
     endforeach()
     
+    # If not found, we'll download it during build
     if(NOT MOSQUITTO_SOURCE_TARBALL)
-        message(WARNING "Mosquitto source tarball not found. Searched: ${MOSQUITTO_SEARCH_PATHS}")
-        message(WARNING "Set MOSQUITTO_SOURCE_TARBALL environment variable to specify location")
-        set(MOSQUITTO_SOURCE_TARBALL "mosquitto-2.0.18.tar.gz")
+        set(MOSQUITTO_SOURCE_TARBALL "${CMAKE_BINARY_DIR}/mosquitto-${MOSQUITTO_VERSION}.tar.gz")
+        message(STATUS "Mosquitto tarball not found locally - will download during build")
     endif()
 endif()
 
@@ -272,13 +274,22 @@ message(STATUS "Mosquitto source tarball: ${MOSQUITTO_SOURCE_TARBALL}")
 add_custom_target(mosquitto_broker ALL
     COMMAND ${CMAKE_COMMAND} -E echo "Building mosquitto broker (aarch64)..."
     COMMAND bash -c "set -e && \
+        TARBALL='${MOSQUITTO_SOURCE_TARBALL}' && \
+        if [ ! -f \"\$TARBALL\" ]; then \
+            echo 'Downloading mosquitto ${MOSQUITTO_VERSION}...' && \
+            curl -L -o \"\$TARBALL\" 'https://mosquitto.org/files/source/mosquitto-${MOSQUITTO_VERSION}.tar.gz' || \
+            wget -O \"\$TARBALL\" 'https://mosquitto.org/files/source/mosquitto-${MOSQUITTO_VERSION}.tar.gz' || \
+            { echo 'ERROR: Failed to download mosquitto. Install curl or wget.'; exit 1; }; \
+        fi && \
         mkdir -p '${MOSQUITTO_SOURCE_DIR}' && \
         cd '${MOSQUITTO_SOURCE_DIR}' && \
         if [ ! -f CMakeLists.txt ]; then \
             echo 'Extracting mosquitto source...' && \
-            tar -xzf '${MOSQUITTO_SOURCE_TARBALL}' --strip-components=1 && \
+            tar -xzf \"\$TARBALL\" --strip-components=1 && \
             echo 'Disabling man page generation...' && \
-            sed -i 's/add_subdirectory(man)/#add_subdirectory(man)/' CMakeLists.txt || true && \
+            sed -i 's/add_subdirectory(man)/#add_subdirectory(man)/' CMakeLists.txt || true; \
+        fi && \
+        if [ ! -f build/src/mosquitto ]; then \
             echo 'Configuring CMake for aarch64 cross-compilation...' && \
             mkdir -p build && \
             cd build && \
@@ -297,7 +308,7 @@ add_custom_target(mosquitto_broker ALL
             make -j\$(nproc) && \
             echo 'Mosquitto build completed successfully'; \
         else \
-            echo 'Mosquitto already built'; \
+            echo 'Mosquitto already built at ${MOSQUITTO_SOURCE_DIR}/build/src/mosquitto'; \
         fi"
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
     COMMENT "Building aarch64 mosquitto broker from source"
@@ -307,8 +318,8 @@ add_custom_target(mosquitto_broker ALL
 # Clone and build the Go image stream server using external script
 # --- Config (adjust if your paths differ) ---
 set(IMAGE_STREAM_SERVER_DIR "${CMAKE_BINARY_DIR}/bs-image-stream-server")
-# Match the repo's build output path/name (from Makefile: cmd/image-stream-server-arm64)
-set(IMAGE_STREAM_SERVER_BINARY "${IMAGE_STREAM_SERVER_DIR}/cmd/image-stream-server-arm64")
+# Match the repo's build output path/name (from Makefile: bin/image-stream-server-arm64)
+set(IMAGE_STREAM_SERVER_BINARY "${IMAGE_STREAM_SERVER_DIR}/bin/image-stream-server-arm64")
 
 add_custom_target(image_stream_server ALL
   COMMAND ${CMAKE_COMMAND} -E echo "Cloning and building bs-image-stream-server (auto toolchain if needed)..."
