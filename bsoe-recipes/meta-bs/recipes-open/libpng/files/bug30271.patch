@@ -1,0 +1,31 @@
+png_push_save_buffer: Grow buffer rather more speedily BS#30271
+
+Growing the buffer by only 256 bytes each time is very slow, when the contents
+need to be copied to the new buffer every time. Let's grow by 64K each time.
+
+This speeds up displaying the large-itxt.png file from ~7s to ~0.5s.
+
+Upstream-Status: unsuitable
+
+diff --git a/pngpread.c b/pngpread.c
+index fbe361dc3..5d1ab1038 100644
+--- a/pngpread.c
++++ b/pngpread.c
+@@ -484,14 +484,15 @@ png_push_save_buffer(png_structrp png_ptr)
+    {
+       png_size_t new_max;
+       png_bytep old_buffer;
++      const png_size_t growth = 65536;
+ 
+       if (png_ptr->save_buffer_size > PNG_SIZE_MAX -
+-          (png_ptr->current_buffer_size + 256))
++          (png_ptr->current_buffer_size + growth))
+       {
+          png_error(png_ptr, "Potential overflow of save_buffer");
+       }
+ 
+-      new_max = png_ptr->save_buffer_size + png_ptr->current_buffer_size + 256;
++      new_max = png_ptr->save_buffer_size + png_ptr->current_buffer_size + growth;
+       old_buffer = png_ptr->save_buffer;
+       png_ptr->save_buffer = (png_bytep)png_malloc_warn(png_ptr,
+           (png_size_t)new_max);
