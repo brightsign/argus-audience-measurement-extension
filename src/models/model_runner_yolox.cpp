@@ -201,19 +201,72 @@ bool RKNNYoloXRunner::infer(const FrameView& in, InferenceOutputs& out) noexcept
 
     // ---- Convert YOLOX output to generic Detection array ----
     // Map object_detect_result_list to Detection vector
+    // V6.2.3.2: CRITICAL - De-letterbox coordinates back to original frame space
+    // YOLOX runs on 640x640 letterbox input, but tracker needs original camera coords
     dets_.clear();
     dets_.reserve(p_->od_results.count);
+    
+    // V6.2.3.5.5: Use ACTUAL model dimensions from RKNN, not hardcoded 640x640!
+    // The model input is 320x320 (read from spec_.input_size during load())
+    const int orig_w = (in.orig_width > 0) ? in.orig_width : in.width;
+    const int orig_h = (in.orig_height > 0) ? in.orig_height : in.height;
+    const int model_w = p_->in_w;  // Actual RKNN model input width (e.g., 320)
+    const int model_h = p_->in_h;  // Actual RKNN model input height (e.g., 320)
+    
+    // Compute letterbox parameters used during preprocessing
+    // For 640x480 camera -> 320x320 model: scale=0.5, letterbox=320x240, pad=(0,40)
+    const float scale = std::min(float(model_w) / orig_w, float(model_h) / orig_h);
+    const int letterbox_w = int(orig_w * scale);
+    const int letterbox_h = int(orig_h * scale);
+    const int pad_x = (model_w - letterbox_w) / 2;
+    const int pad_y = (model_h - letterbox_h) / 2;
+    
+    // V6.2.3.2: Debug logging (first 3 frames only)
+    static int debug_deletter_count = 0;
+    if (debug_deletter_count < 3 && p_->od_results.count > 0) {
+        LG_INFO("[YOLOX] De-letterbox: orig=%dx%d model=%dx%d scale=%.3f letterbox=%dx%d pad=(%d,%d)",
+                orig_w, orig_h, model_w, model_h, scale, letterbox_w, letterbox_h, pad_x, pad_y);
+        debug_deletter_count++;
+    }
     
     for (int i = 0; i < p_->od_results.count; ++i) {
         const auto& obj_det = p_->od_results.results[i];
         
+        // Boxes from RKNN are in letterboxed 640x640 space
+        float x0_letter = static_cast<float>(obj_det.box.left);
+        float y0_letter = static_cast<float>(obj_det.box.top);
+        float x1_letter = static_cast<float>(obj_det.box.right);
+        float y1_letter = static_cast<float>(obj_det.box.bottom);
+        
+        // De-letterbox: remove padding, scale back to original frame
         Detection d;
-        d.x0 = static_cast<float>(obj_det.box.left);
-        d.y0 = static_cast<float>(obj_det.box.top);
-        d.x1 = static_cast<float>(obj_det.box.right);
-        d.y1 = static_cast<float>(obj_det.box.bottom);
+        d.x0 = (x0_letter - pad_x) / scale;
+        d.y0 = (y0_letter - pad_y) / scale;
+        d.x1 = (x1_letter - pad_x) / scale;
+        d.y1 = (y1_letter - pad_y) / scale;
+        
+        // V6.2.3.5.2: Debug - log what we're getting from RKNN BEFORE assignment
+        if (debug_deletter_count <= 3 && i < 2) {
+            LG_INFO("[YOLOX-DEBUG] Det#%d: FROM RKNN: cls_id=%d prop=%.2f name='%s'",
+                    i, obj_det.cls_id, obj_det.prop, obj_det.name);
+        }
+        
+        // Set class_id and score FIRST (before any logging or clamping)
         d.score = obj_det.prop;
         d.class_id = obj_det.cls_id;
+        
+        // V6.2.3.2: Debug first few detections to verify de-letterbox
+        if (debug_deletter_count <= 3 && i < 2) {
+            LG_INFO("[YOLOX] Det#%d: letterbox=(%.1f,%.1f,%.1f,%.1f) -> camera=(%.1f,%.1f,%.1f,%.1f) class=%d score=%.2f",
+                    i, x0_letter, y0_letter, x1_letter, y1_letter,
+                    d.x0, d.y0, d.x1, d.y1, d.class_id, d.score);
+        }
+        
+        // Clamp to original frame bounds (handle edge cases)
+        d.x0 = std::max(0.0f, std::min(float(orig_w), d.x0));
+        d.y0 = std::max(0.0f, std::min(float(orig_h), d.y0));
+        d.x1 = std::max(0.0f, std::min(float(orig_w), d.x1));
+        d.y1 = std::max(0.0f, std::min(float(orig_h), d.y1));
         
         dets_.push_back(d);
     }

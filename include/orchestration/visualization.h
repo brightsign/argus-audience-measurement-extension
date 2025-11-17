@@ -10,10 +10,15 @@ namespace visualization {
 
 // Draw bounding boxes, landmarks, and labels on RGB frame
 // Saves debug JPEG every Nth frame to /tmp/output.jpg
+// V6.2.3.2: Added orig_width/orig_height to scale coordinates for visualization
+// V6.2.3.5.7: Added second_runner to draw detections from multiple models on same frame
 void process_inference_results(
     IModelRunner* runner,
     cv::Mat& rgb_mat,
-    uint32_t& debug_frame_idx) noexcept;
+    uint32_t& debug_frame_idx,
+    int orig_width = 0,
+    int orig_height = 0,
+    IModelRunner* second_runner = nullptr) noexcept;
 
 // Save frame as JPEG every Nth frame (controlled by frame_idx % 3)
 void save_debug_jpg(

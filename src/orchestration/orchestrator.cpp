@@ -208,6 +208,29 @@ bool Orchestrator::build_pipeline() noexcept {
   // Start capturing the frames
   if (!input_tmp->start()) { LG_ERROR("[orch] input->start() failed\n"); input_tmp->close(); source_health_.markBroken(); return false; }
 
+  // Get first frame to determine frame size for tracker ROI
+  FrameView first_frame{};
+  FetchStatus st = input_tmp->tryFetch(first_frame);
+  if (st == FetchStatus::Ok && first_frame.width > 0 && first_frame.height > 0) {
+    person_tracker_.set_frame_size(first_frame.width, first_frame.height);
+    // V6.2: Store frame dimensions in fusion state for normalized speed
+    {
+      std::lock_guard<std::mutex> lk(fusion_.m);
+      fusion_.frame_width = first_frame.width;
+      fusion_.frame_height = first_frame.height;
+    }
+    LG_INFO("[orch] Tracker frame size set: %dx%d\n", first_frame.width, first_frame.height);
+  } else {
+    // Fallback to default if fetch fails
+    person_tracker_.set_frame_size(640, 480);
+    {
+      std::lock_guard<std::mutex> lk(fusion_.m);
+      fusion_.frame_width = 640;
+      fusion_.frame_height = 480;
+    }
+    LG_WARN("[orch] Could not fetch frame size, using default 640x480\n");
+  }
+
   last_heartbeat_ns_.store(now_ns(), std::memory_order_relaxed);
   LG_INFO("make model runners (primary: face, secondary: yolo)\n");
   
@@ -261,12 +284,11 @@ bool Orchestrator::build_pipeline() noexcept {
   // Create separate frame writers for each model (both write to same dir)
   if (cfg_.enable_frame_output && !cfg_.output_dir.empty()) {
     try {
-      // RetinaFace writer
-      frame_writer_face_ = make_frame_writer_disk(cfg_.output_dir, cfg_.max_frames, cfg_.frame_quality);
-      LG_INFO("[orch] Face frame writer enabled: output_dir=%s max_frames=%d quality=%d\n",
-              cfg_.output_dir.c_str(), cfg_.max_frames, cfg_.frame_quality);
+      // V6.2.3.5.7: Face writer DISABLED - YOLOX worker will draw both models' detections
+      frame_writer_face_ = make_frame_writer_null();
+      LG_INFO("[orch] Face frame writer DISABLED (YOLOX worker draws combined output)\n");
       
-      // YOLOX writer
+      // V6.2.3.5.7: YOLOX writer enabled - draws both face + person detections
       frame_writer_yolo_ = make_frame_writer_disk(cfg_.output_dir, cfg_.max_frames, cfg_.frame_quality);
       LG_INFO("[orch] YOLO frame writer enabled: output_dir=%s max_frames=%d quality=%d\n",
               cfg_.output_dir.c_str(), cfg_.max_frames, cfg_.frame_quality);
@@ -284,10 +306,18 @@ bool Orchestrator::build_pipeline() noexcept {
   // Convert input to shared_ptr and assign to member variable
   input_  = std::shared_ptr<IInputSource>(std::move(input_tmp));
   
+  // Initialize device and stream identifiers before creating publishers
+  device_id_ = "XS-156";  // TODO: Get from config
+  stream_id_ = cfg_.input.usb_device.empty() ? 
+               cfg_.input.rtsp_url : cfg_.input.usb_device;
+  if (stream_id_.empty() && !cfg_.input.file_path.empty()) {
+    stream_id_ = cfg_.input.file_path;
+  }
+  
   // Create and start publishers from configuration
   if (!cfg_.publishers.empty()) {
     LG_INFO("[orch] Creating %zu publisher(s) from configuration\n", cfg_.publishers.size());
-    auto pubs = make_async_publishers(cfg_.publishers);
+    auto pubs = make_async_publishers(cfg_.publishers, 64, device_id_, stream_id_);
     for (auto& p : pubs) {
       if (p && p->start()) {
         publishers_.push_back(std::move(p));
@@ -300,6 +330,10 @@ bool Orchestrator::build_pipeline() noexcept {
   } else {
     LG_INFO("[orch] No publishers configured\n");
   }
+  
+  // Log tracker initialization
+  LG_INFO("[orch] Person tracker initialized (device=%s stream=%s)\n",
+          device_id_.c_str(), stream_id_.c_str());
   
   return true;
 }
@@ -579,8 +613,13 @@ void Orchestrator::supervisor_loop() noexcept {
       
       // Build PipelineResult from fusion state
       PipelineResult result{};
+      std::vector<Detection> yolo_dets_copy;  // Copy for tracker update
+      std::vector<TrackedBox> tracks;  // Tracking results
       {
         std::lock_guard<std::mutex> lk(fusion_.m);
+        
+        // Copy YOLOX detections for tracker
+        yolo_dets_copy = fusion_.yolo_dets;
         
         // Count YOLOX person detections (class_id == 0 in COCO dataset)
         // Also check confidence score to filter out low-confidence detections
@@ -600,6 +639,104 @@ void Orchestrator::supervisor_loop() noexcept {
         result.ts_ns = static_cast<uint64_t>(now);
         result.seq = current_seq;
         result.fps = calculated_fps;
+        result.frame_width = fusion_.frame_width;   // V6.2: For normalized speed
+        result.frame_height = fusion_.frame_height; // V6.2: For normalized speed
+      }
+      
+      // Update person tracker with YOLOX detections (outside lock)
+      {
+        // Filter person detections for tracker with enhanced thresholds
+        std::vector<Detection> people;
+        people.reserve(yolo_dets_copy.size());
+        for (const auto& det : yolo_dets_copy) {
+          // Apply stricter filtering: class, score, and area
+          if (det.class_id != 0) continue;  // Person only
+          if (det.score < 0.50f) continue;  // Raised to 0.50 for quality
+          
+          // Calculate bbox area
+          int w = static_cast<int>(det.x1 - det.x0);
+          int h = static_cast<int>(det.y1 - det.y0);
+          int area = w * h;
+          if (area < 1600) continue;  // ~40x40 minimum
+          
+          people.push_back(det);
+        }
+        
+        // Simple NMS to remove duplicate detections (IoU > 0.5)
+        // Sort by score descending
+        std::sort(people.begin(), people.end(), 
+                  [](const Detection& a, const Detection& b) { return a.score > b.score; });
+        
+        std::vector<Detection> nms_filtered;
+        nms_filtered.reserve(people.size());
+        std::vector<bool> suppressed(people.size(), false);
+        
+        for (size_t i = 0; i < people.size(); ++i) {
+          if (suppressed[i]) continue;
+          nms_filtered.push_back(people[i]);
+          
+          // Suppress overlapping boxes
+          for (size_t j = i + 1; j < people.size(); ++j) {
+            if (suppressed[j]) continue;
+            
+            // Calculate IoU
+            float x0 = std::max(people[i].x0, people[j].x0);
+            float y0 = std::max(people[i].y0, people[j].y0);
+            float x1 = std::min(people[i].x1, people[j].x1);
+            float y1 = std::min(people[i].y1, people[j].y1);
+            float inter_w = std::max(0.f, x1 - x0);
+            float inter_h = std::max(0.f, y1 - y0);
+            float inter = inter_w * inter_h;
+            
+            float area_i = (people[i].x1 - people[i].x0) * (people[i].y1 - people[i].y0);
+            float area_j = (people[j].x1 - people[j].x0) * (people[j].y1 - people[j].y0);
+            float uni = area_i + area_j - inter;
+            float iou = (uni > 0) ? (inter / uni) : 0.f;
+            
+            if (iou > 0.5f) {
+              suppressed[j] = true;
+            }
+          }
+        }
+        
+        // Update tracker with filtered detections
+        const double ts_s = now * 1e-9;  // Convert nanoseconds to seconds
+        tracks = person_tracker_.update(nms_filtered, ts_s);
+        
+        // Emission cache: hold last non-empty tracks for brief detector misses
+        constexpr double HOLD_TTL_S = 0.5;  // 500ms hold time
+        
+        std::vector<TrackedBox> tracks_to_emit;
+        bool is_stale = false;
+        
+        if (!tracks.empty()) {
+          // Fresh tracks available
+          tracks_to_emit = tracks;
+          emit_cache_.last_nonempty = tracks;
+          emit_cache_.last_nonempty_ts = ts_s;
+        } else if ((ts_s - emit_cache_.last_nonempty_ts) <= HOLD_TTL_S) {
+          // No fresh tracks, but within hold period - reuse last
+          tracks_to_emit = emit_cache_.last_nonempty;
+          is_stale = true;
+        } else {
+          // Beyond hold period - emit empty
+          tracks_to_emit.clear();
+        }
+        
+        // Store tracks in fusion state for other consumers
+        {
+          std::lock_guard<std::mutex> lk(fusion_.m);
+          fusion_.tracks = tracks_to_emit;
+        }
+        
+        // Add tracks to PipelineResult for publishers
+        result.person_tracks = tracks_to_emit;
+        
+        // Override people_count to match emitted tracks (not raw detections)
+        result.people_count = static_cast<int>(tracks_to_emit.size());
+        
+        // TODO: Could add stale flag to PipelineResult if needed for telemetry
+        // result.tracks_stale = is_stale;
       }
       
       // Publish to all publishers
@@ -825,6 +962,10 @@ bool Orchestrator::recover_pipeline(int64_t now_ns_val) noexcept {
     last_heartbeat_ns_.store(now_ns(), std::memory_order_release);
     state_.store(OrchestratorState::Running, std::memory_order_release);
 
+    // Reset person tracker after successful recovery
+    person_tracker_.reset();
+    LG_INFO("recover_pipeline:tracker reset\n");
+
     LG_INFO("recover_pipeline:pipeline restored on %s, running again\n",
             device_desc.c_str());
     return true;
@@ -955,14 +1096,16 @@ void Orchestrator::yolo_loop_threadfn() noexcept {
             &mb_yolo_
         );
 
+        // V6.2.3.5.7: Pass face_runner as second_runner so YOLOX worker draws both models
         // Use generic inference worker loop (handles frame fetch, inference, visualization, storage)
         inference_worker::run_inference_loop(
             yolo_runner_.get(),
             mb_wrapper,
             reinterpret_cast<FusionResults*>(&fusion_),
-            frame_writer_yolo_.get(),  // YOLOX also writes output (secondary model)
+            frame_writer_yolo_.get(),  // YOLOX writer draws combined output (face + person)
             config,
-            stop_yolo_);
+            stop_yolo_,
+            face_runner_.get());  // Second runner for combined visualization
 
         LG_INFO("yolo_loop:stop");
     } catch (const std::exception& e) {

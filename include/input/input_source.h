@@ -19,6 +19,10 @@ struct FrameView {
   uint8_t* plane0{nullptr};
   uint8_t* plane1{nullptr};       // nullptr when single-planar
   int64_t pts_ns{0};              // capture PTS in nanoseconds
+  // V6.2.3.2: Original camera frame dimensions (before resize to model input size)
+  // Used for de-letterboxing YOLOX detections back to camera coordinate space
+  int orig_width{0};     // Original camera width (e.g., 1280)
+  int orig_height{0};    // Original camera height (e.g., 720)
   //ColorLayout fmt{ColorLayout::NV12};
 };
 

@@ -45,36 +45,32 @@ static bool resize_frame_rga(
         return true;
     }
 
-    // Try RGA first (hardware acceleration)
+    // V6.2.3.4: CRITICAL FIX - Do letterbox resize, not stretch!
+    // YOLOX expects letterboxed input (maintain aspect ratio + black padding)
+    // Previous code was stretching/squashing, causing wrong detections
+    
+    // Calculate letterbox parameters
+    float scale = std::min(float(dst_w) / src_w, float(dst_h) / src_h);
+    int letterbox_w = int(src_w * scale);
+    int letterbox_h = int(src_h * scale);
+    int pad_x = (dst_w - letterbox_w) / 2;
+    int pad_y = (dst_h - letterbox_h) / 2;
+    
+    // Resize destination buffer to target size and fill with black
     if (dst_buf.size() != size_t(dst_w) * dst_h * 3) {
         dst_buf.resize(size_t(dst_w) * dst_h * 3);
     }
-
-    rga_buffer_t src_rga = wrapbuffer_virtualaddr(
-        const_cast<uint8_t*>(src_bgr.data()), src_w, src_h, RK_FORMAT_BGR_888);
-    rga_buffer_t dst_rga = wrapbuffer_virtualaddr(
-        dst_buf.data(), dst_w, dst_h, RK_FORMAT_BGR_888);
-
-    double fx = dst_w / (double)src_w;
-    double fy = dst_h / (double)src_h;
-    int ret = imresize(src_rga, dst_rga, fx, fy, 0, IM_SYNC);
+    std::fill(dst_buf.begin(), dst_buf.end(), 0);  // Black padding
     
-    if (ret == IM_STATUS_SUCCESS) {
-        return true;  // RGA succeeded
-    }
-    
-    // RGA failed, fall back to OpenCV (software resize)
-    // This is slower but works on all platforms (RK3576 RGA3 has issues with virtual addresses)
-    static bool logged_fallback = false;
-    if (!logged_fallback) {
-        LG_WARN("resize_frame_rga: RGA failed (%s), falling back to OpenCV resize (slower)",
-                imStrError((IM_STATUS)ret));
-        logged_fallback = true;
-    }
-    
+    // Use OpenCV for letterbox resize (RGA doesn't support offset/padding easily)
     cv::Mat src_mat(src_h, src_w, CV_8UC3, const_cast<uint8_t*>(src_bgr.data()));
-    cv::Mat dst_mat(dst_h, dst_w, CV_8UC3, dst_buf.data());
-    cv::resize(src_mat, dst_mat, cv::Size(dst_w, dst_h), 0, 0, cv::INTER_LINEAR);
+    cv::Mat dst_full(dst_h, dst_w, CV_8UC3, dst_buf.data());
+    
+    // Create ROI in destination for the letterboxed image (skip padding area)
+    cv::Mat dst_roi = dst_full(cv::Rect(pad_x, pad_y, letterbox_w, letterbox_h));
+    
+    // Resize source to fit in ROI (maintains aspect ratio)
+    cv::resize(src_mat, dst_roi, cv::Size(letterbox_w, letterbox_h), 0, 0, cv::INTER_LINEAR);
     
     return true;
 }
@@ -93,6 +89,9 @@ static void prepare_frame_view(
     fv_in.stride0 = dst_w * 3;
     fv_in.plane0  = const_cast<uint8_t*>(bgr_buf.data());
     fv_in.pts_ns  = sf->pts_ns;
+    // V6.2.3.2: Store original camera dimensions for de-letterboxing
+    fv_in.orig_width  = sf->width;
+    fv_in.orig_height = sf->height;
 }
 
 // Local helper: Store inference results in fusion output
@@ -125,11 +124,13 @@ void run_inference_loop(
     FusionResults* fusion_output,
     IFrameWriter* frame_writer,
     const WorkerConfig& config,
-    const std::atomic<bool>& stop_flag) noexcept
+    const std::atomic<bool>& stop_flag,
+    IModelRunner* second_runner) noexcept
 {
     try {
-        LG_INFO("inference_worker: start (%s, skip_frames=%d)",
-                config.model_name.c_str(), config.skip_frames);
+        LG_INFO("inference_worker: start (%s, skip_frames=%d%s)",
+                config.model_name.c_str(), config.skip_frames,
+                second_runner ? " with second_runner" : "");
 
         if (!runner) {
             LG_ERROR("inference_worker: runner is null");
@@ -206,8 +207,11 @@ void run_inference_loop(
             }
 
             // Draw overlays and save debug JPEG
+            // V6.2.3.2: Pass original dimensions so visualization can scale coordinates
+            // V6.2.3.5.7: Pass second_runner to draw detections from both models on same frame
             cv::Mat rgb_mat(dst_h, dst_w, CV_8UC3, rgb_resized_buf.data());
-            visualization::process_inference_results(runner, rgb_mat, debug_frame_idx);
+            visualization::process_inference_results(runner, rgb_mat, debug_frame_idx,
+                                                     sf->width, sf->height, second_runner);
 
             // Write frame to disk if writer is available
             if (frame_writer) {

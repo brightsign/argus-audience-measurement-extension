@@ -76,6 +76,10 @@ bool MqttPublisher::publish_result(const PipelineResult& r) noexcept {
   last_ts_ns_   = r.ts_ns;
   // Use FPS from PipelineResult instead of calculating from frames_accum_
   frames_accum_ = r.fps;  // Store actual FPS in frames_accum_ for use in payload
+  frame_width_  = r.frame_width;   // V6.2: Store for normalized speed
+  frame_height_ = r.frame_height;  // V6.2: Store for normalized speed
+  // Store person tracks
+  tracks_ = r.person_tracks;
   return true;
 }
 
@@ -86,15 +90,54 @@ bool MqttPublisher::publish_telemetry(const TelemetrySnapshot& t) noexcept {
 }
 
 std::string MqttPublisher::make_payload_locked() const {
-  // keep tiny and dependency-free (no nlohmann JSON)
-  // Use frames_accum_ which now stores the actual FPS from PipelineResult
+  // Build enhanced JSON with tracking data
   const int fps = frames_accum_;
-  char buf[256];
-  std::snprintf(buf, sizeof(buf),
-    "{\"ts\":%llu,\"people\":%d,\"gaze\":%d,\"fps\":%d}",
-    (unsigned long long)(last_ts_ns_ / 1000000ULL),
-    people_, gaze_, fps);
-  return std::string(buf);
+  const double ts_s = last_ts_ns_ * 1e-9;  // Convert ns to seconds
+  
+  // CRITICAL FIX: Derive people count from actual tracks we're about to emit
+  // This prevents mismatch between people:N and empty tracks array
+  const int people_count = static_cast<int>(tracks_.size());
+  
+  std::string payload;
+  payload.reserve(512 + tracks_.size() * 128);  // Pre-allocate for efficiency
+  
+  // Build JSON: {ts, device, stream, people, gaze, fps, tracks:[...]}
+  // Use tracks_.size() directly as people count to ensure they match
+  char header[256];
+  std::snprintf(header, sizeof(header),
+    "{\"ts\":%.2f,\"device\":\"%s\",\"stream\":\"%s\",\"people\":%d,\"gaze\":%d,\"fps\":%d,\"tracks\":[",
+    ts_s,
+    cfg_.device_id.c_str(),
+    cfg_.stream_id.c_str(),
+    people_count,  // Use actual track count, not people_ field
+    gaze_, fps);
+  payload += header;
+  
+  // Add each track
+  for (size_t i = 0; i < tracks_.size(); ++i) {
+    const auto& t = tracks_[i];
+    
+    // V6.2: Calculate normalized speed (% of frame width per second)
+    float speed_norm = (frame_width_ > 0) ? (t.speed / float(frame_width_)) : 0.0f;
+    
+    char buf[384];  // Increased buffer for additional fields
+    std::snprintf(buf, sizeof(buf),
+      "{\"id\":%d,\"bbox\":[%.1f,%.1f,%.1f,%.1f],\"score\":%.2f,"
+      "\"dir\":\"%s\",\"deg\":%.1f,\"dir_conf\":%.2f,"
+      "\"speed\":%.1f,\"speed_norm\":%.3f,"
+      "\"dwell\":%.2f,\"enter\":%s,\"exit\":%s}",
+      t.id, t.x0, t.y0, t.x1, t.y1, t.score,
+      t.dir_label, t.dir_deg, t.dir_conf,
+      t.speed, speed_norm,
+      t.dwell_s,
+      t.just_entered ? "true" : "false",
+      t.just_exited ? "true" : "false");
+    if (i > 0) payload += ",";
+    payload += buf;
+  }
+  
+  payload += "]}";
+  return payload;
 }
 
 void MqttPublisher::tick_publish() noexcept {

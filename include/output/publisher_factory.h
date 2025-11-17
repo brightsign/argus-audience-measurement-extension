@@ -11,7 +11,9 @@
 #include "config/publisher_config.h"  // from your Configuration module
 
 // Build one publisher from config
-inline PublisherPtr make_publisher(const PublisherConfig& cfg) {
+inline PublisherPtr make_publisher(const PublisherConfig& cfg, 
+                                  const std::string& device_id = "xt5-01",
+                                  const std::string& stream_id = "/dev/video1") {
   switch (cfg.kind) {
     case PublisherKind::UDP:
       return std::make_unique<UdpJsonPublisher>(UdpEndpoint{cfg.udp.host, cfg.udp.port});
@@ -28,6 +30,8 @@ inline PublisherPtr make_publisher(const PublisherConfig& cfg) {
       mc.username     = cfg.mqtt.username;
       mc.password     = cfg.mqtt.password;
       mc.clean_session= cfg.mqtt.clean_session;
+      mc.device_id    = device_id;  // Set device identifier
+      mc.stream_id    = stream_id;  // Set stream identifier
       return std::make_unique<MqttPublisher>(mc);
     }
     
@@ -42,11 +46,13 @@ inline PublisherPtr make_publisher(const PublisherConfig& cfg) {
 
 // Build and wrap publishers with AsyncPublisher
 inline std::vector<PublisherPtr> make_async_publishers(const std::vector<PublisherConfig>& cfgs,
-                                                       size_t queue_capacity = 64) {
+                                                       size_t queue_capacity = 64,
+                                                       const std::string& device_id = "xt5-01",
+                                                       const std::string& stream_id = "/dev/video1") {
   std::vector<PublisherPtr> out;
   out.reserve(cfgs.size());
   for (const auto& c : cfgs) {
-    if (auto p = make_publisher(c)) {
+    if (auto p = make_publisher(c, device_id, stream_id)) {
       auto ap = std::make_unique<AsyncPublisher>(std::move(p), AsyncPublisher::Config{queue_capacity});
       out.emplace_back(std::move(ap));
     }
