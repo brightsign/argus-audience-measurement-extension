@@ -40,12 +40,14 @@ struct WorkerConfig {
 // - Draws overlays and saves debug JPEGs
 // - Stores results in fusion output
 // - Respects stop_flag for clean shutdown
+// V6.2.3.5.7: Added second_runner to draw detections from multiple models on same frame
 void run_inference_loop(
     IModelRunner* runner,
     std::shared_ptr<FrameMailbox> frame_mailbox,
     FusionResults* fusion_output,
     IFrameWriter* frame_writer,
     const WorkerConfig& config,
-    const std::atomic<bool>& stop_flag) noexcept;
+    const std::atomic<bool>& stop_flag,
+    IModelRunner* second_runner = nullptr) noexcept;
 
 } // namespace inference_worker

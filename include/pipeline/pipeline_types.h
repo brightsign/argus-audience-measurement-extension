@@ -6,6 +6,7 @@
 #include <string>
 #include <memory>
 #include "models/model_runner.h"
+#include "tracking/tracker.h"  // For TrackedBox complete definition
 
 // Reuse your Resource and Model types where included
 enum class PixFmt : uint8_t { NV12, RGB24, BGR24, GRAY8 };
@@ -63,13 +64,16 @@ struct Track {
 };
 
 struct PipelineResult {
-  std::vector<Track> tracks;
+  std::vector<Track> tracks;  // Legacy field (can deprecate)
+  std::vector<TrackedBox> person_tracks;  // Person tracking with stable IDs
   int64_t pts_ns{0};
   uint64_t seq{0};
   uint64_t ts_ns{0};        // timestamp in nanoseconds (for MQTT)
   int people_count{0};      // YOLOX: person detections
   int gaze_count{0};        // RetinaFace: faces looking at screen
   int fps{0};               // Actual frame processing rate
+  int frame_width{0};       // V6.2: Frame width for normalized speed
+  int frame_height{0};      // V6.2: Frame height for normalized speed
   
   // Ensure proper default construction/destruction
   PipelineResult() = default;

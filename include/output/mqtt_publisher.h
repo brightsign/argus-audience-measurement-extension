@@ -1,10 +1,12 @@
 #pragma once
 #include "output/publisher_v2.h"
+#include "tracking/tracker.h"  // For TrackedBox
 #include <mosquitto.h>
 #include <atomic>
 #include <mutex>
 #include <thread>
 #include <string>
+#include <vector>
 
 struct MqttPublisherCfg {
   std::string host{"127.0.0.1"};
@@ -17,6 +19,8 @@ struct MqttPublisherCfg {
   std::string username{};
   std::string password{};
   bool        clean_session{true};
+  std::string device_id{"xt5-01"};     // Device identifier for JSON
+  std::string stream_id{"/dev/video1"}; // Stream identifier for JSON
 };
 
 class MqttPublisher final : public IPublisher {
@@ -45,5 +49,8 @@ private:
   int      people_{0};
   int      gaze_{0};
   int      frames_accum_{0};
+  int      frame_width_{640};   // V6.2: For normalized speed
+  int      frame_height_{480};  // V6.2: For normalized speed
   uint64_t last_ts_ns_{0};
+  std::vector<TrackedBox> tracks_;  // Person tracks with stable IDs
 };

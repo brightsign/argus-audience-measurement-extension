@@ -16,6 +16,7 @@
 #include "output/frame_writer.h"
 #include "config/publisher_config.h"
 #include "output/publisher_v2.h"
+#include "tracking/tracker.h"
 
 // Optional: describe how to build the pipeline
 struct PipelineConfig {
@@ -143,6 +144,13 @@ private:
     // Object/person detections (from YOLOX thread)
     std::vector<Detection> yolo_dets;
     uint64_t yolo_seq{0};
+
+    // Person tracks with stable IDs
+    std::vector<TrackedBox> tracks;
+    
+    // V6.2: Frame dimensions for normalized speed
+    int frame_width{640};
+    int frame_height{480};
   } fusion_;
 
   // health/backoff for the source pipeline
@@ -157,6 +165,39 @@ private:
   
   // Publishers for analytics (MQTT, UDP, etc.)
   std::vector<PublisherPtr> publishers_;
+
+  // Person tracker with stable GUID assignment
+  Tracker person_tracker_{TrackerConfig{
+    .iou_match_thresh    = 0.35f,       // IoU threshold for association
+    .confirm_hits        = 3,           // Need 3 hits to confirm
+    .max_missed          = 12,          // ~0.4s @ 30fps before deletion
+    .min_det_score       = 0.50f,       // Raised to 0.50 for quality
+    .min_area_px         = 1600,        // Kill tiny boxes (~40x40)
+    .motion_eps_px       = 0.8f,        // V6.2.2: Paired with fps_for_motion=30
+    .motion_deadband_px  = 2.0f,        // V6.2.2: Relaxed for 1 Hz updates
+    .smooth_pos_alpha    = 0.60f,       // Quicker response (reduced from 0.70)
+    .smooth_vel_alpha    = 0.55f,       // V6.2.2: Slightly increased for stability
+    .dir_hysteresis_deg  = 22.5f,       // Direction change threshold
+    .bin_hysteresis_deg  = 8.0f,        // V6.2.2: Snappier L/R switching
+    .class_person        = 0,           // YOLOX person class
+    .max_center_dist_px  = 80.f,        // Distance fallback for association
+    .min_speed_px_s      = 3.0f,        // Motion floor in px/s (reduced from 6.0)
+    .publish_grace_missed = 6,          // Publish up to 6 misses (increased from 4)
+    .enter_exit_border_frac = 0.10f,    // 10% inset for ROI
+    .dir_hold_ms         = 300.0,       // V6.2: Keep direction for 300ms when slow
+    .dir_decay_per_s     = 0.5f,        // V6.2: Confidence decay rate
+    .low_score_thresh    = 0.80f        // V6.2: Dampen direction when score < 0.80
+  }};
+
+  // Emission cache to hold last non-empty tracks (prevents people:0 gaps)
+  struct EmitCache {
+    std::vector<TrackedBox> last_nonempty;
+    double last_nonempty_ts{0.0};
+  } emit_cache_;
+
+  // Device and stream identifiers for MQTT namespacing
+  std::string device_id_;          // e.g., "xt5-01"
+  std::string stream_id_;          // e.g., "/dev/video1"
 
   // cached input kind for HealthManager
   SourceKind detect_source_kind(const InputConfig& ic) const noexcept {

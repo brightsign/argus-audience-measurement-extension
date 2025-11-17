@@ -219,6 +219,8 @@ add_executable(attention_demo
         src/resources/resource_manager.cpp
         src/resources/rga_context.cpp
         src/resources/tensor_manager.cpp
+        # Tracking module
+        src/tracking/tracker.cpp
         # Utility module
         src/util/util.cpp
         src/yolox.cc
