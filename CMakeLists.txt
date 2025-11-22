@@ -221,6 +221,7 @@ add_executable(attention_demo
         src/resources/tensor_manager.cpp
         # Tracking module
         src/tracking/tracker.cpp
+        src/tracking/byte_tracker_lite.cpp
         # Utility module
         src/util/util.cpp
         src/yolox.cc

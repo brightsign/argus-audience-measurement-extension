@@ -3,9 +3,17 @@
 #include <cstdint>
 #include <unordered_map>
 #include <string>
+#include <memory>
 
 // Forward declare Detection - full definition in models/model_runner.h
 struct Detection;
+
+// Forward declare ByteTrack components (in bytetrack namespace)
+namespace bytetrack {
+  class ByteTrackLite;
+  struct ByteTrackLiteCfg;
+}
+
 
 // Track life-cycle states
 enum class TrackState : uint8_t { 
@@ -38,6 +46,18 @@ struct TrackedBox {
 };
 
 struct TrackerConfig {
+  // Tracker core algorithm selection
+  std::string tracker_core{"legacy"}; // "legacy" or "byte" (ByteTrack)
+
+  // === ByteTrack-specific parameters ===
+  float byte_det_high{0.50f};        // High confidence threshold for ByteTrack
+  float byte_det_low{0.15f};         // Low confidence threshold for ByteTrack
+  float byte_match_iou_high{0.70f};  // IoU threshold for high-conf matching
+  float byte_match_iou_low{0.50f};   // IoU threshold for low-conf matching
+  int   byte_max_age{30};            // Frames to keep unmatched ByteTrack tracks
+  int   byte_n_init{3};              // Hits to confirm ByteTrack track
+  
+  // === Legacy EMA/IoU parameters ===
   // Association & lifecycle
   float iou_match_thresh{0.45f};  // V6.2.3: Raised from 0.35 to reduce wrong matches
   int   confirm_hits{3};          // Consecutive hits to confirm track
@@ -47,32 +67,43 @@ struct TrackerConfig {
   float min_det_score{0.50f};
   int   min_area_px{1600};
 
-  // Motion & smoothing (V6.2.2: Tuned for 1 Hz publish rate)
+  // Motion & smoothing (V7.0: LS5-tuned stability pack - final)
   float motion_eps_px{0.8f};      // speed floor (px/frame) paired with fps_for_motion=30
-  float motion_deadband_px{2.0f}; // relaxed for 1 Hz updates (was 3.0)
-  float smooth_pos_alpha{0.60f};  // reduced from 0.70 for quicker response
-  float smooth_vel_alpha{0.55f};  // slightly increased from 0.50 for stability
+  float motion_deadband_px{22.0f}; // V7.0: cap for adaptive deadband (16→22 for tighter jitter suppression)
+  float smooth_pos_alpha{0.45f};  // V7.0: slightly smoother bbox tracking
+  float smooth_vel_alpha{0.65f};  // V7.0: responsive but not spiky velocity
   float dir_hysteresis_deg{22.5f};
-  float bin_hysteresis_deg{8.0f}; // snappier L/R switching (was 12.0)
+  float bin_hysteresis_deg{12.0f}; // V7.0: stickier bins (10→12 for better stability)
 
   // Person class
   int   class_person{0};
 
   // NEW: robust association & publishing
   float max_center_dist_px{80.f};   // distance fallback when IoU small
-  float min_speed_px_s{3.0f};       // reduced from 6.0 for better micro-movement detection
+  float min_speed_px_s{55.0f};      // V7.0: floor for "moving" (45→55 to reduce false motion)
+  float max_speed_px_s{90.0f};      // V7.0: hard clamp (120→90 to avoid plateau ceiling)
   int   publish_grace_missed{6};    // increased from 4 for better gap bridging
   float enter_exit_border_frac{0.10f}; // ROI border fraction (0.10 => 10% inset)
   
-  // V6.2: direction stability
-  double dir_hold_ms{300.0};        // keep last direction up to this long when slow
-  float dir_decay_per_s{0.5f};      // confidence decay / second when slow
-  float low_score_thresh{0.80f};    // detection score threshold for damping direction
+  // V7.0: direction stability
+  double dir_hold_ms{500.0};        // V7.0: sticky direction hold period
+  float dir_decay_per_s{1.0f};      // V7.0: confidence decay rate when slow
+  float low_score_thresh{0.90f};    // V7.0: stricter quality gate for direction updates
+  
+  // V7.0: acceleration limits
+  float accel_cap_px_s2{450.0f};    // maximum acceleration (600→450 for smoother ramps)
+  
+  // Publish filtering (prevent edge/ghost track noise)
+  float publish_score_min{0.70f};   // minimum score to publish motion
+  float publish_min_area_frac{0.02f}; // minimum area as fraction of frame (2%)
+  float publish_border_frac{0.03f}; // border margin to reject edge tracks (3%)
+  int   moving_streak_req{3};       // frames above speed floor to confirm motion
 };
 
 class Tracker {
 public:
-  explicit Tracker(const TrackerConfig& cfg = {}) : cfg_(cfg) {}
+  explicit Tracker(const TrackerConfig& cfg = {});
+  ~Tracker();
 
   // Update tracker with detections at timestamp 'ts' (seconds).
   // Returns current active tracks (copy for convenience).
@@ -89,6 +120,9 @@ public:
     frame_w_ = (w > 0 ? w : 640);
     frame_h_ = (h > 0 ? h : 480);
   }
+  
+  // Get current tracker core mode
+  const std::string& get_tracker_core() const noexcept { return cfg_.tracker_core; }
 
 private:
   struct TrackStateInternal {
@@ -113,12 +147,22 @@ private:
     // V6.2: direction confidence and hold
     double last_dir_ts{0.0};      // timestamp of last confident direction
     float  dir_conf{0.0f};        // direction confidence (0..1)
+    int    moving_streak{0};      // consecutive frames above speed floor (motion debounce)
     
-    // deadband - center history for jitter suppression (V6.2.2: Reduced for 1 Hz updates)
-    static constexpr int HIST_SIZE = 4;  // ~4s @ 1Hz publish (was 6 frames for 30fps)
+    // deadband - center history for jitter suppression (V6.2.3: Fixed ring buffer)
+    static constexpr int HIST_SIZE = 8;   // ~0.27s @ 30fps for stable motion window
     float cx_hist[HIST_SIZE]{};
     float cy_hist[HIST_SIZE]{};
+    float w_hist[HIST_SIZE]{};    // width history for jump detection
+    float h_hist[HIST_SIZE]{};    // height history for jump detection
+    float area_hist[HIST_SIZE]{}; // V7.0: area history for size stability check
+    float x0_hist[HIST_SIZE]{};   // corner history for IoU-based jitter filter
+    float y0_hist[HIST_SIZE]{};
+    float x1_hist[HIST_SIZE]{};
+    float y1_hist[HIST_SIZE]{};
+    double ts_hist[HIST_SIZE]{};  // timestamps for real velocity calculation
     int   hist_idx{0};
+    int   filled{0};              // tracks buffer warmup (0..HIST_SIZE)
     
     // gaze tracking with debouncing
     double gaze_on_ms{0.0};       // Accumulated time looking at camera
@@ -143,6 +187,11 @@ private:
   void     start_track(const Detection& d, double ts);
   void     update_track(TrackStateInternal& t, const Detection& d, double ts, double fps);
   void     age_and_gc(double ts);
+  
+  // ByteTrack integration
+  void     update_with_bytetrack(const std::vector<Detection>& dets, double ts, double fps);
+  void     update_behavior_fields(TrackStateInternal& t, double ts, double fps);
+  bool     is_clean_for_publish(const TrackStateInternal& t) const noexcept;  // Filter edge/ghost tracks
 
   // ROI and frame info
   int frame_w_{640};
@@ -151,5 +200,7 @@ private:
   TrackerConfig cfg_;
   std::unordered_map<int, TrackStateInternal> tracks_;
   int next_id_{1};
+  
+  // ByteTrack instance (only created if tracker_core == "byte")
+  std::unique_ptr<bytetrack::ByteTrackLite> byte_tracker_;
 };
-

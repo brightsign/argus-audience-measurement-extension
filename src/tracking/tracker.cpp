@@ -1,7 +1,10 @@
 #include "tracking/tracker.h"
+#include "tracking/byte_tracker_lite.h"
+#include "tracking/byte_types.h"
 #include "models/model_runner.h"  // For Detection struct definition
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 
 static inline float clamp01(float v){ return v<0.f?0.f:(v>1.f?1.f:v); }
 
@@ -132,6 +135,7 @@ void Tracker::start_track(const Detection& d, double ts) {
   for (int i = 0; i < t.HIST_SIZE; ++i) {
     t.cx_hist[i] = cx;
     t.cy_hist[i] = cy;
+    t.area_hist[i] = t.w * t.h;  // V7.0: initialize area history
   }
   t.hist_idx = 0;
   
@@ -171,38 +175,68 @@ void Tracker::update_track(TrackStateInternal& t, const Detection& d, double ts,
   t.w = t.x1 - t.x0;
   t.h = t.y1 - t.y0;
 
-  // --- robust dt from timestamps ---
-  const double frame_T = (fps > 0 ? 1.0 / fps : 0.0333333); // ~30 fps fallback
-  double dt = ts - t.last_ts;
-  // clamp dt to reasonable range (handles duplicate/late timestamps, timer jitter)
-  // Widened to [0.4*frame_T .. 2.5*frame_T] for more tolerance
-  if (!std::isfinite(dt) || dt <= frame_T * 0.4 || dt >= frame_T * 2.5)
-    dt = frame_T;
+  // === IMPROVED RING BUFFER MOTION DETECTION ===
+  // Parameters
+  const int   LAG = 5;                         // velocity window (~5 frames)
+  const int   HIST = t.HIST_SIZE;              // e.g. 8
 
-  // Update history buffer for deadband check
-  t.cx_hist[t.hist_idx] = t.cx;
-  t.cy_hist[t.hist_idx] = t.cy;
-  t.hist_idx = (t.hist_idx + 1) % t.HIST_SIZE;
-  
-  // Adaptive deadband: 1% of diagonal, clamped [2px..cfg.motion_deadband_px]
-  // Smaller boxes (closer subjects) need less displacement to be "moving"
-  float diag = std::hypot(t.w, t.h);
-  float adaptive_db = std::clamp(0.01f * diag, 2.0f, cfg_.motion_deadband_px);
-  
-  // Deadband check: calculate displacement over history window
-  int oldest_idx = t.hist_idx;  // Circular buffer, oldest is at current write position
-  float dx_hist = t.cx - t.cx_hist[oldest_idx];
-  float dy_hist = t.cy - t.cy_hist[oldest_idx];
-  float displacement = std::hypot(dx_hist, dy_hist);
-  
-  // ROI enter/exit and dwell tracking
+  // 1) Choose the sample to compare against with filled check
+  // V7.0: Use actual window length (used) not LAG when buffer not full
+  int used = std::min(t.filled, LAG);
+  int read_idx = (t.hist_idx + HIST - used) % HIST;
+
+  // Need at least 2 frames of history for velocity
+  if (used < 2) {
+    // Not enough history yet -> treat as stationary
+    t.dir_label = "?";
+    t.dir_conf = 0.f;
+    t.dir_deg = 0.f;
+    t.speed = 0.f;
+    
+    // Write to history & exit
+    t.x0_hist[t.hist_idx] = t.x0;  
+    t.y0_hist[t.hist_idx] = t.y0;
+    t.x1_hist[t.hist_idx] = t.x1;  
+    t.y1_hist[t.hist_idx] = t.y1;
+    t.cx_hist[t.hist_idx] = t.cx;  
+    t.cy_hist[t.hist_idx] = t.cy;
+    t.w_hist[t.hist_idx] = t.w;   
+    t.h_hist[t.hist_idx] = t.h;
+    t.area_hist[t.hist_idx] = t.w * t.h;  // Keep area history consistent during warmup
+    t.ts_hist[t.hist_idx] = ts;
+    t.hist_idx = (t.hist_idx + 1) % HIST;
+    t.filled = std::min(t.filled + 1, HIST);
+    
+    t.cx_prev = t.cx;
+    t.cy_prev = t.cy;
+    t.last_ts = ts;
+    t.age_frames++;
+    t.hits++;
+    t.missed = 0;
+    
+    if (t.state == ::TrackState::Tentative && t.hits >= cfg_.confirm_hits) {
+      t.state = ::TrackState::Confirmed;
+    }
+    return;
+  }
+
+  // 2) Read BEFORE writing the new sample
+  float prev_cx = t.cx_hist[read_idx];
+  float prev_cy = t.cy_hist[read_idx];
+  float prev_w = t.w_hist[read_idx];
+  float prev_h = t.h_hist[read_idx];
+
+  // 3) Compute deltas over the lag window
+  float dx_hist = t.cx - prev_cx;
+  float dy_hist = t.cy - prev_cy;
+
+  // 3.1) ROI enter/exit tracking
   auto inside_roi = [&](float cx, float cy) -> bool {
     const float bx = cfg_.enter_exit_border_frac * frame_w_;
     const float by = cfg_.enter_exit_border_frac * frame_h_;
     return (cx >= bx && cx <= (frame_w_ - bx) &&
             cy >= by && cy <= (frame_h_ - by));
   };
-
   bool now_inside = inside_roi(t.cx, t.cy);
   
   // Enter/exit one-shots (on state change)
@@ -212,138 +246,315 @@ void Tracker::update_track(TrackStateInternal& t, const Detection& d, double ts,
   if (t.was_inside && !now_inside && !t.exit_sent) {
     t.exit_sent = true;
   }
+
+  // ==== V7.0: ENHANCED STATIONARY GATE with center+size stability ====
+  // Use adaptive deadband based on box size
+  float diag = std::hypot(t.w, t.h);
+  const float adaptive_k = 0.012f;  // 1.2% of diagonal
+  // Safer clamp (handles configs where motion_deadband_px < 8.0f)
+  float max_db_cap = std::max(cfg_.motion_deadband_px, 8.0f);
+  float adaptive_db = std::min(max_db_cap, adaptive_k * diag);
   
-  // If displacement is below adaptive deadband, suppress motion (jitter)
-  if (displacement < adaptive_db) {
-    // Jitter detected - keep previous velocity/direction, output as stationary
-    t.dir_label = "?";
+  // Center drift over history window
+  int oldest = (t.hist_idx + HIST - used) % HIST;
+  float dx_hist_full = t.cx - t.cx_hist[oldest];
+  float dy_hist_full = t.cy - t.cy_hist[oldest];
+  float disp = std::hypot(dx_hist_full, dy_hist_full);
+  
+  // Area stability (ignore breathing of the box)
+  float area_now = t.w * t.h;
+  float area_prev = t.area_hist[oldest];
+  const float area_tol = 0.06f;  // 6% area jitter tolerated
+  float area_change = (area_prev > 1.f) ? std::fabs(area_now - area_prev)/area_prev : 0.f;
+  bool size_stable = (area_change < area_tol);
+  bool center_stable = (disp < adaptive_db);
+  
+  // If both center and size stable -> treat as stationary
+  if (center_stable && size_stable) {
+    // Stationary: zero out motion and reset debounce
+    t.vx = 0.f;
+    t.vy = 0.f;
     t.speed = 0.f;
-    t.dir_deg = 0.f;  // Blank angle when direction unknown
-    // Don't update dir_bin when stationary
-  } else {
-    // Real motion detected - compute per-step (smoothed) velocity from current step
-    // Apply tiny per-step deadband before dividing by dt
-    float dcx = t.cx - t.cx_prev;
-    float dcy = t.cy - t.cy_prev;
-
-    // Tighter sub-pixel gate to kill micro-wobble (raised from 0.25 to 0.40)
-    const float step_db = 0.40f;
-    if (std::fabs(dcx) < step_db) dcx = 0.f;
-    if (std::fabs(dcy) < step_db) dcy = 0.f;
-
-    float inst_vx = (dt > 0) ? (dcx / (float)dt) : 0.f;   // px/s
-    float inst_vy = (dt > 0) ? (dcy / (float)dt) : 0.f;   // px/s
-
-    // Smooth velocity with EMA (reduces spikes)
-    float B = clamp01(cfg_.smooth_vel_alpha);
-    t.vx = B * inst_vx + (1.f - B) * t.vx;
-    t.vy = B * inst_vy + (1.f - B) * t.vy;
-
-    float sp = std::hypot(t.vx, t.vy); // px/s
+    t.dir_label = "?";
+    t.dir_deg = 0.f;
+    t.dir_conf = 0.f;
+    t.moving_streak = 0;  // Reset debounce counter
     
-    // Debug: verify coordinate space and velocity for first few updates
-    static int debug_count = 0;
-    if (debug_count < 30) {  // Log first 30 updates (~1 second @ 30fps)
-      fprintf(stderr,
-        "[TRK_DBG] id=%d cx=%.1f cy=%.1f prev=%.1f,%.1f dt=%.3f dc=(%.2f,%.2f) v=(%.1f,%.1f) sp=%.1f\n",
-        t.id, t.cx, t.cy, t.cx_prev, t.cy_prev, dt,
-        t.cx - t.cx_prev, t.cy - t.cy_prev, t.vx, t.vy, sp);
-      debug_count++;
+    // Write to history & exit
+    t.x0_hist[t.hist_idx] = t.x0;  
+    t.y0_hist[t.hist_idx] = t.y0;
+    t.x1_hist[t.hist_idx] = t.x1;  
+    t.y1_hist[t.hist_idx] = t.y1;
+    t.cx_hist[t.hist_idx] = t.cx;  
+    t.cy_hist[t.hist_idx] = t.cy;
+    t.w_hist[t.hist_idx] = t.w;   
+    t.h_hist[t.hist_idx] = t.h;
+    t.area_hist[t.hist_idx] = area_now;
+    t.ts_hist[t.hist_idx] = ts;
+    t.hist_idx = (t.hist_idx + 1) % HIST;
+    t.filled = std::min(t.filled + 1, HIST);
+    
+    t.cx_prev = t.cx;
+    t.cy_prev = t.cy;
+    
+    double time_delta = ts - t.last_ts;
+    t.last_ts = ts;
+    if (t.state == ::TrackState::Confirmed && now_inside) {
+      t.dwell_s += time_delta;
     }
+    t.was_inside = now_inside;
     
-    // Motion floor in px/s (per-second, not frame-based)
-    const float stationary_eps = std::max(0.0f, cfg_.min_speed_px_s); // e.g., 24 px/s typical
+    t.age_frames++;
+    t.hits++;
+    t.missed = 0;
     
-    // Calculate raw direction angle
-    float deg = std::atan2(-t.vy, t.vx) * 180.f / float(M_PI);
-    if (deg < 0.f) deg += 360.f;
-    
-    // Dampen direction when detection score is low (V6.2)
-    const float low_score_thresh = cfg_.low_score_thresh;
-    float dir_weight = (t.score < low_score_thresh) ? 0.3f : 1.0f;
-    
-    // Blend angle toward previous direction when score is low
-    if (dir_weight < 1.0f && t.dir_conf > 0.0f && t.dir_bin >= 0) {
-      float prev_deg = t.dir_deg;
-      // Shortest angular difference
-      float d = deg - prev_deg;
-      while (d > 180.f) d -= 360.f;
-      while (d < -180.f) d += 360.f;
-      deg = prev_deg + dir_weight * d;
-      if (deg < 0.f) deg += 360.f;
-      if (deg >= 360.f) deg -= 360.f;
+    if (t.state == ::TrackState::Tentative && t.hits >= cfg_.confirm_hits) {
+      t.state = ::TrackState::Confirmed;
     }
+    return;  // Early exit - stationary
+  }
+
+  // 3.5) Legacy Zero-motion gate with reframe veto (fallback for edge cases)
+  auto iou_calc = [&](float x0,float y0,float x1,float y1,
+                      float u0,float v0,float u1,float v1)->float {
+    float ix0 = std::max(x0,u0), iy0 = std::max(y0,v0);
+    float ix1 = std::min(x1,u1), iy1 = std::min(y1,v1);
+    float iw = std::max(0.f, ix1-ix0), ih = std::max(0.f, iy1-iy0);
+    float inter = iw*ih;
+    float a = (x1-x0)*(y1-y0);
+    float b = (u1-u0)*(v1-v0);
+    return inter / std::max(1.f, a + b - inter);
+  };
+
+  float iou_now = iou_calc(t.x0, t.y0, t.x1, t.y1,
+                           t.x0_hist[read_idx], t.y0_hist[read_idx],
+                           t.x1_hist[read_idx], t.y1_hist[read_idx]);
+  
+  float center_shift = std::hypot(dx_hist, dy_hist);
+  float dsize = std::fabs((t.w * t.h) - (prev_w * prev_h)) / std::max(1.f, prev_w * prev_h);
+
+  // Zero-motion gate: box essentially unchanged
+  float db_px = std::max(4.f, 0.015f * diag);  // 1.5% diag
+  bool tiny_center_shift = (center_shift < db_px);
+  bool tiny_size_change  = (dsize < 0.03f);    // <3% area change
+  bool boxes_almost_same = (iou_now > 0.95f);  // 95% overlap
+
+  // Reframe veto: detector resized/reframed but center stable (aspect jump)
+  float center_eps = 0.02f * diag;  // 2% diag
+  bool reframe_veto = (iou_now < 0.30f && center_shift < center_eps);
+
+  if (tiny_center_shift && (tiny_size_change || boxes_almost_same)) {
+    // Treat as stationary - box is essentially unchanged
+    t.dir_label = "?";
+    t.dir_deg   = 0.f;
+    t.dir_conf  = 0.f;
+    t.speed     = 0.f;
+    t.moving_streak = 0;  // Reset debounce counter
     
-    // Sticky direction with decay (V6.2) - keeps last good direction during brief slow moments
-    if (sp >= stationary_eps) {
-      // Moving above threshold: accept new direction, reset confidence
-      t.dir_deg = deg;
-      
-      // Calculate current bin (0-7 for 8-way compass)
-      int bin_now = static_cast<int>(std::round(deg / 45.f)) & 7;
-      
-      // Direction bin hysteresis: only change bin if we cross midline significantly
-      if (t.dir_bin == -1) {
-        // First time - initialize
-        t.dir_bin = bin_now;
-      } else {
-        // Enhanced bin hysteresis: check distance to nearest bin midline
-        float current_bin_center = t.dir_bin * 45.f;
-        
-        // Calculate angular distance to current bin center
-        float angular_diff = deg - current_bin_center;
-        
-        // Normalize to [-180, 180]
-        while (angular_diff > 180.f) angular_diff -= 360.f;
-        while (angular_diff < -180.f) angular_diff += 360.f;
-        
-        // Only switch bin if we've crossed midline by margin (reduced flapping)
-        if (std::fabs(angular_diff) > (22.5f + cfg_.bin_hysteresis_deg)) {
-          t.dir_bin = bin_now;
-        }
-      }
-      
-      t.dir_label = dir_label_from_deg(t.dir_bin * 45.f);
-      
-      // V6.2.3: Temporarily raise clamp to diagnose spikes
-      const float max_speed_px_s = 500.0f;  // Raised from 180 to see raw values
-      t.speed = std::min(sp, max_speed_px_s);
-      
-      // V6.2.2: Compute actual direction confidence (0..1)
-      // Based on: 1) speed relative to threshold, 2) angular stability within bin
-      const float min_speed_px_s = std::max(0.0f, cfg_.min_speed_px_s);
-      float sp_rel = std::min(1.0f, sp / (min_speed_px_s * 3.0f)); // 0..1 (full conf at 3x threshold)
-      
-      // Penalize jitter near bin boundaries (closer to bin center → higher confidence)
-      float bin_center = t.dir_bin * 45.f;
-      float ang_err = deg - bin_center;
-      // Normalize to [-180, 180]
-      while (ang_err > 180.f) ang_err -= 360.f;
-      while (ang_err < -180.f) ang_err += 360.f;
-      ang_err = std::fabs(ang_err);  // 0..180
-      float center_score = std::max(0.f, 1.f - (ang_err / 45.f)); // 1 at center, 0 at edges
-      
-      t.dir_conf = std::max(0.0f, std::min(1.0f, 0.5f*sp_rel + 0.5f*center_score));
-      t.last_dir_ts = ts;
+    // Write to history & exit
+    t.x0_hist[t.hist_idx] = t.x0;  
+    t.y0_hist[t.hist_idx] = t.y0;
+    t.x1_hist[t.hist_idx] = t.x1;  
+    t.y1_hist[t.hist_idx] = t.y1;
+    t.cx_hist[t.hist_idx] = t.cx;  
+    t.cy_hist[t.hist_idx] = t.cy;
+    t.w_hist[t.hist_idx] = t.w;   
+    t.h_hist[t.hist_idx] = t.h;
+    t.area_hist[t.hist_idx] = area_now;
+    t.ts_hist[t.hist_idx] = ts;
+    t.hist_idx = (t.hist_idx + 1) % HIST;
+    t.filled = std::min(t.filled + 1, HIST);
+
+    t.cx_prev = t.cx;
+    t.cy_prev = t.cy;
+    
+    double time_delta = ts - t.last_ts;
+    t.last_ts = ts;
+    if (t.state == ::TrackState::Confirmed && now_inside) {
+      t.dwell_s += time_delta;
+    }
+    t.was_inside = now_inside;
+    
+    t.age_frames++;
+    t.hits++;
+    t.missed = 0;
+    
+    if (t.state == ::TrackState::Tentative && t.hits >= cfg_.confirm_hits) {
+      t.state = ::TrackState::Confirmed;
+    }
+    return;  // Early exit - stationary
+  }
+
+  if (reframe_veto) {
+    // Size/aspect jumped but center stable -> veto as stationary
+    t.dir_label = "?";
+    t.dir_deg   = 0.f;
+    t.dir_conf  = 0.f;
+    t.speed     = 0.f;
+    t.moving_streak = 0;  // Reset debounce counter
+    
+    // Write to history & exit
+    t.x0_hist[t.hist_idx] = t.x0;  
+    t.y0_hist[t.hist_idx] = t.y0;
+    t.x1_hist[t.hist_idx] = t.x1;  
+    t.y1_hist[t.hist_idx] = t.y1;
+    t.cx_hist[t.hist_idx] = t.cx;  
+    t.cy_hist[t.hist_idx] = t.cy;
+    t.w_hist[t.hist_idx] = t.w;   
+    t.h_hist[t.hist_idx] = t.h;
+    t.area_hist[t.hist_idx] = area_now;
+    t.ts_hist[t.hist_idx] = ts;
+    t.hist_idx = (t.hist_idx + 1) % HIST;
+    t.filled = std::min(t.filled + 1, HIST);
+
+    t.cx_prev = t.cx;
+    t.cy_prev = t.cy;
+    
+    double time_delta = ts - t.last_ts;
+    t.last_ts = ts;
+    if (t.state == ::TrackState::Confirmed && now_inside) {
+      t.dwell_s += time_delta;
+    }
+    t.was_inside = now_inside;
+    
+    t.age_frames++;
+    t.hits++;
+    t.missed = 0;
+    
+    if (t.state == ::TrackState::Tentative && t.hits >= cfg_.confirm_hits) {
+      t.state = ::TrackState::Confirmed;
+    }
+    return;  // Early exit - reframe veto
+  }
+
+  // 4) Compute velocity over actual elapsed time
+  // V7.0: Use real timestamps from history, not FPS estimate
+  double dt_hist = std::max(1e-3, ts - t.ts_hist[read_idx]);
+
+  float inst_vx = float((t.cx - prev_cx) / dt_hist);
+  float inst_vy = float((t.cy - prev_cy) / dt_hist);
+
+  // 5) EMA on velocity
+  float B = clamp01(cfg_.smooth_vel_alpha);
+  t.vx = B * inst_vx + (1.f - B) * t.vx;
+  t.vy = B * inst_vy + (1.f - B) * t.vy;
+
+  // 6) Speed with V7.0 enhanced floor and acceleration cap
+  float sp = std::hypot(t.vx, t.vy);
+  
+  // V7.0: Velocity floor - very small speeds → treat as stationary
+  if (sp < cfg_.min_speed_px_s) {
+    double dt_dir = std::max(0.0, ts - t.last_dir_ts);
+    // Only keep prior direction during hold if we had a recent confirmed motion streak.
+    // This prevents showing directions when you're basically idle.
+    if (dt_dir * 1000.0 <= cfg_.dir_hold_ms &&
+        t.dir_conf > 0.15f &&
+        t.moving_streak >= cfg_.moving_streak_req) {
+      // Keep previous direction during hold period, decay confidence
+      t.dir_conf = std::max(0.0f, t.dir_conf - float(cfg_.dir_decay_per_s * dt_dir));
+      t.speed = sp;    // Show small number during hold
     } else {
-      // Slow or jitter: keep last direction for a while, decay confidence
-      double dt_dir = std::max(0.0, ts - t.last_dir_ts);
-      if (dt_dir * 1000.0 <= cfg_.dir_hold_ms && t.dir_conf > 0.15f) {
-        // Keep previous direction, decay confidence
-        t.dir_conf = std::max(0.0f, t.dir_conf - float(cfg_.dir_decay_per_s * dt_dir));
-        // Leave t.dir_label, t.dir_deg, t.dir_bin as-is (sticky)
-        t.speed = sp;  // But show actual (low) speed
-      } else {
-        // Too long slow / no confidence -> unknown
-        t.dir_label = "?";
-        t.dir_deg = 0.0f;
-        t.speed = 0.f;
-        t.dir_conf = 0.0f;
-      }
+      // Too long slow / no confidence → unknown
+      t.dir_label = "?";
+      t.dir_deg = 0.f;
+      t.dir_conf = 0.f;
+      t.speed = 0.f;
+      t.moving_streak = 0;  // Reset debounce counter
     }
+    
+    // Write to history & finalize
+    t.x0_hist[t.hist_idx] = t.x0;
+    t.y0_hist[t.hist_idx] = t.y0;
+    t.x1_hist[t.hist_idx] = t.x1;
+    t.y1_hist[t.hist_idx] = t.y1;
+    t.cx_hist[t.hist_idx] = t.cx;
+    t.cy_hist[t.hist_idx] = t.cy;
+    t.w_hist[t.hist_idx] = t.w;
+    t.h_hist[t.hist_idx] = t.h;
+    t.area_hist[t.hist_idx] = area_now;
+    t.ts_hist[t.hist_idx] = ts;
+    t.hist_idx = (t.hist_idx + 1) % HIST;
+    t.filled = std::min(t.filled + 1, HIST);
+
+    t.cx_prev = t.cx;
+    t.cy_prev = t.cy;
+    
+    double time_delta = ts - t.last_ts;
+    t.last_ts = ts;
+    if (t.state == ::TrackState::Confirmed && now_inside) {
+      t.dwell_s += time_delta;
+    }
+    t.was_inside = now_inside;
+    
+    t.age_frames++;
+    t.hits++;
+    t.missed = 0;
+    
+    if (t.state == ::TrackState::Tentative && t.hits >= cfg_.confirm_hits) {
+      t.state = ::TrackState::Confirmed;
+    }
+    return;  // Exit - below speed floor
+  }
+
+  // V7.0: Acceleration cap (prevents single-frame leaps)
+  double dt = std::max(1e-3, ts - t.last_ts);
+  float sp_capped = std::min(sp, t.speed + cfg_.accel_cap_px_s2 * float(dt));
+  t.speed = std::min(sp_capped, cfg_.max_speed_px_s);
+  
+  // We're moving: bump debounce counter
+  t.moving_streak = std::min(t.moving_streak + 1, 1000);
+
+  // 7) Moving: compute direction with smart hysteresis
+  float deg = std::atan2(-t.vy, t.vx) * 180.f / float(M_PI);
+  if (deg < 0.f) deg += 360.f;
+
+  // Direction bin calculation with edge avoidance
+  float dir_center = (t.dir_bin >= 0) ? t.dir_bin * 45.f : deg;
+  float dir_delta = deg - dir_center;
+  while (dir_delta > 180.f) dir_delta -= 360.f;
+  while (dir_delta < -180.f) dir_delta += 360.f;
+  
+  // Only update bin if we're significantly away from current bin center
+  if (t.dir_bin == -1 || std::fabs(dir_delta) > (22.5f + cfg_.bin_hysteresis_deg)) {
+    t.dir_bin = static_cast<int>(std::round(deg / 45.f)) & 7;
+  }
+
+  t.dir_label = dir_label_from_deg(t.dir_bin * 45.f);
+  t.dir_deg = deg;
+
+  // Compute direction confidence - penalizes edge proximity
+  float ang_err = deg - (t.dir_bin * 45.f);
+  while (ang_err > 180.f) ang_err -= 360.f;
+  while (ang_err < -180.f) ang_err += 360.f;
+  ang_err = std::fabs(ang_err);
+  float center_score = std::max(0.f, 1.f - (ang_err / 45.f));
+  float sp_rel = std::min(1.f, sp / (cfg_.min_speed_px_s * 3.f));
+  t.dir_conf = 0.5f * sp_rel + 0.5f * center_score;
+  
+  // Soft gate: require a short moving streak before publishing a direction
+  if (t.moving_streak < cfg_.moving_streak_req) {
+    t.dir_label = "?";
+    t.dir_deg   = 0.f;
+    t.dir_conf  = 0.f;
   }
   
-  // Update previous center for next iteration
+  t.last_dir_ts = ts;
+
+  // 7) NOW write the current sample and advance the ring
+  t.x0_hist[t.hist_idx] = t.x0;
+  t.y0_hist[t.hist_idx] = t.y0;
+  t.x1_hist[t.hist_idx] = t.x1;
+  t.y1_hist[t.hist_idx] = t.y1;
+  t.cx_hist[t.hist_idx] = t.cx;
+  t.cy_hist[t.hist_idx] = t.cy;
+  t.w_hist[t.hist_idx] = t.w;
+  t.h_hist[t.hist_idx] = t.h;
+  t.area_hist[t.hist_idx] = t.w * t.h;  // V7.0: track area history
+  t.ts_hist[t.hist_idx] = ts;
+  t.hist_idx = (t.hist_idx + 1) % HIST;
+  t.filled = std::min(t.filled + 1, HIST);
+
+  // Update previous center for compatibility
   t.cx_prev = t.cx;
   t.cy_prev = t.cy;
   
@@ -413,6 +624,75 @@ void Tracker::age_and_gc(double ts) {
 }
 
 std::vector<TrackedBox> Tracker::update(const std::vector<Detection>& dets_raw, double ts) {
+  // Route to ByteTrack or legacy EMA/IoU based on configuration
+  if (cfg_.tracker_core == "byte" && byte_tracker_) {
+    // Use ByteTrack core
+    static double last_ts = 0.0;
+    double fps_publish = 30.0;
+    if (last_ts > 0 && ts > last_ts) {
+      double dt = ts - last_ts;
+      fps_publish = 1.0 / std::max(0.001, dt);
+      fps_publish = std::min(60.0, std::max(1.0, fps_publish));
+    }
+    last_ts = ts;
+    
+    const double fps_for_motion = 30.0;  // Camera FPS
+    
+    update_with_bytetrack(dets_raw, ts, fps_for_motion);
+    
+    // Build output
+    std::vector<TrackedBox> out;
+    out.reserve(tracks_.size());
+    for (auto& kv : tracks_) {
+      auto& t = kv.second;
+      if (t.state != ::TrackState::Confirmed) continue;
+      bool fresh = (t.missed <= cfg_.publish_grace_missed);
+      if (!fresh) continue;
+      
+      TrackedBox o;
+      o.id = t.id;
+      o.state = t.state;
+      o.x0=t.x0; o.y0=t.y0; o.x1=t.x1; o.y1=t.y1;
+      o.score=t.score;
+      o.vx=t.vx; o.vy=t.vy; o.speed=t.speed;
+      o.dir_deg=t.dir_deg; o.dir_label=t.dir_label;
+      o.dir_conf=t.dir_conf;
+      o.first_ts=t.first_ts; o.last_ts=t.last_ts;
+      o.dwell_s = t.dwell_s;
+      o.age_frames=t.age_frames;
+      o.hits=t.hits;
+      o.missed=t.missed;
+      
+      // Apply publish filters to suppress edge/ghost track motion
+      bool is_clean = is_clean_for_publish(t);
+      bool stale = (t.missed > 0);
+      bool low_score = (t.score < cfg_.low_score_thresh);
+      
+      // Force stationary if track fails cleanliness checks
+      if (!is_clean || stale || low_score) {
+        o.dir_label = "?";
+        o.dir_deg   = 0.0f;
+        o.dir_conf  = 0.0f;
+        o.speed     = 0.f;
+      } else if (o.speed < cfg_.min_speed_px_s) {
+        // Also enforce speed floor for clean tracks
+        o.dir_label = "?";
+        o.dir_deg   = 0.0f;
+        o.dir_conf  = 0.0f;
+      }
+      
+      o.just_entered = t.enter_sent;
+      o.just_exited = t.exit_sent;
+      
+      t.enter_sent = false;
+      t.exit_sent = false;
+      
+      out.push_back(o);
+    }
+    return out;
+  }
+  
+  // Legacy EMA/IoU path
   // V6.2.2: Use camera FPS for motion calculation, not publish rate
   // The publish rate may be ~1 Hz, but motion calculations need actual camera FPS
   static double last_ts = 0.0;
@@ -574,4 +854,298 @@ std::vector<TrackedBox> Tracker::active() const {
 void Tracker::reset() {
   tracks_.clear();
   next_id_ = 1;
+}
+
+// Constructor - initialize ByteTrack if configured
+Tracker::Tracker(const TrackerConfig& cfg) : cfg_(cfg) {
+  if (cfg_.tracker_core == "byte") {
+    bytetrack::ByteTrackLiteCfg bt_cfg;
+    bt_cfg.det_high = cfg_.byte_det_high;
+    bt_cfg.det_low = cfg_.byte_det_low;
+    bt_cfg.match_iou_high = cfg_.byte_match_iou_high;
+    bt_cfg.match_iou_low = cfg_.byte_match_iou_low;
+    bt_cfg.max_age = cfg_.byte_max_age;
+    bt_cfg.n_init = cfg_.byte_n_init;
+    
+    byte_tracker_ = std::make_unique<bytetrack::ByteTrackLite>(bt_cfg);
+    fprintf(stderr, "[Tracker] Initialized with ByteTrack core (det_high=%.2f, det_low=%.2f)\n",
+            bt_cfg.det_high, bt_cfg.det_low);
+  } else {
+    fprintf(stderr, "[Tracker] Initialized with Legacy EMA/IoU core\n");
+  }
+}
+
+// Destructor
+Tracker::~Tracker() = default;
+
+// ===== Helper Functions =====
+
+// Check if track is clean enough to publish motion (filters edge/ghost tracks)
+bool Tracker::is_clean_for_publish(const TrackStateInternal& t) const noexcept {
+  // a) Only confirmed and freshly updated
+  if (t.state != ::TrackState::Confirmed) return false;
+  if (t.missed > 0) return false;  // stale - not updated this frame
+  
+  // b) Confidence gate
+  if (t.score < cfg_.publish_score_min) return false;
+  
+  // c) Size gate (reject tiny edge slivers)
+  float area = (t.x1 - t.x0) * (t.y1 - t.y0);
+  float min_area = cfg_.publish_min_area_frac * frame_w_ * frame_h_;
+  if (area < min_area) return false;
+  
+  // d) Border gate (ignore objects hugging the border)
+  const float border = cfg_.publish_border_frac;
+  float cx = 0.5f * (t.x0 + t.x1);
+  float cy = 0.5f * (t.y0 + t.y1);
+  if (cx < border * frame_w_ || cx > (1.f - border) * frame_w_ ||
+      cy < border * frame_h_ || cy > (1.f - border) * frame_h_) {
+    return false;
+  }
+  
+  return true;
+}
+
+// ===== ByteTrack Integration =====
+
+// Update behavior fields (deadband, velocity, direction, ROI, dwell) for a track
+// This is the "behavior layer" that works with both legacy and ByteTrack cores
+void Tracker::update_behavior_fields(TrackStateInternal& t, double ts, double fps) {
+  // Calculate center and size from KF-smoothed bbox (no additional EMA smoothing)
+  center(t.x0, t.y0, t.x1, t.y1, t.cx, t.cy);
+  t.w = t.x1 - t.x0;
+  t.h = t.y1 - t.y0;
+  
+  // === ROI TRACKING ===
+  auto inside_roi = [&](float cx, float cy) -> bool {
+    const float bx = cfg_.enter_exit_border_frac * frame_w_;
+    const float by = cfg_.enter_exit_border_frac * frame_h_;
+    return (cx >= bx && cx <= (frame_w_ - bx) &&
+            cy >= by && cy <= (frame_h_ - by));
+  };
+  bool now_inside = inside_roi(t.cx, t.cy);
+  
+  if (!t.was_inside && now_inside && !t.enter_sent) {
+    t.enter_sent = true;
+  }
+  if (t.was_inside && !now_inside && !t.exit_sent) {
+    t.exit_sent = true;
+  }
+  
+  // === VELOCITY-BASED MOTION DETECTION (uses KF velocity, not history) ===
+  // Speed magnitude from KF velocity (px/s) - already smoothed by EMA in caller
+  float sp = std::hypot(t.vx, t.vy);
+  
+  // Motion floor (px/s) - start around 30-40 for 640x480 indoors
+  const float speed_floor = std::max(10.0f, cfg_.min_speed_px_s);
+  const float max_speed_px_s = 120.0f;  // reduced from 180 to avoid edge track spikes
+  
+  // Clamp speed to max
+  sp = std::min(sp, max_speed_px_s);
+  
+  // If below motion floor, treat as stationary (jitter suppression)
+  if (sp < speed_floor) {
+    // Reset motion streak counter
+    t.moving_streak = 0;
+    
+    // Keep sticky direction with decay if configured
+    double dt_dir = std::max(0.0, ts - t.last_dir_ts);
+    if (dt_dir * 1000.0 <= cfg_.dir_hold_ms && t.dir_conf > 0.15f) {
+      // Decay confidence but keep direction
+      t.dir_conf = std::max(0.0f, t.dir_conf - float(cfg_.dir_decay_per_s * dt_dir));
+      t.speed = 0.f;  // Show as stationary even if direction is sticky
+    } else {
+      // Too long stationary or no confidence - unknown
+      t.dir_label = "?";
+      t.dir_deg = 0.0f;
+      t.speed = 0.f;
+      t.dir_conf = 0.0f;
+    }
+  } else {
+    // Above speed floor - increment motion streak
+    t.moving_streak++;
+    
+    // Require N consecutive frames before confirming motion (debounce 1-2 frame spikes)
+    if (t.moving_streak < cfg_.moving_streak_req) {
+      // Not stable yet - publish as stationary
+      t.dir_label = "?";
+      t.dir_deg = 0.0f;
+      t.speed = 0.f;
+      t.dir_conf = 0.0f;
+    } else {
+      // Stable motion - compute direction from KF velocity
+    // 0° points to +X (right); atan2 uses y-up in math → flip sign to match image coordinates
+    float deg = std::atan2(-t.vy, t.vx) * 180.f / float(M_PI);
+    if (deg < 0.f) deg += 360.f;
+
+    // Damping when score is low (optional smoothing)
+    const float low_score_thresh = 0.80f;  // configurable
+    float dir_weight = (t.score < low_score_thresh) ? 0.3f : 1.0f;
+    if (dir_weight < 1.0f && t.dir_conf > 0.0f && t.dir_bin >= 0) {
+      float prev = t.dir_deg;
+      float d = deg - prev;
+      while (d > 180.f) d -= 360.f;
+      while (d < -180.f) d += 360.f;
+      deg = prev + dir_weight * d;
+      if (deg < 0.f) deg += 360.f;
+      if (deg >= 360.f) deg -= 360.f;
+    }
+    
+    t.dir_deg = deg;
+    
+    // 8-way binning with hysteresis
+    int bin_now = static_cast<int>(std::round(deg / 45.f)) & 7;
+    if (t.dir_bin == -1) {
+      t.dir_bin = bin_now;
+    } else {
+      float current_center = t.dir_bin * 45.f;
+      float ang_diff = deg - current_center;
+      while (ang_diff > 180.f) ang_diff -= 360.f;
+      while (ang_diff < -180.f) ang_diff += 360.f;
+      if (std::fabs(ang_diff) > (22.5f + cfg_.bin_hysteresis_deg)) {
+        t.dir_bin = bin_now;
+      }
+    }
+    t.dir_label = dir_label_from_deg(t.dir_bin * 45.f);
+    
+    // Confidence: combine speed margin & distance from bin boundary
+    float sp_rel = std::min(1.0f, sp / (speed_floor * 3.0f));
+    float center = t.dir_bin * 45.f;
+    float ang_err = deg - center;
+    while (ang_err > 180.f) ang_err -= 360.f;
+    while (ang_err < -180.f) ang_err += 360.f;
+    ang_err = std::fabs(ang_err);
+    float center_score = std::max(0.f, 1.f - (ang_err / 45.f));
+    t.dir_conf = std::max(0.0f, std::min(1.0f, 0.5f*sp_rel + 0.5f*center_score));
+    
+    // Publish speed
+    t.speed = sp;
+    t.last_dir_ts = ts;
+    }  // end moving_streak debounce
+  }  // end speed floor check
+  
+  // Update history buffer (for compatibility, though not used for velocity anymore)
+  t.cx_hist[t.hist_idx] = t.cx;
+  t.cy_hist[t.hist_idx] = t.cy;
+  t.w_hist[t.hist_idx] = t.w;
+  t.h_hist[t.hist_idx] = t.h;
+  t.area_hist[t.hist_idx] = t.w * t.h;  // V7.0: track area history
+  t.x0_hist[t.hist_idx] = t.x0;
+  t.y0_hist[t.hist_idx] = t.y0;
+  t.x1_hist[t.hist_idx] = t.x1;
+  t.y1_hist[t.hist_idx] = t.y1;
+  t.ts_hist[t.hist_idx] = ts;
+  t.hist_idx = (t.hist_idx + 1) % t.HIST_SIZE;
+  t.filled = std::min(t.filled + 1, t.HIST_SIZE);
+  
+  t.cx_prev = t.cx;
+  t.cy_prev = t.cy;
+  
+  // Update dwell time (only when confirmed & inside ROI)
+  double time_delta = ts - t.last_ts;
+  t.last_ts = ts;
+  if (t.state == ::TrackState::Confirmed && now_inside) {
+    t.dwell_s += time_delta;
+  }
+  t.was_inside = now_inside;
+}
+
+// ByteTrack-based update path
+void Tracker::update_with_bytetrack(const std::vector<Detection>& dets, double ts, double fps) {
+  if (!byte_tracker_) {
+    fprintf(stderr, "[Tracker] ERROR: ByteTrack not initialized!\n");
+    return;
+  }
+  
+  // Build ByteTrack detections (camera-space, class=0 for person)
+  // Use fully qualified bytetrack::Detection to avoid confusion with models/model_runner.h Detection
+  std::vector<bytetrack::Detection> bt_dets;
+  bt_dets.reserve(dets.size());
+  for (const auto& d : dets) {
+    if (cfg_.class_person >= 0 && d.class_id != cfg_.class_person) continue;
+    if (d.score < cfg_.min_det_score) continue;
+    int area = bbox_area(d.x0, d.y0, d.x1, d.y1);
+    if (area < cfg_.min_area_px) continue;
+    
+    bytetrack::Detection bt_det;  // ByteTrack Detection from byte_types.h
+    bt_det.box.x0 = d.x0;
+    bt_det.box.y0 = d.y0;
+    bt_det.box.x1 = d.x1;
+    bt_det.box.y1 = d.y1;
+    bt_det.score = d.score;
+    bt_det.class_id = 0;  // person
+    bt_dets.push_back(bt_det);
+  }
+  
+  // Call ByteTrack
+  auto bt_tracks = byte_tracker_->update(bt_dets, ts, fps);
+  
+  // Update our internal tracks map with ByteTrack results
+  std::unordered_map<int, TrackStateInternal> new_tracks;
+  
+  for (const auto& bt_tr : bt_tracks) {
+    // Get or create track
+    auto it = tracks_.find(bt_tr.id);
+    TrackStateInternal t;
+    
+    if (it != tracks_.end()) {
+      // Existing track - update from KF box (NO bbox EMA!)
+      t = it->second;
+    } else {
+      // New track - initialize
+      t.id = bt_tr.id;
+      t.state = bt_tr.confirmed ? ::TrackState::Confirmed : ::TrackState::Tentative;
+      t.first_ts = ts;
+      t.cx_prev = bt_tr.box.cx();
+      t.cy_prev = bt_tr.box.cy();
+      t.hist_idx = 0;
+      t.filled = 0;
+      t.vx = 0; t.vy = 0; t.speed = 0;
+      t.dir_deg = 0; t.dir_label = "?"; t.dir_bin = -1;
+      t.dir_conf = 0.f;
+      t.moving_streak = 0;
+      t.last_dir_ts = ts;
+      t.dwell_s = 0.0;
+      t.age_frames = 0;
+      t.hits = 1;
+      t.missed = 0;
+      t.enter_sent = false;
+      t.exit_sent = false;
+      t.was_inside = false;
+    }
+    
+    // Update bbox from KF (no EMA smoothing - KF already does this)
+    t.x0 = bt_tr.box.x0;
+    t.y0 = bt_tr.box.y0;
+    t.x1 = bt_tr.box.x1;
+    t.y1 = bt_tr.box.y1;
+    t.score = bt_tr.score;
+    t.age_frames = bt_tr.age;
+    t.hits = bt_tr.hits;
+    t.missed = bt_tr.time_since_update;
+    
+    // Use KF velocity directly with optional EMA for extra smoothness
+    const float B = clamp01(cfg_.smooth_vel_alpha);  // e.g., 0.2
+    t.vx = B * bt_tr.vx + (1.f - B) * t.vx;
+    t.vy = B * bt_tr.vy + (1.f - B) * t.vy;
+    
+    // Debug: log KF velocity for first few frames (comment out in production)
+    // if (t.age_frames < 100 && t.age_frames % 10 == 0) {
+    //   float sp = std::hypot(t.vx, t.vy);
+    //   fprintf(stderr, "[KF] id=%d age=%d c=(%.1f,%.1f) v=(%.1f,%.1f) sp=%.1f score=%.2f\n",
+    //           t.id, t.age_frames, t.cx, t.cy, t.vx, t.vy, sp, t.score);
+    // }
+    
+    // Update behavior fields (deadband, velocity, direction, ROI, dwell)
+    update_behavior_fields(t, ts, fps);
+    
+    // Update state
+    if (!bt_tr.confirmed && t.hits >= cfg_.confirm_hits) {
+      t.state = ::TrackState::Confirmed;
+    }
+    
+    new_tracks[t.id] = t;
+  }
+  
+  tracks_.swap(new_tracks);
 }
