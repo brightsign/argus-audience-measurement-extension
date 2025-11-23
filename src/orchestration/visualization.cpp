@@ -100,8 +100,42 @@ static void draw_face_detections(
     // Draw face detections from fusion data
     for (size_t i = 0; i < face_dets_copy.size(); ++i) {
         const auto& det = face_dets_copy[i];
+        
+        // V7.0.2: Compute attention (gaze direction) from landmarks
+        bool attending = false;
+        if (i < face_lms_copy.size()) {
+            const auto& lm = face_lms_copy[i];
+            
+            // Extract eye landmarks (pts[0,1] = left_eye, pts[2,3] = right_eye)
+            float left_eye_x = lm.pts[0];
+            float left_eye_y = lm.pts[1];
+            float right_eye_x = lm.pts[2];
+            float right_eye_y = lm.pts[3];
+            
+            // Compute interocular distance
+            float dx = left_eye_x - right_eye_x;
+            float dy = left_eye_y - right_eye_y;
+            float interocular_dist_pix = std::sqrt(dx * dx + dy * dy);
+            
+            // Compute face dimensions
+            float face_width = det.x1 - det.x0;
+            float face_height = det.y1 - det.y0;
+            float face_aspect_ratio = face_height / face_width;
+            float interocular_face_ratio = interocular_dist_pix / face_width;
+            
+            // Attention detection heuristic (same as face_is_looking_at_us)
+            // Face aspect ratio should be ~1.618 (golden ratio)
+            // Interocular ratio should be ~0.5
+            attending = (face_aspect_ratio > 1.2 && face_aspect_ratio < 2.0 &&
+                        interocular_face_ratio > 0.3 && interocular_face_ratio < 0.7);
+        }
+        
+        // Choose box color: green if looking, red otherwise
+        cv::Scalar box_color = attending
+            ? cv::Scalar(0, 255, 0)      // green (BGR)
+            : cv::Scalar(0, 0, 255);     // red (BGR)
 
-        // V7.0.2: Draw simple green boxes for face detections
+        // V7.0.2: Draw face boxes with attention-based color
         // Detection coords are already in model space (x0, y0, x1, y1)
         
         // V6.2.3.5.8: TWO-STAGE TRANSFORM - model/letterbox → camera → canvas
@@ -133,9 +167,21 @@ static void draw_face_detections(
             drawMat,
             cv::Point(x0, y0),
             cv::Point(x1, y1),
-            cv::Scalar(0, 255, 0),  // Green boxes for faces
+            box_color,  // Green if attending, red otherwise
             2
         );
+        
+        // Add "ATTN" label if attending
+        if (attending) {
+            cv::putText(drawMat,
+                        "ATTN",
+                        cv::Point(x0, y0 - 4),
+                        cv::FONT_HERSHEY_SIMPLEX,
+                        0.4,
+                        box_color,
+                        1,
+                        cv::LINE_AA);
+        }
         
         // V7.0.2: Draw facial landmarks (eyes, nose, mouth) if available
         // Landmarks structure: float pts[10] = {x0,y0, x1,y1, x2,y2, x3,y3, x4,y4}
