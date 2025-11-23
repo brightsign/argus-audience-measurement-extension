@@ -99,7 +99,7 @@ static void store_inference_results(
     IModelRunner* runner,
     const InferenceOutputs& outs,
     FusionResults* fusion_output,
-    uint64_t seq) noexcept
+    uint64_t seq) noexcept 
 {
     if (!fusion_output) return;
 
@@ -112,9 +112,25 @@ static void store_inference_results(
         fusion_output->face_dets.assign(outs.dets, outs.dets + outs.num_dets);
         fusion_output->face_lms.assign(outs.lms, outs.lms + outs.num_lms);
         fusion_output->face_seq = seq;
+        
+        #ifdef ENABLE_DEBUG
+        if (seq % 30 == 0) {
+            LG_INFO("store_inference_results: RetinaFace seq=%llu dets=%d (yolo_seq=%llu)",
+                    (unsigned long long)seq, outs.num_dets, 
+                    (unsigned long long)fusion_output->yolo_seq);
+        }
+        #endif
     } else if (yolox_runner) {
         fusion_output->yolo_dets.assign(outs.dets, outs.dets + outs.num_dets);
         fusion_output->yolo_seq = seq;
+        
+        #ifdef ENABLE_DEBUG
+        if (seq % 30 == 0) {
+            LG_INFO("store_inference_results: YOLOX seq=%llu dets=%d (face_seq=%llu)",
+                    (unsigned long long)seq, outs.num_dets, 
+                    (unsigned long long)fusion_output->face_seq);
+        }
+        #endif
     }
 }
 
@@ -165,11 +181,24 @@ void run_inference_loop(
 
             // Skip frames based on configuration
             if (!should_process_frame(sf->seq, config.skip_frames)) {
+                #ifdef ENABLE_DEBUG
+                if (sf->seq % 100 == 0) {
+                    LG_INFO("inference_worker: skipped frame seq=%llu (%s)",
+                            (unsigned long long)sf->seq, config.model_name.c_str());
+                }
+                #endif
                 continue;
             }
 
             // Track processed frames (for inference FPS)
             fps_processed_count++;
+            
+            #ifdef ENABLE_DEBUG
+            if (sf->seq % 30 == 0) {
+                LG_INFO("inference_worker: processing frame seq=%llu (%s)",
+                        (unsigned long long)sf->seq, config.model_name.c_str());
+            }
+            #endif
 
             // Log first frame reception
             if (!logged_first_frame) {
@@ -206,12 +235,17 @@ void run_inference_loop(
                 continue;
             }
 
+            // Store results in fusion output FIRST (before visualization)
+            store_inference_results(runner, outs, fusion_output, sf->seq);
+
             // Draw overlays and save debug JPEG
             // V6.2.3.2: Pass original dimensions so visualization can scale coordinates
             // V6.2.3.5.7: Pass second_runner to draw detections from both models on same frame
+            // V7.0.2: Pass fusion_output to access synchronized detection results
             cv::Mat rgb_mat(dst_h, dst_w, CV_8UC3, rgb_resized_buf.data());
             visualization::process_inference_results(runner, rgb_mat, debug_frame_idx,
-                                                     sf->width, sf->height, second_runner);
+                                                     sf->width, sf->height, second_runner,
+                                                     fusion_output);
 
             // Write frame to disk if writer is available
             if (frame_writer) {
@@ -219,9 +253,6 @@ void run_inference_loop(
                 result.seq = sf->seq;
                 frame_writer->writeFrame(rgb_mat, result);
             }
-
-            // Store results in fusion output
-            store_inference_results(runner, outs, fusion_output, sf->seq);
 
             // Log periodically
             #ifdef ENABLE_DEBUG

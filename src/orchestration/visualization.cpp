@@ -1,4 +1,5 @@
 #include "orchestration/visualization.h"
+#include "orchestration/inference_worker.h"  // For FusionResults
 #include "models/model_runner.h"
 #include "models/model_runner_retinaface.h"
 #include "models/model_runner_yolox.h"
@@ -22,21 +23,65 @@ void save_debug_jpg(
     (void)frame_idx;
 }
 
+// V7.0.2: Updated to use FusionResults for synchronized face detection data
 static void draw_face_detections(
     cv::Mat& drawMat,
     const RKNNRetinafaceRunner* retinaface_runner,
     float scale_x,
     float scale_y, 
     int offset_x,
-    int offset_y) noexcept
+    int offset_y,
+    FusionResults* fusion_output) noexcept
 {
-    const retinaface_result* result =
-        static_cast<const retinaface_result*>(
-            retinaface_runner->get_last_result());
-
-    if (!result || result->count == 0) {
+    // V7.0.2: Use FusionResults directly for synchronized detection data
+    if (!fusion_output) {
+        // Fallback: use runner cache if no fusion output available
+        const retinaface_result* result = static_cast<const retinaface_result*>(
+                retinaface_runner->get_last_result());
+        if (!result || result->count == 0) {
+            return;
+        }
+        // Draw from cached result (legacy path)
+        for (int i = 0; i < result->count; i++) {
+            const auto& obj = result->object[i];
+            int x0 = static_cast<int>(obj.box.left * scale_x) + offset_x;
+            int y0 = static_cast<int>(obj.box.top * scale_y) + offset_y;
+            int x1 = static_cast<int>(obj.box.right * scale_x) + offset_x;
+            int y1 = static_cast<int>(obj.box.bottom * scale_y) + offset_y;
+            cv::rectangle(drawMat, cv::Point(x0, y0), cv::Point(x1, y1), 
+                         cv::Scalar(0, 255, 0), 2);
+        }
         return;
     }
+    
+    // Lock fusion output and copy detections + landmarks for processing
+    std::vector<Detection> face_dets_copy;
+    std::vector<Landmarks> face_lms_copy;
+    uint64_t face_seq_copy = 0;
+    {
+        std::lock_guard<std::mutex> g(fusion_output->m);
+        if (fusion_output->face_dets.empty() || fusion_output->face_seq == 0) {
+            static int no_face_log_count = 0;
+            if (no_face_log_count < 10 || no_face_log_count % 100 == 0) {
+                LG_INFO("[VIS-FACE] No face detections in fusion (seq=%llu, dets=%zu)",
+                        (unsigned long long)fusion_output->face_seq,
+                        fusion_output->face_dets.size());
+            }
+            no_face_log_count++;
+            return;
+        }
+        face_dets_copy = fusion_output->face_dets;
+        face_lms_copy = fusion_output->face_lms;
+        face_seq_copy = fusion_output->face_seq;
+    }
+    
+    // Log periodically
+    static int face_draw_count = 0;
+    if (face_draw_count < 10 || face_draw_count % 30 == 0) {
+        LG_INFO("[VIS-FACE] Drawing %zu face detections from fusion (seq=%llu, count=%d)", 
+                face_dets_copy.size(), (unsigned long long)face_seq_copy, face_draw_count);
+    }
+    face_draw_count++;
 
     // V6.2.3.5.8: De-letterbox parameters (model/letterbox → camera coords)
     // RetinaFace outputs are in 320×320 model/letterbox space
@@ -52,34 +97,24 @@ static void draw_face_detections(
         face_delbox_log++;
     }
 
-    int attending_total = 0;
+    // Draw face detections from fusion data
+    for (size_t i = 0; i < face_dets_copy.size(); ++i) {
+        const auto& det = face_dets_copy[i];
 
-    for (int i = 0; i < result->count; ++i) {
-        const auto& obj = result->object[i];
-
-        // choose box color: green if looking, red otherwise
-        bool attending = face_is_looking_at_us(obj);
-        if (attending) {
-            attending_total++;
-        }
-
-        // BGR format: (B, G, R)
-        cv::Scalar box_color = attending
-            ? cv::Scalar(0, 255, 0)      // green in BGR
-            : cv::Scalar(0, 0, 255);     // red in BGR
-
+        // V7.0.2: Draw simple green boxes for face detections
+        // Detection coords are already in model space (x0, y0, x1, y1)
+        
         // V6.2.3.5.8: TWO-STAGE TRANSFORM - model/letterbox → camera → canvas
         // Step 1: De-letterbox (model/letterbox → camera coords)
-        const auto& box = obj.box;
-        float cx0 = (box.left - pad_x) / s;
-        float cy0 = (box.top - pad_y) / s;
-        float cx1 = (box.right - pad_x) / s;
-        float cy1 = (box.bottom - pad_y) / s;
+        float cx0 = (det.x0 - pad_x) / s;
+        float cy0 = (det.y0 - pad_y) / s;
+        float cx1 = (det.x1 - pad_x) / s;
+        float cy1 = (det.y1 - pad_y) / s;
         
         static int face_transform_log = 0;
-        if (face_transform_log < 3) {
-            LG_INFO("[RET] Face#%d model=(%.1f,%.1f,%.1f,%.1f) -> camera=(%.1f,%.1f,%.1f,%.1f)",
-                    i, box.left, box.top, box.right, box.bottom, cx0, cy0, cx1, cy1);
+        if (face_transform_log < 3 && i == 0) {
+            LG_INFO("[RET] Face#%zu model=(%.1f,%.1f,%.1f,%.1f) -> camera=(%.1f,%.1f,%.1f,%.1f)",
+                    i, det.x0, det.y0, det.x1, det.y1, cx0, cy0, cx1, cy1);
             face_transform_log++;
         }
         
@@ -98,53 +133,46 @@ static void draw_face_detections(
             drawMat,
             cv::Point(x0, y0),
             cv::Point(x1, y1),
-            box_color,
+            cv::Scalar(0, 255, 0),  // Green boxes for faces
             2
         );
-
-        // V6.2.3.5.8: Transform landmarks (model/letterbox → camera → canvas)
-        for (int lm = 0; lm < 5; ++lm) {
-            // Step 1: De-letterbox (model/letterbox → camera)
-            float cam_lx = (obj.ponit[lm].x - pad_x) / s;
-            float cam_ly = (obj.ponit[lm].y - pad_y) / s;
+        
+        // V7.0.2: Draw facial landmarks (eyes, nose, mouth) if available
+        // Landmarks structure: float pts[10] = {x0,y0, x1,y1, x2,y2, x3,y3, x4,y4}
+        // 5 points: left_eye, right_eye, nose, left_mouth, right_mouth
+        if (i < face_lms_copy.size()) {
+            const auto& lm = face_lms_copy[i];
             
-            // Step 2: Camera → canvas (scale, then add offset_y=40)
-            int lx = (int)std::round(cam_lx * scale_x) + offset_x;
-            int ly = (int)std::round(cam_ly * scale_y) + offset_y;
+            // Draw 5 facial landmarks
+            for (int lm_idx = 0; lm_idx < 5; ++lm_idx) {
+                float model_x = lm.pts[lm_idx * 2];
+                float model_y = lm.pts[lm_idx * 2 + 1];
+                
+                // V6.2.3.5.8: Transform landmarks (model/letterbox → camera → canvas)
+                // Step 1: De-letterbox (model/letterbox → camera)
+                float cam_lx = (model_x - pad_x) / s;
+                float cam_ly = (model_y - pad_y) / s;
+                
+                // Step 2: Camera → canvas (scale, then add offset_y=40)
+                int lx = (int)std::round(cam_lx * scale_x) + offset_x;
+                int ly = (int)std::round(cam_ly * scale_y) + offset_y;
 
-            // eye landmarks cyan, others yellow
-            cv::Scalar lm_color = (lm < 2)
-                ? cv::Scalar(0, 255, 255)    // cyan
-                : cv::Scalar(255, 255, 0);   // yellow
+                // Eye landmarks cyan, others yellow
+                cv::Scalar lm_color = (lm_idx < 2)
+                    ? cv::Scalar(255, 255, 0)    // cyan (BGR)
+                    : cv::Scalar(0, 255, 255);   // yellow (BGR)
 
-            cv::circle(
-                drawMat,
-                cv::Point(lx, ly),
-                2,
-                lm_color,
-                2,
-                cv::LINE_AA
-            );
-        }
-
-        // put "attn" label if attending (use canvas coords)
-        if (attending) {
-            cv::putText(drawMat,
-                        "ATTN",
-                        cv::Point(x0, y0 - 4),
-                        cv::FONT_HERSHEY_SIMPLEX,
-                        0.4,
-                        box_color,
-                        1,
-                        cv::LINE_AA);
+                cv::circle(
+                    drawMat,
+                    cv::Point(lx, ly),
+                    2,
+                    lm_color,
+                    2,
+                    cv::LINE_AA
+                );
+            }
         }
     }
-
-    #ifdef DEBUG_LOGS
-    LG_INFO("overlay: faces=%d attending=%d",
-            result->count,
-            attending_total);
-    #endif
 }
 
 static void draw_yolo_detections(
@@ -255,13 +283,15 @@ static void draw_yolo_detections(
     #endif
 }
 
+// V7.0.2: Updated to accept FusionResults for synchronized detection access
 void process_inference_results(
     IModelRunner* runner,
     cv::Mat& rgb_mat,
     uint32_t& debug_frame_idx,
     int orig_width,
     int orig_height,
-    IModelRunner* second_runner) noexcept
+    IModelRunner* second_runner,
+    FusionResults* fusion_output) noexcept
 {
     if (!runner) return;
 
@@ -321,15 +351,16 @@ void process_inference_results(
 
     // V6.2.3.5.6: Draw both face AND YOLOX detections (not mutually exclusive)
     // Both need coordinate transforms from camera space to canvas space
+    // V7.0.2: Pass fusion_output for synchronized face detection access
     static int draw_debug_count = 0;
     if (draw_debug_count < 3) {
-        LG_INFO("[VIS-DRAW] retinaface_runner=%p yolox_runner=%p", 
-                retinaface_runner, yolox_runner);
+        LG_INFO("[VIS-DRAW] retinaface_runner=%p yolox_runner=%p fusion_output=%p", 
+                retinaface_runner, yolox_runner, fusion_output);
         draw_debug_count++;
     }
     
     if (retinaface_runner) {
-        draw_face_detections(drawMat, retinaface_runner, scale_x, scale_y, offset_x, offset_y);
+        draw_face_detections(drawMat, retinaface_runner, scale_x, scale_y, offset_x, offset_y, fusion_output);
     }
     if (yolox_runner) {
         draw_yolo_detections(drawMat, yolox_runner, scale_x, scale_y, offset_x, offset_y);
