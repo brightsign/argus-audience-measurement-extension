@@ -1,3 +1,5 @@
+#define ENABLE_DEBUG
+
 #include "orchestration/inference_worker.h"
 #include "orchestration/visualization.h"
 #include "models/model_runner.h"
@@ -99,7 +101,7 @@ static void store_inference_results(
     IModelRunner* runner,
     const InferenceOutputs& outs,
     FusionResults* fusion_output,
-    uint64_t seq) noexcept
+    uint64_t seq) noexcept 
 {
     if (!fusion_output) return;
 
@@ -112,9 +114,25 @@ static void store_inference_results(
         fusion_output->face_dets.assign(outs.dets, outs.dets + outs.num_dets);
         fusion_output->face_lms.assign(outs.lms, outs.lms + outs.num_lms);
         fusion_output->face_seq = seq;
+        
+        #ifdef ENABLE_DEBUG
+        if (seq % 30 == 0) {
+            LG_INFO("store_inference_results: RetinaFace seq=%llu dets=%d (yolo_seq=%llu)",
+                    (unsigned long long)seq, outs.num_dets, 
+                    (unsigned long long)fusion_output->yolo_seq);
+        }
+        #endif
     } else if (yolox_runner) {
         fusion_output->yolo_dets.assign(outs.dets, outs.dets + outs.num_dets);
         fusion_output->yolo_seq = seq;
+        
+        #ifdef ENABLE_DEBUG
+        if (seq % 30 == 0) {
+            LG_INFO("store_inference_results: YOLOX seq=%llu dets=%d (face_seq=%llu)",
+                    (unsigned long long)seq, outs.num_dets, 
+                    (unsigned long long)fusion_output->face_seq);
+        }
+        #endif
     }
 }
 
@@ -165,11 +183,24 @@ void run_inference_loop(
 
             // Skip frames based on configuration
             if (!should_process_frame(sf->seq, config.skip_frames)) {
+                #ifdef ENABLE_DEBUG
+                if (sf->seq % 100 == 0) {
+                    LG_INFO("inference_worker: skipped frame seq=%llu (%s)",
+                            (unsigned long long)sf->seq, config.model_name.c_str());
+                }
+                #endif
                 continue;
             }
 
             // Track processed frames (for inference FPS)
             fps_processed_count++;
+            
+            #ifdef ENABLE_DEBUG
+            if (sf->seq % 30 == 0) {
+                LG_INFO("inference_worker: processing frame seq=%llu (%s)",
+                        (unsigned long long)sf->seq, config.model_name.c_str());
+            }
+            #endif
 
             // Log first frame reception
             if (!logged_first_frame) {

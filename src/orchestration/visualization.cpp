@@ -35,8 +35,21 @@ static void draw_face_detections(
             retinaface_runner->get_last_result());
 
     if (!result || result->count == 0) {
+        static int no_face_log_count = 0;
+        if (no_face_log_count < 10 || no_face_log_count % 30 == 0) {
+            LG_INFO("[VIS-FACE] No face detections (result=%p, count=%d) log_count=%d",
+                    result, result ? result->count : -1, no_face_log_count);
+        }
+        no_face_log_count++;
         return;
     }
+    
+    static int face_draw_count = 0;
+    if (face_draw_count % 30 == 0) {
+        LG_INFO("[VIS-FACE] Drawing %d face detections (count=%d)", 
+                result->count, face_draw_count);
+    }
+    face_draw_count++;
 
     // V6.2.3.5.8: De-letterbox parameters (model/letterbox → camera coords)
     // RetinaFace outputs are in 320×320 model/letterbox space
