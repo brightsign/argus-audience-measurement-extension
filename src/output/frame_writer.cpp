@@ -8,7 +8,7 @@
 #include <ctime>
 #include <iomanip>
 #include <sstream>
-#define ENABLE_DEBUG
+
 namespace fs = std::filesystem;
 
 namespace {

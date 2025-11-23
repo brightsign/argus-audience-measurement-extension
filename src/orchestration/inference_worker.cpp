@@ -1,5 +1,3 @@
-#define ENABLE_DEBUG
-
 #include "orchestration/inference_worker.h"
 #include "orchestration/visualization.h"
 #include "models/model_runner.h"
@@ -237,12 +235,17 @@ void run_inference_loop(
                 continue;
             }
 
+            // Store results in fusion output FIRST (before visualization)
+            store_inference_results(runner, outs, fusion_output, sf->seq);
+
             // Draw overlays and save debug JPEG
             // V6.2.3.2: Pass original dimensions so visualization can scale coordinates
             // V6.2.3.5.7: Pass second_runner to draw detections from both models on same frame
+            // V7.0.2: Pass fusion_output to access synchronized detection results
             cv::Mat rgb_mat(dst_h, dst_w, CV_8UC3, rgb_resized_buf.data());
             visualization::process_inference_results(runner, rgb_mat, debug_frame_idx,
-                                                     sf->width, sf->height, second_runner);
+                                                     sf->width, sf->height, second_runner,
+                                                     fusion_output);
 
             // Write frame to disk if writer is available
             if (frame_writer) {
@@ -250,9 +253,6 @@ void run_inference_loop(
                 result.seq = sf->seq;
                 frame_writer->writeFrame(rgb_mat, result);
             }
-
-            // Store results in fusion output
-            store_inference_results(runner, outs, fusion_output, sf->seq);
 
             // Log periodically
             #ifdef ENABLE_DEBUG
