@@ -53,4 +53,11 @@ private:
   int      frame_height_{480};  // V6.2: For normalized speed
   uint64_t last_ts_ns_{0};
   std::vector<TrackedBox> tracks_;  // Person tracks with stable IDs
+  
+  // V7.0: Enhanced telemetry
+  float    detector_fps_{0.0f};
+  float    tracker_fps_{0.0f};
+  float    npu_load_{0.0f};
+  int      dropped_frames_{0};
+  double   last_model_reload_ts_{0.0};
 };

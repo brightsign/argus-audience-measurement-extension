@@ -13,6 +13,11 @@
 [ -f /etc/init.d/functions ] && . /etc/init.d/functions
 
 SCRIPT_PATH=$(dirname $(realpath $0))
+
+# CRITICAL FIX: Replace 'gaze' with 'argus' in path if present
+# This handles the case where the directory was renamed but paths still reference old name
+SCRIPT_PATH=$(echo "$SCRIPT_PATH" | sed 's/ext_npu_gaze/ext_npu_argus/g')
+
 DAEMON_NAME="bsext-argus"
 PIDFILE="/var/run/${DAEMON_NAME}.pid"
 STREAM_SERVER_PIDFILE="/var/run/bsext-image-stream-server.pid"
@@ -239,6 +244,28 @@ do_start() {
         return
     fi
 
+    # CRITICAL: Kill any existing processes before starting new ones
+    # This prevents orphaned processes and stale PID files
+    echo "Checking for existing processes before starting..."
+    if pgrep -f "attention_demo" >/dev/null 2>&1; then
+        echo "  Found existing attention_demo process, killing it..."
+        pkill -9 -f "attention_demo" 2>/dev/null || true
+        sleep 1
+    fi
+    if pgrep -f "image-stream-server" >/dev/null 2>&1; then
+        echo "  Found existing image-stream-server process, killing it..."
+        pkill -9 -f "image-stream-server" 2>/dev/null || true
+        sleep 1
+    fi
+    if pgrep -f "mosquitto.*bsext" >/dev/null 2>&1; then
+        echo "  Found existing mosquitto process, killing it..."
+        pkill -9 -f "mosquitto.*bsext" 2>/dev/null || true
+        sleep 1
+    fi
+    
+    # Clean up stale PID files
+    rm -f ${PIDFILE} ${STREAM_SERVER_PIDFILE} ${MQTT_BROKER_PIDFILE} 2>/dev/null || true
+
     SOC_NAME=$(get_soc_name)
     setup_gstreamer_env
 
@@ -320,28 +347,44 @@ do_stop() {
         sleep 1
     fi
 
-    # Stop image-stream-server
+    # Stop image-stream-server (ALWAYS kill by name to handle all instances)
+    echo "Stopping image-stream-server..."
+    
+    # Kill ALL image-stream-server processes by name (handles truncated names in ps)
+    # Use multiple patterns to catch truncated process names
+    echo "  Searching for image-stream-server processes..."
+    pkill -9 -f "image-stream-se" 2>/dev/null || true
+    pkill -9 -f "image-stream-server" 2>/dev/null || true
+    killall -9 image-stream-server 2>/dev/null || true
+    
+    # Also try PID file if it exists (for cleanup)
     if [ -f "${STREAM_SERVER_PIDFILE}" ]; then
-        echo "Stopping image-stream-server (PID file: ${STREAM_SERVER_PIDFILE})"
         local pid=$(cat ${STREAM_SERVER_PIDFILE} 2>/dev/null)
         if [ -n "$pid" ]; then
-            echo "Killing process $pid with SIGKILL..."
+            echo "  Also killing PID $pid from PID file..."
             kill -9 $pid 2>/dev/null || true
-            # Also kill any child processes
             pkill -9 -P $pid 2>/dev/null || true
         fi
         rm -f ${STREAM_SERVER_PIDFILE}
-    else
-        echo "No PID file found for image-stream-server, trying to kill by name..."
-        pkill -9 -f "image-stream-server" || true
     fi
     
-    # Verify image-stream-server is stopped
+    # Give processes time to die
     sleep 1
-    if pgrep -f "image-stream-server" >/dev/null 2>&1; then
-        echo "WARNING: image-stream-server still running, forcing kill by name..."
-        pkill -9 -f "image-stream-server" || true
+    
+    # Verify image-stream-server is stopped (check for truncated name too)
+    if ps | grep -E "image-stream|image-stream-se" | grep -v grep >/dev/null 2>&1; then
+        echo "  WARNING: image-stream-server still running! Showing processes:"
+        ps | grep -E "image-stream|image-stream-se" | grep -v grep
+        echo "  Forcing final kill..."
+        ps | grep -E "image-stream|image-stream-se" | grep -v grep | awk '{print $1}' | xargs -r kill -9 2>/dev/null || true
         sleep 1
+        if ps | grep -E "image-stream|image-stream-se" | grep -v grep >/dev/null 2>&1; then
+            echo "  ERROR: Failed to stop image-stream-server after multiple attempts!"
+        else
+            echo "  image-stream-server stopped successfully (after forced kill)"
+        fi
+    else
+        echo "  image-stream-server stopped successfully"
     fi
 
     # Stop mosquitto broker

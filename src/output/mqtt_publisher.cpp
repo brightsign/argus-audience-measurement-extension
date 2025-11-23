@@ -1,12 +1,39 @@
 #include "output/mqtt_publisher.h"
 #include "metrics/log_global.h"
 #include <chrono>
+#include <cmath>   // For std::sqrt
 #include <cstdio>
+#include <fstream>
+#include <string>
 
 // Only compile full implementation if mosquitto is available
 #if HAVE_MOSQUITTO
 
 using clk = std::chrono::steady_clock;
+
+// Helper: Read NPU load percentage from RK3568 kernel debug interface
+static float read_npu_load_percent() {
+  std::ifstream f("/sys/kernel/debug/rknpu/load");
+  if (!f.is_open()) return 0.0f;
+  
+  std::string line;
+  if (!std::getline(f, line)) return 0.0f;
+  
+  // Expected format: "NPU load: XX%"
+  auto colon_pos = line.find(':');
+  auto percent_pos = line.find('%');
+  
+  if (colon_pos != std::string::npos && 
+      percent_pos != std::string::npos && 
+      percent_pos > colon_pos) {
+    try {
+      return std::stof(line.substr(colon_pos + 1, percent_pos - colon_pos - 1));
+    } catch (...) {
+      return 0.0f;
+    }
+  }
+  return 0.0f;
+}
 
 MqttPublisher::MqttPublisher(const Cfg& cfg) noexcept : cfg_(cfg) {
   mosquitto_lib_init();
@@ -78,55 +105,98 @@ bool MqttPublisher::publish_result(const PipelineResult& r) noexcept {
   frames_accum_ = r.fps;  // Store actual FPS in frames_accum_ for use in payload
   frame_width_  = r.frame_width;   // V6.2: Store for normalized speed
   frame_height_ = r.frame_height;  // V6.2: Store for normalized speed
+  
+  // V7.0: Update health metrics from pipeline data (immediate, not waiting for telemetry)
+  detector_fps_ = float(r.fps);  // Detector FPS ~= pipeline FPS
+  tracker_fps_ = float(r.fps);   // Tracker FPS ~= pipeline FPS
+  npu_load_ = read_npu_load_percent();  // Read NPU load from kernel debug interface
+  
   // Store person tracks
   tracks_ = r.person_tracks;
   return true;
 }
 
 bool MqttPublisher::publish_telemetry(const TelemetrySnapshot& t) noexcept {
-  // Optional: could add telemetry (temperature, etc.)
-  (void)t;
+  std::lock_guard<std::mutex> lk(m_);
+  // V7.0: Capture health metrics for MQTT output
+  detector_fps_ = t.fps.avg_fps;     // Use average FPS as detector rate
+  tracker_fps_ = t.fps.avg_fps;      // Same for tracker (can differentiate if needed)
+  npu_load_ = t.npu_util * 100.0f;   // Convert 0-1 to 0-100%
+  dropped_frames_ = 0;                // TODO: wire up from error counters if available
+  // last_model_reload_ts_ remains 0.0 unless model reloading is implemented
   return true;
 }
 
 std::string MqttPublisher::make_payload_locked() const {
-  // Build enhanced JSON with tracking data
+  // Build v7.0 JSON with full schema
   const int fps = frames_accum_;
   const double ts_s = last_ts_ns_ * 1e-9;  // Convert ns to seconds
   
   // CRITICAL FIX: Derive people count from actual tracks we're about to emit
-  // This prevents mismatch between people:N and empty tracks array
   const int people_count = static_cast<int>(tracks_.size());
   
-  std::string payload;
-  payload.reserve(512 + tracks_.size() * 128);  // Pre-allocate for efficiency
+  // Count high-confidence tracks (score >= 0.70)
+  int people_confident = 0;
+  for (const auto& t : tracks_) {
+    if (t.score >= 0.70f) people_confident++;
+  }
   
-  // Build JSON: {ts, device, stream, people, gaze, fps, tracks:[...]}
-  // Use tracks_.size() directly as people count to ensure they match
-  char header[256];
+  std::string payload;
+  payload.reserve(1024 + tracks_.size() * 256);  // Larger buffer for v7.0
+  
+  // V7.0: Full schema with metadata
+  char header[768];
   std::snprintf(header, sizeof(header),
-    "{\"ts\":%.2f,\"device\":\"%s\",\"stream\":\"%s\",\"people\":%d,\"gaze\":%d,\"fps\":%d,\"tracks\":[",
+    "{\"schema\":\"analytics/v7.0\","
+    "\"ts\":%.2f,\"device\":\"%s\",\"stream\":\"%s\","
+    "\"frame_w\":%d,\"frame_h\":%d,"
+    "\"model\":\"yolox_s\",\"fw_version\":\"7.0.0\","
+    "\"npu_load\":%.1f,"
+    "\"people\":%d,\"people_confident\":%d,"
+    "\"gaze\":%d,\"fps\":%d,"
+    "\"roi\":{\"type\":\"border\",\"border_frac\":0.10,\"rect\":[%d,%d,%d,%d]},"
+    "\"health\":{\"detector_fps\":%.1f,\"tracker_fps\":%.1f,\"queue_latency_ms\":0,\"dropped_frames\":%d,\"last_model_reload_ts\":%.1f},"
+    "\"tracks\":[",
     ts_s,
     cfg_.device_id.c_str(),
     cfg_.stream_id.c_str(),
-    people_count,  // Use actual track count, not people_ field
-    gaze_, fps);
+    frame_width_, frame_height_,
+    npu_load_,
+    people_count, people_confident,
+    gaze_, fps,
+    // ROI rect (10% border inset)
+    int(frame_width_ * 0.10f), int(frame_height_ * 0.10f),
+    int(frame_width_ * 0.90f), int(frame_height_ * 0.90f),
+    detector_fps_, tracker_fps_, dropped_frames_, last_model_reload_ts_);
   payload += header;
   
-  // Add each track
+  // Add each track with v7.0 fields
   for (size_t i = 0; i < tracks_.size(); ++i) {
     const auto& t = tracks_[i];
     
-    // V6.2: Calculate normalized speed (% of frame width per second)
-    float speed_norm = (frame_width_ > 0) ? (t.speed / float(frame_width_)) : 0.0f;
+    // V6.2: Calculate normalized speed (% of frame diagonal per second)
+    const float frame_diag = std::sqrt(float(frame_width_ * frame_width_ + frame_height_ * frame_height_));
+    float speed_norm = (frame_diag > 0) ? (t.speed / frame_diag) : 0.0f;
     
-    char buf[384];  // Increased buffer for additional fields
+    // V7.0: Determine zones (simplified - just "roi" vs "edge")
+    const float cx = (t.x0 + t.x1) * 0.5f;
+    const float cy = (t.y0 + t.y1) * 0.5f;
+    const float border_px = frame_width_ * 0.03f;  // 3% border for "edge" zone
+    const bool is_edge = (cx < border_px || cx > frame_width_ - border_px ||
+                          cy < border_px || cy > frame_height_ - border_px);
+    const char* zones_str = is_edge ? "[\"edge\"]" : "[\"roi\"]";
+    
+    char buf[512];  // Larger buffer for v7.0
     std::snprintf(buf, sizeof(buf),
-      "{\"id\":%d,\"bbox\":[%.1f,%.1f,%.1f,%.1f],\"score\":%.2f,"
+      "{\"id\":%d,\"state\":\"Confirmed\","
+      "\"bbox\":[%.1f,%.1f,%.1f,%.1f],\"score\":%.2f,"
+      "\"zones\":%s,"
       "\"dir\":\"%s\",\"deg\":%.1f,\"dir_conf\":%.2f,"
       "\"speed\":%.1f,\"speed_norm\":%.3f,"
       "\"dwell\":%.2f,\"enter\":%s,\"exit\":%s}",
-      t.id, t.x0, t.y0, t.x1, t.y1, t.score,
+      t.id,
+      t.x0, t.y0, t.x1, t.y1, t.score,
+      zones_str,
       t.dir_label, t.dir_deg, t.dir_conf,
       t.speed, speed_norm,
       t.dwell_s,
