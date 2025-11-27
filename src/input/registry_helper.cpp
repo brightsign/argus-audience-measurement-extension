@@ -43,14 +43,30 @@ std::string RegistryHelper::getVideoDevice() {
     }
 
     const std::string low = toLower(val);
+    std::printf("DEBUG: Lowercased value: '%s'\n", low.c_str());
 
-    if (looksLikeUsbToken(low))      return "usb_camera"; // normalize
-    if (looksLikeRtsp(low))          return val;          // keep original URL
-    if (looksLikePath(val))          return val;          // absolute/relative path
-    if (looksLikeCameraIndex(low))   return "/dev/video" + low; // "0" -> "/dev/video0"
+    if (looksLikeUsbToken(low)) {
+        std::printf("DEBUG: Detected as USB token, returning 'usb_camera'\n");
+        return "usb_camera"; // normalize
+    }
+    if (looksLikeRtsp(low)) {
+        std::printf("DEBUG: Detected as RTSP URL, returning original: '%s'\n", val.c_str());
+        return val;          // keep original URL
+    }
+    if (looksLikePath(val)) {
+        std::printf("DEBUG: Detected as file path, returning: '%s'\n", val.c_str());
+        return val;          // absolute/relative path
+    }
+    if (looksLikeCameraIndex(low)) {
+        std::printf("DEBUG: Detected as camera index, returning: '/dev/video%s'\n", low.c_str());
+        return "/dev/video" + low; // "0" -> "/dev/video0"
+    }
 
     // Also allow explicit /dev/videoX device nodes
-    if (startsWith(val, "/dev/video")) return val;
+    if (startsWith(val, "/dev/video")) {
+        std::printf("DEBUG: Detected as /dev/video device, returning: '%s'\n", val.c_str());
+        return val;
+    }
 
     std::fprintf(stderr,
         "DEBUG: Unrecognized video device value '%s'; falling back to 'usb_camera'\n",

@@ -129,12 +129,15 @@ run_attention_demo() {
     SOC_HOME=${SCRIPT_PATH}/${SOC_NAME}
     cd ${SOC_HOME}
 
-    CMD_ARGS="${SOC_HOME}/model/RetinaFace.rknn $(get_video_source) ${SOC_HOME}/configs/config.json" 
-    echo "Using Model and Video Source: ${CMD_ARGS}"
+    # NOTE: DO NOT pass video source as positional argument - it overrides registry!
+    # The application will automatically read bsext-gaze-video-device from registry
+    CMD_ARGS="${SOC_HOME}/model/RetinaFace.rknn ${SOC_HOME}/configs/config.json" 
+    echo "Using Model: RetinaFace.rknn"
+    echo "Video source will be read from registry: bsext-gaze-video-device"
     
     # Debug: Show exactly what we're passing to attention_demo
     echo "DEBUG: SOC_HOME = ${SOC_HOME}"
-    echo "DEBUG: Video source from get_video_source() = $(get_video_source)"
+    echo "DEBUG: Registry video source = $(get_video_source)"
     echo "DEBUG: Complete CMD_ARGS = ${CMD_ARGS}"
     echo "DEBUG: About to execute: ${SOC_HOME}/attention_demo ${CMD_ARGS}"
     
@@ -216,7 +219,13 @@ EOF
 
 setup_gstreamer_env() {
     echo "Setting up GStreamer environment for SOC: $SOC_NAME"
+    
+    # CRITICAL: Bundled plugins MUST come FIRST on LS5
+    # System /usr/lib/gstreamer-1.0 is MISSING rtspsrc, appsink, videoconvert, decodebin
+    # Only has: alsa, audioconvert, coreelements, libav, mpp, rtp, udp, v4l2, parsers
     export GST_PLUGIN_PATH=/var/volatile/bsext/ext_npu_argus/$SOC_NAME/lib/gstreamer-1.0:/usr/lib/gstreamer-1.0
+    export GST_PLUGIN_SYSTEM_PATH=$GST_PLUGIN_PATH
+    
     # Include MQTT bin directory first so mosquitto utilities find their libraries
     # Also include bin directory for all other shared libraries
     export LD_LIBRARY_PATH=/var/volatile/bsext/ext_npu_argus/$SOC_NAME/bin:/var/volatile/bsext/ext_npu_argus/$SOC_NAME/lib:/usr/lib:$LD_LIBRARY_PATH
@@ -224,7 +233,12 @@ setup_gstreamer_env() {
     export GST_PLUGIN_SCANNER="/usr/libexec/gstreamer-1.0/gst-plugin-scanner"
     export GST_REGISTRY_REUSE_PLUGIN_SCANNER=1
     export GST_DEBUG_NO_COLOR=1
+    
+    # Force GStreamer to rescan plugins by clearing old registry
+    rm -f /tmp/gst-registry.bin
+    echo "  Cleared GStreamer registry - will rescan plugins on startup"
     echo "  GST_PLUGIN_PATH=$GST_PLUGIN_PATH"
+    echo "  GST_PLUGIN_SYSTEM_PATH=$GST_PLUGIN_SYSTEM_PATH"
     echo "  LD_LIBRARY_PATH=$LD_LIBRARY_PATH"
     echo "  GST_REGISTRY=$GST_REGISTRY"
     echo "  GST_PLUGIN_SCANNER=$GST_PLUGIN_SCANNER"

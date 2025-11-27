@@ -136,18 +136,97 @@ int main(int argc, char** argv) {
         LG_INFO("CLI: overriding primary model -> %s", cli.model);
         appcfg.primary_model.model_path = cli.model;
     }
-    // Build input from CLI (if present) else registry
+    // Build input with configurable priority based on input_source_priority setting
+    // Priority is always: CLI args > [config or registry] > [other] > auto-detect
     InputConfig effective_input = appcfg.input;
+    
+    // Normalize priority value (default to "config" if invalid)
+    std::string priority = appcfg.input_source_priority;
+    if (priority != "config" && priority != "registry") {
+        LG_WARN("Invalid input_source_priority '%s', defaulting to 'config'", priority.c_str());
+        priority = "config";
+    }
+    
     if (cli.input) {
+        // Priority 1: CLI argument (always highest priority for manual override)
         LG_INFO("CLI: overriding input -> %s", cli.input);
-        effective_input = make_input_from_registry_value(cli.input); // same mapper works for CLI
+        effective_input = make_input_from_registry_value(cli.input);
+    } else if (priority == "config") {
+        // Priority setting: "config" - use config.json input based on input_source selection
+        const std::string& input_src = appcfg.input_source;
+        LG_INFO("Config: using input from config.json (priority='config', input_source='%s')", input_src.c_str());
+        
+        // Select input based on input_source field
+        if (input_src == "rtsp" && !appcfg.input.rtsp_url.empty()) {
+            LG_INFO("  - Selected RTSP URL: %s", appcfg.input.rtsp_url.c_str());
+            effective_input.rtsp_url = appcfg.input.rtsp_url;
+            effective_input.rtsp = appcfg.input.rtsp;
+            // Clear other inputs to avoid conflicts
+            effective_input.usb_device.clear();
+            effective_input.file_path.clear();
+        } else if (input_src == "usb" && !appcfg.input.usb_device.empty()) {
+            LG_INFO("  - Selected USB device: %s", appcfg.input.usb_device.c_str());
+            effective_input.usb_device = appcfg.input.usb_device;
+            effective_input.usb = appcfg.input.usb;
+            // Clear other inputs to avoid conflicts
+            effective_input.rtsp_url.clear();
+            effective_input.file_path.clear();
+        } else if (input_src == "file" && !appcfg.input.file_path.empty()) {
+            LG_INFO("  - Selected File path: %s", appcfg.input.file_path.c_str());
+            effective_input.file_path = appcfg.input.file_path;
+            effective_input.file = appcfg.input.file;
+            // Clear other inputs to avoid conflicts
+            effective_input.rtsp_url.clear();
+            effective_input.usb_device.clear();
+        } else {
+            // Selected input not configured, fallback to first available
+            LG_WARN("Selected input_source='%s' not configured, falling back to first available", input_src.c_str());
+            if (!appcfg.input.rtsp_url.empty()) {
+                LG_INFO("  - Fallback to RTSP URL: %s", appcfg.input.rtsp_url.c_str());
+                effective_input.rtsp_url = appcfg.input.rtsp_url;
+                effective_input.rtsp = appcfg.input.rtsp;
+            } else if (!appcfg.input.usb_device.empty()) {
+                LG_INFO("  - Fallback to USB device: %s", appcfg.input.usb_device.c_str());
+                effective_input.usb_device = appcfg.input.usb_device;
+                effective_input.usb = appcfg.input.usb;
+            } else if (!appcfg.input.file_path.empty()) {
+                LG_INFO("  - Fallback to File path: %s", appcfg.input.file_path.c_str());
+                effective_input.file_path = appcfg.input.file_path;
+                effective_input.file = appcfg.input.file;
+            } else {
+                // All inputs empty, try registry fallback
+                const std::string choice = RegistryHelper::getVideoDevice();
+                LG_INFO("Config empty, using registry fallback: video-device='%s'", choice.c_str());
+                InputConfig reg_input = make_input_from_registry_value(choice);
+                if (!reg_input.rtsp_url.empty() || !reg_input.usb_device.empty() || !reg_input.file_path.empty()) {
+                    effective_input = reg_input;
+                } else {
+                    LG_INFO("No input configured, using auto-detection");
+                }
+            }
+        }
     } else {
-        // Registry fallback
+        // Priority setting: "registry" - prefer registry over config.json
         const std::string choice = RegistryHelper::getVideoDevice();
-        LG_INFO("Registry: video-device='%s'", choice.c_str());
+        LG_INFO("Registry: video-device='%s' (priority='registry')", choice.c_str());
         InputConfig reg_input = make_input_from_registry_value(choice);
         if (!reg_input.rtsp_url.empty() || !reg_input.usb_device.empty() || !reg_input.file_path.empty()) {
             effective_input = reg_input;
+        } else {
+            // Registry returned nothing useful, fallback to config
+            if (!appcfg.input.rtsp_url.empty() || !appcfg.input.usb_device.empty() || !appcfg.input.file_path.empty()) {
+                LG_INFO("Registry empty, using config.json fallback");
+                if (!appcfg.input.rtsp_url.empty()) {
+                    LG_INFO("  - RTSP URL: %s", appcfg.input.rtsp_url.c_str());
+                } else if (!appcfg.input.usb_device.empty()) {
+                    LG_INFO("  - USB device: %s", appcfg.input.usb_device.c_str());
+                } else if (!appcfg.input.file_path.empty()) {
+                    LG_INFO("  - File path: %s", appcfg.input.file_path.c_str());
+                }
+                effective_input = appcfg.input;
+            } else {
+                LG_INFO("No input configured, using auto-detection");
+            }
         }
    }
    // Validate after overrides

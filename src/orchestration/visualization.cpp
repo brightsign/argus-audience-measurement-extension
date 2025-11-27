@@ -24,6 +24,7 @@ void save_debug_jpg(
 }
 
 // V7.0.2: Updated to use FusionResults for synchronized face detection data
+// V7.1: Added orig_width/orig_height for dynamic de-letterbox calculation
 static void draw_face_detections(
     cv::Mat& drawMat,
     const RKNNRetinafaceRunner* retinaface_runner,
@@ -31,7 +32,9 @@ static void draw_face_detections(
     float scale_y, 
     int offset_x,
     int offset_y,
-    FusionResults* fusion_output) noexcept
+    FusionResults* fusion_output,
+    int orig_width,
+    int orig_height) noexcept
 {
     // V7.0.2: Use FusionResults directly for synchronized detection data
     if (!fusion_output) {
@@ -83,17 +86,21 @@ static void draw_face_detections(
     }
     face_draw_count++;
 
-    // V6.2.3.5.8: De-letterbox parameters (model/letterbox → camera coords)
+    // V7.1: DYNAMIC de-letterbox calculation based on actual camera dimensions
     // RetinaFace outputs are in 320×320 model/letterbox space
-    // Camera is 640×480, letterboxed to 320×240 inside 320×320 model
-    const float s = 0.5f;       // min(320/640, 320/480)
-    const float pad_x = 0.0f;   // (320 - 320)/2
-    const float pad_y = 40.0f;  // (320 - 240)/2
+    // Camera could be any resolution (e.g., 640×480, 1920×1080)
+    // Calculate letterbox parameters for this camera resolution
+    const float model_size = 320.0f;
+    const float s = std::min(model_size / orig_width, model_size / orig_height);  // letterbox scale
+    const float letterbox_w = orig_width * s;
+    const float letterbox_h = orig_height * s;
+    const float pad_x = (model_size - letterbox_w) / 2.0f;
+    const float pad_y = (model_size - letterbox_h) / 2.0f;
     
     static int face_delbox_log = 0;
     if (face_delbox_log < 3) {
-        LG_INFO("[RET] De-letterbox: cam=640x480 model=320x320 s=%.3f pad=(%.1f,%.1f)", 
-                s, pad_x, pad_y);
+        LG_INFO("[RET] De-letterbox: cam=%dx%d model=320x320 s=%.3f pad=(%.1f,%.1f)", 
+                orig_width, orig_height, s, pad_x, pad_y);
         face_delbox_log++;
     }
 
@@ -398,6 +405,7 @@ void process_inference_results(
     // V6.2.3.5.6: Draw both face AND YOLOX detections (not mutually exclusive)
     // Both need coordinate transforms from camera space to canvas space
     // V7.0.2: Pass fusion_output for synchronized face detection access
+    // V7.1: Pass orig_width/orig_height for dynamic de-letterbox calculation
     static int draw_debug_count = 0;
     if (draw_debug_count < 3) {
         LG_INFO("[VIS-DRAW] retinaface_runner=%p yolox_runner=%p fusion_output=%p", 
@@ -406,7 +414,7 @@ void process_inference_results(
     }
     
     if (retinaface_runner) {
-        draw_face_detections(drawMat, retinaface_runner, scale_x, scale_y, offset_x, offset_y, fusion_output);
+        draw_face_detections(drawMat, retinaface_runner, scale_x, scale_y, offset_x, offset_y, fusion_output, orig_width, orig_height);
     }
     if (yolox_runner) {
         draw_yolo_detections(drawMat, yolox_runner, scale_x, scale_y, offset_x, offset_y);

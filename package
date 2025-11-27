@@ -297,6 +297,15 @@ copy_binaries() {
                     cp "$lib" "$package_soc_dir/lib/" 2>/dev/null || true
                 fi
             done
+            
+            # CRITICAL: Copy GStreamer plugins subdirectory (required for RTSP on LS5)
+            if [[ -d "$install_dir/lib/gstreamer-1.0" ]]; then
+                mkdir -p "$package_soc_dir/lib/gstreamer-1.0"
+                cp -r "$install_dir/lib/gstreamer-1.0"/* "$package_soc_dir/lib/gstreamer-1.0/" 2>/dev/null || true
+                log "Copied GStreamer plugins for $soc"
+            else
+                warn "GStreamer plugins directory not found in $install_dir/lib/gstreamer-1.0"
+            fi
         fi
 
         success "$soc binaries copied"

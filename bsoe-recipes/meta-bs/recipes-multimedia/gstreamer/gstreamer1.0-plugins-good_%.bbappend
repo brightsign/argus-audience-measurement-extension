@@ -4,3 +4,6 @@ PACKAGECONFIG:append = " soup2 "
 # Remove invalid PACKAGECONFIG options that other layers might add
 PACKAGECONFIG:remove = " soup rtp rtsp "
 EXTRA_OEMESON:append = " -Drtsp=enabled "
+
+EXTRA_OEMESON:append = " -Disomp4=enabled "
+EXTRA_OEMESON:append = " -Dmatroska=enabled "
