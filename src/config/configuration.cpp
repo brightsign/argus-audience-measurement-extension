@@ -113,6 +113,16 @@ bool load_from_file(const std::string& path, AppConfig& out, bool /*strict*/, ch
       if (in.contains("file_path")) out.input.file_path = in["file_path"];
     }
     
+    // Parse input source priority
+    if (j.contains("input_source_priority") && j["input_source_priority"].is_string()) {
+      out.input_source_priority = j["input_source_priority"].get<std::string>();
+    }
+    
+    // Parse explicit input source selection (new field)
+    if (j.contains("input_source") && j["input_source"].is_string()) {
+      out.input_source = j["input_source"].get<std::string>();
+    }
+    
     // Parse publishers array
     if (j.contains("publishers") && j["publishers"].is_array()) {
       out.publishers.clear();

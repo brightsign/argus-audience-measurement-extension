@@ -991,9 +991,24 @@ void Orchestrator::capture_loop_threadfn() noexcept {
         // Wrap into SharedFrame (zero-copy, just wrap the buffer)
         auto sf = std::make_shared<SharedFrame>();
         sf->pts_ns = camView.pts_ns;
-        sf->width  = camView.width;
+        sf->width  = camView.width;   // Preprocessed dimensions (e.g., 320×320)
         sf->height = camView.height;
         sf->seq    = frame_seq_.fetch_add(1, std::memory_order_relaxed) + 1;
+        
+        // V7.1: Preserve original camera/stream dimensions for coordinate transforms
+        // RTSP: orig=1920×1080, preprocessed=320×320
+        // USB:  orig=640×480, preprocessed=320×320 (or whatever USB provides)
+        sf->orig_width  = camView.orig_width;
+        sf->orig_height = camView.orig_height;
+        
+        // V7.1: Debug - verify dimensions are propagating correctly
+        static int sf_debug_count = 0;
+        if (sf_debug_count < 3) {
+            LG_INFO("[SF-COPY] camView: w=%d h=%d orig_w=%d orig_h=%d -> sf: w=%d h=%d orig_w=%d orig_h=%d",
+                    camView.width, camView.height, camView.orig_width, camView.orig_height,
+                    sf->width, sf->height, sf->orig_width, sf->orig_height);
+            sf_debug_count++;
+        }
 
         // Copy BGR data (this is the one place we duplicate pixel data)
         sf->bgr.resize(static_cast<size_t>(sf->width * sf->height * 3));

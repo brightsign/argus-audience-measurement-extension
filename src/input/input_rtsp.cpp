@@ -70,23 +70,106 @@ static void wait_for_network_with_validation(int retries = 30, int delay_sec = 2
 // ===============================
 // GStreamer One-time Init
 // ===============================
+static bool check_gstreamer_plugins() {
+    static bool checked = false;
+    static bool all_present = false;
+    
+    if (checked) return all_present;
+    checked = true;
+    
+    LG_INFO("input_rtsp:checking GStreamer plugin availability...\n");
+    LG_INFO("input_rtsp:GST_PLUGIN_PATH=%s\n", getenv("GST_PLUGIN_PATH") ? getenv("GST_PLUGIN_PATH") : "(not set)");
+    LG_INFO("input_rtsp:LD_LIBRARY_PATH=%s\n", getenv("LD_LIBRARY_PATH") ? getenv("LD_LIBRARY_PATH") : "(not set)");
+    
+    auto have = [](const char* name) -> bool {
+        GstElementFactory* factory = gst_element_factory_find(name);
+        bool found = (factory != nullptr);
+        if (factory) gst_object_unref(factory);
+        return found;
+    };
+    
+    // CRITICAL plugins - RTSP will NOT work without these
+    struct { const char* name; const char* plugin_file; bool critical; } plugins[] = {
+        {"rtspsrc",      "libgstrtsp.so (gst-plugins-good)",         true},
+        {"appsink",      "libgstapp.so (gst-plugins-base)",          true},
+        {"rtph264depay", "libgstrtp.so (gst-plugins-good)",          true},
+        {"h264parse",    "libgstvideoparsersbad.so (gst-plugins-bad)", true},
+        {"queue",        "libgstcoreelements.so (gst-plugins-base)", true},
+        {"mppvideodec",  "libgstrockchipmpp.so (platform)",          false}, // or avdec_h264
+        {"avdec_h264",   "libgstlibav.so (gst-libav)",               false},
+        {"videoconvert", "libgstvideoconvertscale.so (gst-plugins-base)", false},
+        {"decodebin",    "libgstplayback.so (gst-plugins-base)",     false}
+    };
+    
+    all_present = true;
+    bool has_decoder = false;
+    
+    for (const auto& p : plugins) {
+        bool found = have(p.name);
+        if (found) {
+            LG_INFO("input_rtsp:  ✓ %s available (%s)\n", p.name, p.plugin_file);
+            if (strcmp(p.name, "mppvideodec") == 0 || strcmp(p.name, "avdec_h264") == 0) {
+                has_decoder = true;
+            }
+        } else {
+            if (p.critical) {
+                LG_ERROR("input_rtsp:  ✗ %s NOT FOUND - REQUIRED (%s)\n", p.name, p.plugin_file);
+                all_present = false;
+            } else {
+                LG_WARN("input_rtsp:  ✗ %s NOT FOUND - optional (%s)\n", p.name, p.plugin_file);
+            }
+        }
+    }
+    
+    if (!has_decoder) {
+        LG_ERROR("input_rtsp:  ✗ No H264 decoder available (need mppvideodec OR avdec_h264)\n");
+        all_present = false;
+    }
+    
+    if (!all_present) {
+        LG_ERROR("input_rtsp:===================================================================\n");
+        LG_ERROR("input_rtsp:CRITICAL PLUGINS MISSING - RTSP WILL NOT WORK\n");
+        LG_ERROR("input_rtsp:===================================================================\n");
+        LG_ERROR("input_rtsp:Required GStreamer plugins are not installed or not in plugin path.\n");
+        LG_ERROR("input_rtsp:\n");
+        LG_ERROR("input_rtsp:Verify on device:\n");
+        LG_ERROR("input_rtsp:  1. Check bundled plugins exist:\n");
+        LG_ERROR("input_rtsp:     ls -la /var/volatile/bsext/ext_npu_argus/RK3568/lib/gstreamer-1.0/\n");
+        LG_ERROR("input_rtsp:  2. Test plugin loading:\n");
+        LG_ERROR("input_rtsp:     export GST_PLUGIN_PATH=/var/volatile/bsext/ext_npu_argus/RK3568/lib/gstreamer-1.0:/usr/lib/gstreamer-1.0\n");
+        LG_ERROR("input_rtsp:     export LD_LIBRARY_PATH=/var/volatile/bsext/ext_npu_argus/RK3568/lib:$LD_LIBRARY_PATH\n");
+        LG_ERROR("input_rtsp:     gst-inspect-1.0 rtspsrc\n");
+        LG_ERROR("input_rtsp:     gst-inspect-1.0 appsink\n");
+        LG_ERROR("input_rtsp:  3. Check for missing dependencies:\n");
+        LG_ERROR("input_rtsp:     ldd /var/volatile/bsext/ext_npu_argus/RK3568/lib/gstreamer-1.0/libgstrtsp.so\n");
+        LG_ERROR("input_rtsp:     ldd /var/volatile/bsext/ext_npu_argus/RK3568/lib/gstreamer-1.0/libgstapp.so\n");
+        LG_ERROR("input_rtsp:===================================================================\n");
+    } else {
+        LG_INFO("input_rtsp:✅ All critical GStreamer plugins are available\n");
+    }
+    
+    return all_present;
+}
+
 static void gst_init_once() {
     static std::once_flag f;
     std::call_once(f, []{
+        // Delete stale registry to force plugin rescan
+        unlink("/tmp/gst-registry.bin");
+        
         int argc = 0; char** argv = nullptr;
         gst_init(&argc, &argv);
+        
         if (!getenv("GST_REGISTRY")) setenv("GST_REGISTRY", "/tmp/gst-registry.bin", 1);
     });
 }
 
 static void ensure_gstreamer_runtime() {
-    const char* local = "/var/volatile/bsext/ext_npu_argus/RK3588/lib/gstreamer-1.0";
-    const char* sys   = "/usr/lib/gstreamer-1.0";
-    std::string plugin_path = std::string(local) + ":" + sys;
-
-    setenv("GST_PLUGIN_PATH", plugin_path.c_str(), 1);
-    if (!getenv("GST_PLUGIN_SCANNER"))
-        setenv("GST_PLUGIN_SCANNER", "/usr/libexec/gstreamer-1.0/gst-plugin-scanner", 1);
+    // GST_PLUGIN_PATH is already set by bsext_init wrapper script
+    // This function just logs the current configuration
+    const char* path = getenv("GST_PLUGIN_PATH");
+    LG_INFO("input_rtsp:GST_PLUGIN_PATH=%s\n", path ? path : "(not set - will use defaults)");
+    
     if (!getenv("GST_REGISTRY"))
         setenv("GST_REGISTRY", "/tmp/gst-registry.bin", 1);
 }
@@ -116,8 +199,8 @@ static std::vector<std::string> build_rtsp_pipelines(const std::string& url_in) 
         std::string s =
             "rtspsrc location=" + url +
             " protocols=" + proto +
-            " latency=150 drop-on-latency=true do-rtsp-keep-alive=true "
-            " tcp-timeout=5000000000 timeout=7000000000 "
+            " latency=200 drop-on-latency=true do-rtsp-keep-alive=true "
+            " tcp-timeout=10000000000 timeout=15000000000 retry=3 "
             " name=src ";
         s += "src. ! ";
 
@@ -135,7 +218,9 @@ static std::vector<std::string> build_rtsp_pipelines(const std::string& url_in) 
                 s += "videoconvert ! ";
             }
         } else {
-            s += "decodebin ! ";
+            // Auto-detect codec with decodebin
+            // Try multiple color conversion options for BrightSign compatibility
+            s += "decodebin ! videoconvert ! video/x-raw,format=NV12 ! ";
         }
 
         if (scaled_320) {
@@ -155,16 +240,21 @@ static std::vector<std::string> build_rtsp_pipelines(const std::string& url_in) 
     auto urls = make_url_variants(url_in);
 
     for (const auto& url : urls) {
-        // Try most common configurations first (limit attempts to avoid overwhelming camera)
-        // TCP is more reliable than UDP for RTSP, so prioritize it
+        // Try hardware decode FIRST (mppvideodec is native on LS5/Rockchip - no videoconvert needed)
         p.push_back(mk(url, "tcp", "H264", /*hw_decode=*/true,  /*scaled_320=*/false, /*hw_scale=*/false));
-        p.push_back(mk(url, "udp", "H264", /*hw_decode=*/true,  /*scaled_320=*/false, /*hw_scale=*/false));
         
-        // Try with auto-detect encoding (no specific codec)
-        p.push_back(mk(url, "tcp", nullptr,/*hw_decode=*/true,  /*scaled_320=*/false, /*hw_scale=*/false));
+        // Try H265 hardware decode in case camera is using H.265
+        p.push_back(mk(url, "tcp", "H265", /*hw_decode=*/true,  /*scaled_320=*/false, /*hw_scale=*/false));
         
-        // Software decode fallback (slower but more compatible)
+        // Try software decode as fallback (needs videoconvert)
         p.push_back(mk(url, "tcp", "H264", /*hw_decode=*/false, /*scaled_320=*/false, /*hw_scale=*/false));
+        
+        // Try auto-detect with decodebin
+        p.push_back(mk(url, "tcp", nullptr,/*hw_decode=*/false,  /*scaled_320=*/false, /*hw_scale=*/false));
+        
+        // UDP fallbacks
+        p.push_back(mk(url, "udp", "H264", /*hw_decode=*/true, /*scaled_320=*/false, /*hw_scale=*/false));
+        p.push_back(mk(url, "udp", "H264", /*hw_decode=*/false, /*scaled_320=*/false, /*hw_scale=*/false));
     }
     return p;
 }
@@ -176,16 +266,25 @@ class RtspNv12Helper {
 public:
     ~RtspNv12Helper() { close(); }
 
-    bool open(const std::string& url, int first_frame_timeout_ms = 3000) {
+    bool open(const std::string& url, int first_frame_timeout_ms = 10000) {
         close();
         gst_init_once();
         ensure_gstreamer_runtime();
+        
+        // CRITICAL: check_gstreamer_plugins() MUST be called AFTER gst_init_once()
+        // because GStreamer needs to be initialized before querying plugin factories
+        // Returns false if critical plugins are missing - fail fast with clear error
+        if (!check_gstreamer_plugins()) {
+            LG_ERROR("input_rtsp:cannot open RTSP stream - critical GStreamer plugins missing\n");
+            LG_ERROR("input_rtsp:this is a packaging/deployment issue, not a camera issue\n");
+            return false;
+        }
 
         auto pipelines = build_rtsp_pipelines(url);
         GError* err = nullptr;
 
         for (const auto& pipeline_str : pipelines) {
-            LG_INFO("input_rtsp:trying pipeline: %s\n", pipeline_str.substr(0, 120).c_str());
+            LG_INFO("input_rtsp:trying pipeline (full): %s\n", pipeline_str.c_str());
 
             // Add delay between attempts to avoid overwhelming camera/network
             // Tapo cameras can be sensitive to rapid connection attempts
@@ -200,12 +299,29 @@ public:
             err = nullptr;
             pipeline_ = gst_parse_launch(pipeline_str.c_str(), &err);
             if (!pipeline_) {
+                LG_ERROR("input_rtsp:gst_parse_launch failed: %s\n", err ? err->message : "(unknown)");
                 if (err) { g_error_free(err); err = nullptr; }
                 continue;
             }
+            
+            if (err) {
+                LG_WARN("input_rtsp:gst_parse_launch warning: %s\n", err->message);
+                g_error_free(err);
+                err = nullptr;
+            }
+            
+            LG_INFO("input_rtsp:pipeline created successfully, looking for appsink 'mysink'\n");
 
             appsink_ = gst_bin_get_by_name(GST_BIN(pipeline_), "mysink");
             if (!appsink_) {
+                LG_ERROR("input_rtsp:appsink 'mysink' not found in pipeline\n");
+                LG_ERROR("input_rtsp:this means pipeline elements failed to link - checking for missing plugins\n");
+                
+                // Try to get pipeline state to see if there are errors
+                GstState state, pending;
+                GstStateChangeReturn ret = gst_element_get_state(pipeline_, &state, &pending, 0);
+                LG_ERROR("input_rtsp:pipeline state: %d, pending: %d, return: %d\n", state, pending, ret);
+                
                 gst_object_unref(pipeline_);
                 pipeline_ = nullptr;
                 continue;
@@ -264,9 +380,11 @@ public:
             gst_element_set_state(pipeline_, GST_STATE_PLAYING);
 
             // Wait for first frame (prove connectivity)
+            LG_INFO("input_rtsp:waiting up to %d ms for first frame...\n", first_frame_timeout_ms);
             GstSample* sample = gst_app_sink_try_pull_sample(GST_APP_SINK(appsink_), first_frame_timeout_ms * GST_MSECOND);
             if (!sample) {
-                LG_WARN("input_rtsp:first-frame timeout (%d ms) on this pipeline\n", first_frame_timeout_ms);
+                LG_ERROR("input_rtsp:first-frame timeout (%d ms) on this pipeline - no frame received\n", first_frame_timeout_ms);
+                LG_ERROR("input_rtsp:pipeline may have errors. Check if camera is streaming and credentials are correct.\n");
                 // Properly cleanup before trying next pipeline
                 bus_running_.store(false, std::memory_order_release);
                 if (bus_thread_.joinable()) bus_thread_.join();
@@ -499,7 +617,7 @@ FetchStatus RtspInputSource::tryFetch(FrameView& out) noexcept {
 
   // Fill FrameView with BGR frame (matching USB camera format)
   out.fmt     = PixelFormat::BGR24;
-  out.width   = 320;
+  out.width   = 320;  // Preprocessed/resized dimensions
   out.height  = 320;
   out.stride0 = 320 * 3;
   out.stride1 = 0;
@@ -507,6 +625,20 @@ FetchStatus RtspInputSource::tryFetch(FrameView& out) noexcept {
   out.plane1  = nullptr;
   out.pts_ns  = std::chrono::duration_cast<std::chrono::nanoseconds>(
                     std::chrono::steady_clock::now().time_since_epoch()).count();
+  
+  // V7.1: Store original RTSP stream dimensions for proper coordinate de-letterboxing
+  // The frame has been resized to 320×320, but we need to preserve original dimensions
+  // so that YOLOX can properly de-letterbox detections back to camera coordinates
+  out.orig_width  = p_->rtsp_helper->width();   // Original 1920×1080 (or camera native res)
+  out.orig_height = p_->rtsp_helper->height();
+  
+  // V7.1: Debug - verify original dimensions are being set correctly
+  static int rtsp_fetch_debug = 0;
+  if (rtsp_fetch_debug < 3) {
+    LG_INFO("[RTSP-FETCH] out.width=%d out.height=%d out.orig_width=%d out.orig_height=%d",
+            out.width, out.height, out.orig_width, out.orig_height);
+    rtsp_fetch_debug++;
+  }
 
   return FetchStatus::Ok;
 }

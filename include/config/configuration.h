@@ -15,6 +15,14 @@
 struct AppConfig {
   // Source
   InputConfig     input{};
+  
+  // Input source selection: "rtsp", "usb", or "file"
+  // This allows users to configure all sources but choose which one to use
+  std::string     input_source{"rtsp"};  // Default to RTSP
+  
+  // Input source priority: "config" (use config.json) or "registry" (use BrightSign registry)
+  // Priority is always: CLI args > [config or registry based on this setting] > [other] > auto-detect
+  std::string     input_source_priority{"config"};  // "config" or "registry"
 
   // Models
   ModelSpec       primary_model{};           // e.g., detector

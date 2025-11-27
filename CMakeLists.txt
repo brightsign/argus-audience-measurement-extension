@@ -37,7 +37,7 @@ else()
         opencv_stereo opencv_stitching opencv_superres opencv_surface_matching
         opencv_tracking opencv_ts opencv_videoio opencv_video
         opencv_videostab opencv_xfeatures2d opencv_ximgproc opencv_xphoto
-        gstreamer-1.0 gstapp-1.0 gstbase-1.0 gstvideo-1.0 gobject-2.0 glib-2.0
+        gstreamer-1.0 gstapp-1.0 gstbase-1.0 gstvideo-1.0 gstpbutils-1.0 gobject-2.0 glib-2.0
     )
 endif()
 
@@ -186,6 +186,7 @@ add_executable(attention_demo
         src/input/input_from_registry.cpp
         src/input/input_rtsp.cpp
         src/input/input_usb.cpp
+        src/input/media_probe.cpp
         src/input/registry_helper.cpp
         # Metrics module
         src/metrics/file_logger.cpp

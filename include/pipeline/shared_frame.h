@@ -15,8 +15,11 @@ struct SharedFrame {
     int64_t  pts_ns{0};      ///< Presentation timestamp (nanoseconds)
     uint64_t seq{0};         ///< Sequence number for ordering
 
-    int width{0};            ///< Frame width in pixels
-    int height{0};           ///< Frame height in pixels
+    int width{0};            ///< Frame width in pixels (preprocessed/resized)
+    int height{0};           ///< Frame height in pixels (preprocessed/resized)
+    
+    int orig_width{0};       ///< Original camera/stream width before preprocessing
+    int orig_height{0};      ///< Original camera/stream height before preprocessing
 
     // BGR24 packed, CPU memory (plane0 only, single-planar)
     // Captured once by capture thread, read-only for model threads

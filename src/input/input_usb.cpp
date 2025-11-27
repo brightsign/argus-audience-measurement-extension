@@ -139,6 +139,8 @@ FetchStatus UsbInputSource::tryFetch(FrameView& out) noexcept {
       out.fmt     = PixelFormat::BGR24;
       out.width   = bgr.cols;
       out.height  = bgr.rows;
+      out.orig_width  = bgr.cols;   // V7.1: Store original camera dimensions for visualization
+      out.orig_height = bgr.rows;   // V7.1: Same as width/height for USB (no preprocessing)
       out.stride0 = bgr.cols * 3;
       out.stride1 = 0;
       out.plane0  = scratch_bgr_.data();

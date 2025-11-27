@@ -89,9 +89,11 @@ static void prepare_frame_view(
     fv_in.stride0 = dst_w * 3;
     fv_in.plane0  = const_cast<uint8_t*>(bgr_buf.data());
     fv_in.pts_ns  = sf->pts_ns;
-    // V6.2.3.2: Store original camera dimensions for de-letterboxing
-    fv_in.orig_width  = sf->width;
-    fv_in.orig_height = sf->height;
+    // V7.1: FIXED - Store ACTUAL original camera dimensions (not preprocessed dims)
+    // RTSP: sf->orig_width=1920, sf->orig_height=1080 (NOT sf->width=320)
+    // This allows YOLOX to properly de-letterbox detections back to camera space
+    fv_in.orig_width  = sf->orig_width;
+    fv_in.orig_height = sf->orig_height;
 }
 
 // Local helper: Store inference results in fusion output
@@ -242,9 +244,11 @@ void run_inference_loop(
             // V6.2.3.2: Pass original dimensions so visualization can scale coordinates
             // V6.2.3.5.7: Pass second_runner to draw detections from both models on same frame
             // V7.0.2: Pass fusion_output to access synchronized detection results
+            // V7.1: CRITICAL FIX - Pass orig_width/orig_height for proper coordinate transforms
+            // Detections are in camera space (orig: 1920×1080), need to scale to canvas (320×320)
             cv::Mat rgb_mat(dst_h, dst_w, CV_8UC3, rgb_resized_buf.data());
             visualization::process_inference_results(runner, rgb_mat, debug_frame_idx,
-                                                     sf->width, sf->height, second_runner,
+                                                     sf->orig_width, sf->orig_height, second_runner,
                                                      fusion_output);
 
             // Write frame to disk if writer is available

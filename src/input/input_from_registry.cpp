@@ -108,16 +108,18 @@ InputConfig make_input_from_registry_value(const std::string& raw) {
 
   // RTSP URL — only set what you actually have
   if (looks_like_rtsp(raw)) {
+    std::printf("DEBUG: make_input_from_registry_value: Detected RTSP URL: '%s'\n", raw.c_str());
     ic.rtsp_url = raw;
     // If your RtspOptions has latency_ms or transport options, set them here.
     // Otherwise, leave ic.rtsp as defaults.
+    std::printf("DEBUG: make_input_from_registry_value: Set ic.rtsp_url='%s'\n", ic.rtsp_url.c_str());
     return ic;
   }
 
   // File path
   if (looks_like_path(raw)) {
     ic.file_path = raw;
-    // If your FileOptions has loop, set it here (ic.file.loop = true;)
+    ic.file.loop = true;  // Enable looping - play file repeatedly
     return ic;
   }
 

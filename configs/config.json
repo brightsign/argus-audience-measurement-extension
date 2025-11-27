@@ -1,8 +1,11 @@
 {
+  "_comment_input_source": "Select 'rtsp', 'usb', or 'file' for your input source",
+  "input_source": "file",
+  
   "input": {
-    "rtsp_url": "",
+    "rtsp_url": "rtsp://sreetapo:Rtspstream123@192.168.0.123:554/stream1",
     "usb_device": "/dev/video0",
-    "file_path": "",
+    "file_path": "/storage/sd/people-walking.mp4",
 
     "usb": {
       "width": 640,
@@ -16,6 +19,8 @@
       "loop": true
     }
   },
+
+  "input_source_priority": "config",
 
   "primary_model": {
     "name": "retinaface",
@@ -75,8 +80,29 @@
   "enable_frame_output": true,
   "output_dir": "/tmp",
 
-  "test_face_only": true,
-  "test_yolo_only": true,
+  "test_face_only": false,
+  "test_yolo_only": false,
+
+  "_input_source_notes": {
+    "description": "Input source selection and configuration",
+    "input_source": "Which input to use: 'rtsp', 'usb', or 'file'",
+    "note": "Set input_source to your desired input type. Configure all three sources so you can easily switch between them",
+    "examples": {
+      "rtsp": "Network RTSP camera stream",
+      "usb": "USB webcam (e.g., /dev/video0)",
+      "file": "Video file for testing (e.g., /path/to/video.mp4)"
+    },
+    "usage": "Change 'input_source' value to switch between inputs without editing URLs/paths"
+  },
+
+  "_input_source_priority_notes": {
+    "description": "Controls where video input configuration is read from",
+    "config": "Use 'input' section from this config.json file (default, easier for deployment)",
+    "registry": "Use BrightSign registry value 'bsext-gaze-video-device' (flexible for runtime changes)",
+    "priority": "CLI args > [config or registry based on this setting] > [other] > auto-detect",
+    "note": "Set to 'config' to use config.json, or 'registry' to use BrightSign registry",
+    "example_registry": "registry write extension bsext-gaze-video-device rtsp://192.168.0.123:554/stream1"
+  },
 
   "_test_mode_notes": {
     "description": "Test mode configuration for debugging individual models",
