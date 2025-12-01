@@ -1,4 +1,5 @@
 #include "util/util.h"
+#include "metrics/log_global.h"
 
 #include <sys/stat.h>
 #include <libgen.h>
@@ -53,28 +54,53 @@ std::string dirname_of_exe(const char* argv0) noexcept {
 }
 
 static std::string choose_local_sample(const std::string& bin_dir) {
-  return join_path(join_path(bin_dir, "config"), "sample.json");
+  return join_path(join_path(bin_dir, "configs"), "config.json");
 }
 
 std::string pick_config_path(int argc, char** argv) noexcept {
-  // 1) CLI
+  LG_INFO("[pick_config_path] CLI argument (highest priority)");
+  // 1) CLI argument (highest priority)
   if (const char* cli = get_opt("--config", argc, argv)) {
-    if (file_exists(cli)) return std::string(cli);
+    LG_INFO("[pick_config_path] Check file existsence for CLI config: %s", cli);
+    if (file_exists(cli)) {
+      LG_INFO("[pick_config_path] Using CLI config: %s", cli);
+      return std::string(cli);
+    }
   }
-  // 2) env
+  
+  // 2) Environment variable
   if (const char* env = std::getenv("BSEXT_CONFIG")) {
-    if (file_exists(env)) return std::string(env);
+    if (file_exists(env)) {
+      LG_INFO("[pick_config_path] Using ENV config: %s", env);
+      return std::string(env);
+    }
   }
-  // 3) next to binary
+  
+  // 3) Writable SD card location (user override, preferred)
+  
+  static const char* kSdConfig = "/storage/sd/configs/config.json";
+  LG_INFO("[pick_config_path] Using SD config: %s", kSdConfig);
+  bool sd_exists = file_exists(kSdConfig);
+  LG_INFO("[pick_config_path] SD config check: %s -> %s", 
+          kSdConfig, sd_exists ? "EXISTS" : "NOT FOUND");
+  if (sd_exists) {
+    LG_INFO("[pick_config_path] Using SD config: %s", kSdConfig);
+    return std::string(kSdConfig);
+  }
+  
+  // 4) Next to binary (read-only /var location - default from package)
   const std::string bin_dir = dirname_of_exe(argv ? argv[0] : nullptr);
   const std::string local   = choose_local_sample(bin_dir);
-  if (file_exists(local.c_str())) return local;
-
-  // 4) device default
-  static const char* kSdDefault = "/storage/sd/configs/sample.json";
-  if (file_exists(kSdDefault)) return std::string(kSdDefault);
+  bool local_exists = file_exists(local.c_str());
+  LG_INFO("[pick_config_path] Package config check: %s -> %s",
+          local.c_str(), local_exists ? "EXISTS" : "NOT FOUND");
+  if (local_exists) {
+    LG_INFO("[pick_config_path] Using package config: %s", local.c_str());
+    return local;
+  }
 
   // Fallback (may not exist; caller will log a warning)
+  LG_WARN("[pick_config_path] Fallback to: %s", local.c_str());
   return local;
 }
 
@@ -82,7 +108,7 @@ bool ensure_device_config_present(const char* src_sample_json, const char* dst_d
   if (!dst_dir || !*dst_dir) return false;
   if (!dir_exists(dst_dir))  { if (!ensure_dir(dst_dir)) return false; }
 
-  const std::string dst = join_path(dst_dir, "sample.json");
+  const std::string dst = join_path(dst_dir, "config.json");
   if (file_exists(dst.c_str())) return true;         // already there
 
   if (!src_sample_json || !file_exists(src_sample_json)) return file_exists(dst.c_str());

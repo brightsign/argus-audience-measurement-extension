@@ -8,10 +8,10 @@
 const char* get_opt(const char* flag, int argc, char** argv) noexcept;
 
 // Choose a config file path using this order:
-//   1) --config <path>
-//   2) $BSEXT_CONFIG
-//   3) <binary_dir>/config/sample.json
-//   4) /storage/sd/configs/sample.json
+//   1) --config <path> (CLI argument)
+//   2) $BSEXT_CONFIG (environment variable)
+//   3) /storage/sd/configs/config.json (writable user override - preferred)
+//   4) <binary_dir>/configs/config.json (read-only package default)
 // Returns a string (may point to a non-existent path; call file_exists to verify).
 std::string pick_config_path(int argc, char** argv) noexcept;
 
@@ -36,7 +36,7 @@ std::string dirname_of_exe(const char* argv0) noexcept;
 
 // ---- Convenience for shipping default configs ----
 
-// If dst_dir/sample.json is missing and src exists, copy src -> dst_dir/sample.json.
+// If dst_dir/config.json is missing and src exists, copy src -> dst_dir/config.json.
 // Returns true if the destination exists after the call (either already existed or copied successfully).
 bool ensure_device_config_present(const char* src_sample_json, const char* dst_dir) noexcept;
 

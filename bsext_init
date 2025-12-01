@@ -131,8 +131,15 @@ run_attention_demo() {
 
     # NOTE: DO NOT pass video source as positional argument - it overrides registry!
     # The application will automatically read bsext-gaze-video-device from registry
-    CMD_ARGS="${SOC_HOME}/model/RetinaFace.rknn ${SOC_HOME}/configs/config.json" 
+    # 
+    # NOTE: DO NOT pass config.json as argument - let app use its own search logic:
+    #   1. CLI: --config <path>
+    #   2. ENV: $BSEXT_CONFIG  
+    #   3. SD:  /storage/sd/configs/config.json (writable override)
+    #   4. PKG: ${SOC_HOME}/configs/config.json (read-only default)
+    CMD_ARGS="${SOC_HOME}/model/RetinaFace.rknn"
     echo "Using Model: RetinaFace.rknn"
+    echo "Config will be auto-detected (priority: SD card > package default)"
     echo "Video source will be read from registry: bsext-gaze-video-device"
     
     # Debug: Show exactly what we're passing to attention_demo
