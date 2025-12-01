@@ -46,6 +46,7 @@ struct AppConfig {
   int frame_quality{85};            // JPEG quality (1-100)
   
   // Optional: diagnostic logging
+  std::string log_level{"info"};        // "debug", "info", "warn", "error"
   std::string log_dir{"/storage/sd/logs"};
   bool        log_json{true};
 

@@ -123,6 +123,17 @@ bool load_from_file(const std::string& path, AppConfig& out, bool /*strict*/, ch
       out.input_source = j["input_source"].get<std::string>();
     }
     
+    // Parse log level
+    if (j.contains("log_level") && j["log_level"].is_string()) {
+      out.log_level = j["log_level"].get<std::string>();
+    }
+    if (j.contains("log_dir") && j["log_dir"].is_string()) {
+      out.log_dir = j["log_dir"].get<std::string>();
+    }
+    if (j.contains("log_json") && j["log_json"].is_boolean()) {
+      out.log_json = j["log_json"].get<bool>();
+    }
+    
     // Parse publishers array
     if (j.contains("publishers") && j["publishers"].is_array()) {
       out.publishers.clear();

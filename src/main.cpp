@@ -102,12 +102,12 @@ int main(int argc, char** argv) {
     cv::ocl::setUseOpenCL(false);
     #endif
     
-    // ---- logging ----
+    // ---- logging (initial setup with Debug level) ----
     FileRotatingLogger::Config logcfg;
     logcfg.path = "/storage/sd/logs/gaze.log";
     logcfg.max_mb = 5;
     logcfg.max_files = 5;
-    logcfg.min_level = LogLevel::Debug;
+    logcfg.min_level = LogLevel::Info;  // Start with Info, will be updated from config
     auto flog = std::make_shared<FileRotatingLogger>(logcfg);
     set_global_logger(flog);
     LG_INFO("Starting attention_demo; log file: %s", flog->path().c_str());
@@ -129,6 +129,27 @@ int main(int argc, char** argv) {
     char err[256]{};
     if (!config::load_from_file(cfg_path, appcfg, /*strict=*/false, err, sizeof(err))) {
     LG_WARN("Config load failed from %s: %s (continuing with defaults)", cfg_path.c_str(), err);
+    }
+
+    // Apply log level from config
+    {
+      LogLevel level = LogLevel::Info;  // default to Info
+      std::string log_level_str = appcfg.log_level;
+      // Normalize to lowercase
+      for (auto& c : log_level_str) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+      
+      if (log_level_str == "debug") level = LogLevel::Debug;
+      else if (log_level_str == "info") level = LogLevel::Info;
+      else if (log_level_str == "warn" || log_level_str == "warning") level = LogLevel::Warn;
+      else if (log_level_str == "error") level = LogLevel::Error;
+      else if (log_level_str == "critical") level = LogLevel::Critical;
+      else {
+        LG_WARN("Invalid log_level '%s' in config, defaulting to 'info'", appcfg.log_level.c_str());
+      }
+      
+      flog->set_level(level);
+      const char* level_names[] = {"debug", "info", "warn", "error", "critical"};
+      LG_INFO("Log level set to: %s", level_names[static_cast<int>(level)]);
     }
 
     // Override model path if CLI provided
