@@ -1,6 +1,6 @@
 {
   "_comment_input_source": "Select 'rtsp', 'usb', or 'file' for your input source",
-  "input_source": "file",
+  "input_source": "rtsp",
   
   "input": {
     "rtsp_url": "rtsp://sreetapo:Rtspstream123@192.168.0.123:554/stream1",
@@ -74,6 +74,7 @@
     }
   ],
 
+  "log_level": "warn",
   "log_dir": "/storage/sd/logs",
   "log_json": true,
 
@@ -110,6 +111,18 @@
     "test_yolo_only": "Set to true to run ONLY YOLOX (disable RetinaFace). Default: false",
     "note": "Both can be false (default) to run both models in parallel on separate NPU cores (production mode)",
     "usage": "See TEST_MODES.md for detailed usage examples and debugging workflows"
+  },
+
+  "_log_level_notes": {
+    "description": "Controls verbosity of logging output",
+    "options": {
+      "debug": "Most verbose - all logs including DEBUG messages (use for development/troubleshooting)",
+      "info": "General information - INFO, WARN, ERROR, and CRITICAL messages (recommended default)",
+      "warn": "Warnings and errors only - WARN, ERROR, and CRITICAL messages (production mode)",
+      "error": "Errors only - ERROR and CRITICAL messages (minimal logging)"
+    },
+    "note": "Change log_level without recompiling. Logs are written to log_dir location.",
+    "default": "info"
   }
 }
 
