@@ -212,14 +212,22 @@ bool Orchestrator::build_pipeline() noexcept {
   FrameView first_frame{};
   FetchStatus st = input_tmp->tryFetch(first_frame);
   if (st == FetchStatus::Ok && first_frame.width > 0 && first_frame.height > 0) {
-    person_tracker_.set_frame_size(first_frame.width, first_frame.height);
+    // V7.1: CRITICAL FIX - Use ORIGINAL source frame dimensions, not model input size!
+    // first_frame.width/height = 320x320 (model input after resize)
+    // first_frame.orig_width/orig_height = 1280x720 (actual source from RTSP/USB/file)
+    // Tracker and MQTT publisher need SOURCE dimensions because detections are de-letterboxed
+    const int tracker_w = (first_frame.orig_width > 0) ? first_frame.orig_width : first_frame.width;
+    const int tracker_h = (first_frame.orig_height > 0) ? first_frame.orig_height : first_frame.height;
+    
+    person_tracker_.set_frame_size(tracker_w, tracker_h);
     // V6.2: Store frame dimensions in fusion state for normalized speed
     {
       std::lock_guard<std::mutex> lk(fusion_.m);
-      fusion_.frame_width = first_frame.width;
-      fusion_.frame_height = first_frame.height;
+      fusion_.frame_width = tracker_w;
+      fusion_.frame_height = tracker_h;
     }
-    LG_INFO("[orch] Tracker frame size set: %dx%d\n", first_frame.width, first_frame.height);
+    LG_INFO("[orch] Tracker frame size set: %dx%d (source), model input: %dx%d\n", 
+            tracker_w, tracker_h, first_frame.width, first_frame.height);
   } else {
     // Fallback to default if fetch fails
     person_tracker_.set_frame_size(640, 480);
