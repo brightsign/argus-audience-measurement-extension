@@ -174,8 +174,10 @@ std::string MqttPublisher::make_payload_locked() const {
   for (size_t i = 0; i < tracks_.size(); ++i) {
     const auto& t = tracks_[i];
     
-    // V6.2: Calculate normalized speed (% of frame diagonal per second)
+    // V7.1b: Calculate frame diagonal once (used for normalized speed and speed floor)
     const float frame_diag = std::sqrt(float(frame_width_ * frame_width_ + frame_height_ * frame_height_));
+    
+    // V6.2: Calculate normalized speed (% of frame diagonal per second)
     float speed_norm = (frame_diag > 0) ? (t.speed / frame_diag) : 0.0f;
     
     // V7.0: Determine zones (simplified - just "roi" vs "edge")
@@ -185,6 +187,24 @@ std::string MqttPublisher::make_payload_locked() const {
     const bool is_edge = (cx < border_px || cx > frame_width_ - border_px ||
                           cy < border_px || cy > frame_height_ - border_px);
     const char* zones_str = is_edge ? "[\"edge\"]" : "[\"roi\"]";
+    
+    // V7.1b: Strict publisher gate with resolution-adaptive threshold
+    // Prevents held directions from appearing when speed dips below threshold
+    // Uses diagonal-based relative floor (0.6% of frame diagonal per second)
+    // 
+    // V7.1d: Trust tracker's hold logic - only check confidence and label
+    // Tracker handles speed floor, hold windows, and confidence decay internally
+    constexpr float MIN_DIR_CONF = 0.35f;          // Match tracker's reset threshold
+    const bool has_direction = (t.dir_label[0] != '?' || t.dir_label[1] != '\0');  // Not "?"
+    const bool show_direction = (t.dir_conf >= MIN_DIR_CONF) && has_direction;
+    
+    // Publish direction from tracker (already handles hold logic)
+    const char* pub_dir = show_direction ? t.dir_label : "?";
+    const float pub_deg = show_direction ? t.dir_deg : 0.0f;
+    const float pub_conf = show_direction ? t.dir_conf : 0.0f;
+    
+    // V7.1b: Cosmetic - zero tiny speeds for cleaner telemetry
+    const float pub_speed = (t.speed >= 2.0f) ? t.speed : 0.0f;
     
     char buf[512];  // Larger buffer for v7.0
     std::snprintf(buf, sizeof(buf),
@@ -197,8 +217,8 @@ std::string MqttPublisher::make_payload_locked() const {
       t.id,
       t.x0, t.y0, t.x1, t.y1, t.score,
       zones_str,
-      t.dir_label, t.dir_deg, t.dir_conf,
-      t.speed, speed_norm,
+      pub_dir, pub_deg, pub_conf,  // V7.1b: Use gated values instead of raw tracker values
+      pub_speed, speed_norm,        // V7.1b: Use cleaned speed (zero if < 2.0 px/s)
       t.dwell_s,
       t.just_entered ? "true" : "false",
       t.just_exited ? "true" : "false");
