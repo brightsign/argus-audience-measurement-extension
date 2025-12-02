@@ -67,37 +67,46 @@ struct TrackerConfig {
   float min_det_score{0.50f};
   int   min_area_px{1600};
 
-  // Motion & smoothing (V7.0: LS5-tuned stability pack - final)
-  float motion_eps_px{0.8f};      // speed floor (px/frame) paired with fps_for_motion=30
-  float motion_deadband_px{22.0f}; // V7.0: cap for adaptive deadband (16→22 for tighter jitter suppression)
+  // Motion & smoothing (V7.1f: per-frame epsilon scaled for 480p-720p slow walks)
+  float motion_eps_px{0.25f};     // V7.1f: lowered from 0.8 (absolute per-frame threshold)
+  float motion_eps_frac{0.0015f}; // V7.1f: relative per-frame threshold (0.15% of min side)
+  float motion_deadband_frac_diag{0.0005f}; // V7.1d: ~0.05% of diagonal (VGA:~0.4px, 720p:~0.7px, 1080p:~1.1px)
+  float motion_deadband_px{0.3f}; // V7.1d: frame-to-frame threshold (0.3 px minimum movement)
   float smooth_pos_alpha{0.45f};  // V7.0: slightly smoother bbox tracking
-  float smooth_vel_alpha{0.65f};  // V7.0: responsive but not spiky velocity
+  float smooth_vel_alpha{0.70f};  // V7.1: more responsive (0.65→0.70) for slow lateral motion
   float dir_hysteresis_deg{22.5f};
-  float bin_hysteresis_deg{12.0f}; // V7.0: stickier bins (10→12 for better stability)
+  float bin_hysteresis_deg{10.0f}; // V7.1f: less sticky (12→10) for faster direction changes
 
   // Person class
   int   class_person{0};
 
   // NEW: robust association & publishing
   float max_center_dist_px{80.f};   // distance fallback when IoU small
-  float min_speed_px_s{55.0f};      // V7.0: floor for "moving" (45→55 to reduce false motion)
+  float min_speed_px_s{8.0f};       // V7.1e: absolute floor for tiny scenes (good for 480p)
+  float min_speed_frac{0.012f};     // V7.1e: additional floor as fraction of min(frame_w,frame_h)
   float max_speed_px_s{90.0f};      // V7.0: hard clamp (120→90 to avoid plateau ceiling)
   int   publish_grace_missed{6};    // increased from 4 for better gap bridging
   float enter_exit_border_frac{0.10f}; // ROI border fraction (0.10 => 10% inset)
   
-  // V7.0: direction stability
-  double dir_hold_ms{500.0};        // V7.0: sticky direction hold period
+  // V7.1d: direction stability with faster ramp-up and gentler decay
+  double dir_hold_ms{850.0};        // V7.1c: base hold time (scaled by resolution/fps)
   float dir_decay_per_s{1.0f};      // V7.0: confidence decay rate when slow
+  float dir_reset_conf_thresh{0.35f}; // V7.1d: only reset to "?" if conf drops below this (was 0.40)
+  float dir_conf_ramp_up{0.12f};    // V7.1d: faster confidence ramp during motion (was implicit)
   float low_score_thresh{0.90f};    // V7.0: stricter quality gate for direction updates
   
-  // V7.0: acceleration limits
-  float accel_cap_px_s2{450.0f};    // maximum acceleration (600→450 for smoother ramps)
+  // V7.1c: asymmetric hysteresis for bin changes (stickier to keep than to change)
+  float dir_keep_thresh_deg{8.0f};    // V7.1c: threshold to keep current bin
+  float dir_change_thresh_deg{16.0f}; // V7.1c: threshold to accept new bin
+  
+  // V7.1: acceleration limits (tighter for slow motion)
+  float accel_cap_px_s2{400.0f};    // V7.1: tighter cap (450→400) to reduce direction flicker
   
   // Publish filtering (prevent edge/ghost track noise)
   float publish_score_min{0.70f};   // minimum score to publish motion
   float publish_min_area_frac{0.02f}; // minimum area as fraction of frame (2%)
   float publish_border_frac{0.03f}; // border margin to reject edge tracks (3%)
-  int   moving_streak_req{3};       // frames above speed floor to confirm motion
+  int   moving_streak_req{2};       // V7.1: faster motion classification (3→2 frames)
 };
 
 class Tracker {
@@ -144,8 +153,16 @@ private:
     const char* dir_label{"?"};
     int   dir_bin{-1};            // Current direction bin (0-7) for hysteresis
     
+    // V7.1b: velocity history ring buffer for stable direction (5-frame windowed average)
+    static constexpr int VEL_HIST_SIZE = 5;
+    float vx_hist[VEL_HIST_SIZE]{};
+    float vy_hist[VEL_HIST_SIZE]{};
+    int   vel_hist_idx{0};
+    int   vel_hist_filled{0};  // tracks buffer warmup (0..VEL_HIST_SIZE)
+    
     // V6.2: direction confidence and hold
     double last_dir_ts{0.0};      // timestamp of last confident direction
+    double last_moving_ts{0.0};   // V7.1b: timestamp of last above-floor movement (for hold logic)
     float  dir_conf{0.0f};        // direction confidence (0..1)
     int    moving_streak{0};      // consecutive frames above speed floor (motion debounce)
     

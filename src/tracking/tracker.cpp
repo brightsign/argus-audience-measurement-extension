@@ -226,9 +226,17 @@ void Tracker::update_track(TrackStateInternal& t, const Detection& d, double ts,
   float prev_w = t.w_hist[read_idx];
   float prev_h = t.h_hist[read_idx];
 
-  // 3) Compute deltas over the lag window
-  float dx_hist = t.cx - prev_cx;
-  float dy_hist = t.cy - prev_cy;
+  // V7.1h: Use footpoint (bottom-center) for velocity - far more stable than bbox center
+  // People walk; box height/centroid "breathes". Bottom edge is rock-solid.
+  float fx = t.cx;  // horizontal center
+  float fy = t.y1;  // bottom edge
+  
+  float prev_fx = 0.5f * (t.x0_hist[read_idx] + t.x1_hist[read_idx]);
+  float prev_fy = t.y1_hist[read_idx];
+
+  // 3) Compute deltas over the lag window (footpoint-based)
+  float dx_hist = fx - prev_fx;
+  float dy_hist = fy - prev_fy;
 
   // 3.1) ROI enter/exit tracking
   auto inside_roi = [&](float cx, float cy) -> bool {
@@ -247,12 +255,13 @@ void Tracker::update_track(TrackStateInternal& t, const Detection& d, double ts,
     t.exit_sent = true;
   }
 
-  // ==== V7.0: ENHANCED STATIONARY GATE with center+size stability ====
+  // ==== V7.1f: RELAXED STATIONARY GATE for slow-motion detection ====
+  // V7.1f: Lowered deadband from 1.2% to 0.05% to allow slow walking (0.2-0.5 px/frame) through
   // Use adaptive deadband based on box size
   float diag = std::hypot(t.w, t.h);
-  const float adaptive_k = 0.012f;  // 1.2% of diagonal
+  const float adaptive_k = 0.0005f;  // V7.1f: 0.05% of diagonal (was 1.2%)
   // Safer clamp (handles configs where motion_deadband_px < 8.0f)
-  float max_db_cap = std::max(cfg_.motion_deadband_px, 8.0f);
+  float max_db_cap = std::max(cfg_.motion_deadband_px, 0.5f);  // V7.1f: lower cap (was 8.0f)
   float adaptive_db = std::min(max_db_cap, adaptive_k * diag);
   
   // Center drift over history window
@@ -333,8 +342,8 @@ void Tracker::update_track(TrackStateInternal& t, const Detection& d, double ts,
   float center_shift = std::hypot(dx_hist, dy_hist);
   float dsize = std::fabs((t.w * t.h) - (prev_w * prev_h)) / std::max(1.f, prev_w * prev_h);
 
-  // Zero-motion gate: box essentially unchanged
-  float db_px = std::max(4.f, 0.015f * diag);  // 1.5% diag
+  // V7.1f: Zero-motion gate with lower thresholds
+  float db_px = std::max(0.3f, 0.001f * diag);  // V7.1f: 0.1% diag (was 1.5%)
   bool tiny_center_shift = (center_shift < db_px);
   bool tiny_size_change  = (dsize < 0.03f);    // <3% area change
   bool boxes_almost_same = (iou_now > 0.95f);  // 95% overlap
@@ -431,8 +440,10 @@ void Tracker::update_track(TrackStateInternal& t, const Detection& d, double ts,
   // V7.0: Use real timestamps from history, not FPS estimate
   double dt_hist = std::max(1e-3, ts - t.ts_hist[read_idx]);
 
-  float inst_vx = float((t.cx - prev_cx) / dt_hist);
-  float inst_vy = float((t.cy - prev_cy) / dt_hist);
+  // V7.1h: Footpoint-based instantaneous velocity (not V7.1g bbox footpoint)
+  // Use the footpoint deltas computed above
+  float inst_vx = float(dx_hist / dt_hist);
+  float inst_vy = float(dy_hist / dt_hist);
 
   // 5) EMA on velocity
   float B = clamp01(cfg_.smooth_vel_alpha);
@@ -505,10 +516,16 @@ void Tracker::update_track(TrackStateInternal& t, const Detection& d, double ts,
   t.moving_streak = std::min(t.moving_streak + 1, 1000);
 
   // 7) Moving: compute direction with smart hysteresis
-  float deg = std::atan2(-t.vy, t.vx) * 180.f / float(M_PI);
+  // V7.1h: Horizontal bias - emphasize X-motion so L/R wins over UR/DR for sideways walking
+  const float HORIZ_BIAS = 1.15f;  // 1.10-1.25 recommended; makes L/R "stickier"
+  float vx_biased = t.vx * HORIZ_BIAS;
+  
+  // Heading in image coords (y down), so negate vy
+  float deg = std::atan2(-t.vy, vx_biased) * 180.f / float(M_PI);
   if (deg < 0.f) deg += 360.f;
 
-  // Direction bin calculation with edge avoidance
+  // V7.1h: Simplified binning - horizontal bias already handles L/R preference
+  // Direction bin calculation with hysteresis
   float dir_center = (t.dir_bin >= 0) ? t.dir_bin * 45.f : deg;
   float dir_delta = deg - dir_center;
   while (dir_delta > 180.f) dir_delta -= 360.f;
@@ -518,7 +535,7 @@ void Tracker::update_track(TrackStateInternal& t, const Detection& d, double ts,
   if (t.dir_bin == -1 || std::fabs(dir_delta) > (22.5f + cfg_.bin_hysteresis_deg)) {
     t.dir_bin = static_cast<int>(std::round(deg / 45.f)) & 7;
   }
-
+  
   t.dir_label = dir_label_from_deg(t.dir_bin * 45.f);
   t.dir_deg = deg;
 

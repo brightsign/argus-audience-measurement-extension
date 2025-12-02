@@ -1,9 +1,9 @@
 {
   "_comment_input_source": "Select 'rtsp', 'usb', or 'file' for your input source",
-  "input_source": "rtsp",
+  "input_source": "usb",
   
   "input": {
-    "rtsp_url": "rtsp://sreetapo:Rtspstream123@192.168.0.123:554/stream1",
+    "rtsp_url": "rtsp://192.168.0.203:8554/live",
     "usb_device": "/dev/video0",
     "file_path": "/storage/sd/people-walking.mp4",
 
@@ -15,7 +15,7 @@
     "rtsp": {
       "latency_ms": 100
     },
-    "file": {
+    "file": {                   
       "loop": true
     }
   },
