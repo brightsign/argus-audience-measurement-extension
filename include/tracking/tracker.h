@@ -37,6 +37,14 @@ struct TrackedBox {
   double first_ts{0.0};           // seconds
   double last_ts{0.0};            // seconds
   double dwell_s{0.0};            // accumulated visible time
+  // gaze
+  bool   has_gaze{false};         // Whether gaze detection is available for this track
+  bool   is_gazing{false};        // True if person is looking at camera
+  double gaze_time{0.0};          // Accumulated time gazing at camera (seconds)
+  float  face_bbox_x0{0.f};       // Face bounding box (if detected)
+  float  face_bbox_y0{0.f};
+  float  face_bbox_x1{0.f};
+  float  face_bbox_y1{0.f};
   // book-keeping
   bool   just_entered{false};
   bool   just_exited{false};
@@ -55,12 +63,12 @@ struct TrackerConfig {
   float byte_match_iou_high{0.70f};  // IoU threshold for high-conf matching
   float byte_match_iou_low{0.50f};   // IoU threshold for low-conf matching
   int   byte_max_age{30};            // Frames to keep unmatched ByteTrack tracks
-  int   byte_n_init{3};              // Hits to confirm ByteTrack track
+  int   byte_n_init{2};              // LOWERED: 3→2 for faster face track confirmation (small/distant faces)
   
   // === Legacy EMA/IoU parameters ===
   // Association & lifecycle
   float iou_match_thresh{0.45f};  // V6.2.3: Raised from 0.35 to reduce wrong matches
-  int   confirm_hits{3};          // Consecutive hits to confirm track
+  int   confirm_hits{2};          // LOWERED: 3→2 for faster track confirmation (weak faces, 320×320 model limitation)
   int   max_missed{12};           // Misses before deletion (~0.4s @30fps)
 
   // Detection quality

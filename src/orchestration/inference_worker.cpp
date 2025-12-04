@@ -115,6 +115,18 @@ static void store_inference_results(
         fusion_output->face_lms.assign(outs.lms, outs.lms + outs.num_lms);
         fusion_output->face_seq = seq;
         
+        // Debug: Log face detection counts periodically
+        static int face_log_counter = 0;
+        if (++face_log_counter % 90 == 0) {  // Every 3 seconds at 30 FPS
+            LG_INFO("[RETINAFACE] Detected %d faces (seq=%llu)", 
+                    outs.num_dets, (unsigned long long)seq);
+            for (int i = 0; i < outs.num_dets && i < 5; ++i) {  // Log first 5 faces
+                const auto& det = outs.dets[i];
+                LG_INFO("[RETINAFACE] Face %d: bbox=[%.1f,%.1f,%.1f,%.1f] score=%.2f", 
+                        i, det.x0, det.y0, det.x1, det.y1, det.score);
+            }
+        }
+        
         #ifdef ENABLE_DEBUG
         if (seq % 30 == 0) {
             LG_INFO("store_inference_results: RetinaFace seq=%llu dets=%d (yolo_seq=%llu)",

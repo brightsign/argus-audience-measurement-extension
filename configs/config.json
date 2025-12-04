@@ -1,11 +1,11 @@
 {
   "_comment_input_source": "Select 'rtsp', 'usb', or 'file' for your input source",
-  "input_source": "usb",
+  "input_source": "rtsp",
   
   "input": {
     "rtsp_url": "rtsp://192.168.0.203:8554/live",
     "usb_device": "/dev/video0",
-    "file_path": "/storage/sd/people-walking.mp4",
+    "file_path": "/storage/sd/000921246-shopping-area.mov",
 
     "usb": {
       "width": 640,

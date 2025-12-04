@@ -9,8 +9,9 @@
 #include "image_utils.h"
 #include "rknn_box_priors.h"
 
-#define NMS_THRESHOLD 0.4
-#define CONF_THRESHOLD 0.5
+// Optimized for small/distant faces with 320x320 model
+#define NMS_THRESHOLD 0.5    // Relaxed for crowded scenes
+#define CONF_THRESHOLD 0.10  // EXTREME: Very low threshold for 1080p distant faces (may get false positives)
 #define VIS_THRESHOLD 0.4
 
 static int clamp(int x, int min, int max) {
