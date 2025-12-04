@@ -188,6 +188,8 @@ add_executable(attention_demo
         src/input/input_usb.cpp
         src/input/media_probe.cpp
         src/input/registry_helper.cpp
+        # Common utilities
+        src/common/device_info.cpp
         # Metrics module
         src/metrics/file_logger.cpp
         src/metrics/log_global.cpp

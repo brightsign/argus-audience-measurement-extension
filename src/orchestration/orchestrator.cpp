@@ -28,6 +28,7 @@
 #include "attention.h"
 #include "retinaface.h"
 #include "image_utils.h"
+#include "common/device_info.h"
 #include "common.h"
 #include "output/publisher_factory.h"
 
@@ -316,7 +317,15 @@ bool Orchestrator::build_pipeline() noexcept {
   input_  = std::shared_ptr<IInputSource>(std::move(input_tmp));
   
   // Initialize device and stream identifiers before creating publishers
-  device_id_ = "XS-156";  // TODO: Get from config
+  // Get device ID from config, or auto-detect from system (MAC address, serial, hostname)
+  if (!cfg_.device_id.empty()) {
+    device_id_ = cfg_.device_id;
+    LG_INFO("[orch] Using device ID from config: %s\n", device_id_.c_str());
+  } else {
+    device_id_ = device_info::get_device_id("BS-UNKNOWN");
+    LG_INFO("[orch] Auto-detected device ID: %s\n", device_id_.c_str());
+  }
+  
   stream_id_ = cfg_.input.usb_device.empty() ? 
                cfg_.input.rtsp_url : cfg_.input.usb_device;
   if (stream_id_.empty() && !cfg_.input.file_path.empty()) {

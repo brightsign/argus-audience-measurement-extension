@@ -324,6 +324,9 @@ int main(int argc, char** argv) {
             pc.enable_face_model ? "true" : "false",
             pc.enable_yolo_model ? "true" : "false");
 
+    // Configure device ID (for MQTT messages)
+    pc.device_id = appcfg.device_id;
+
     // Configure frame output (optional)
     pc.enable_frame_output = appcfg.enable_frame_output;
     pc.output_dir = appcfg.output_dir;
