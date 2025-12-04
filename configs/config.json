@@ -2,6 +2,9 @@
   "_comment_input_source": "Select 'rtsp', 'usb', or 'file' for your input source",
   "input_source": "rtsp",
   
+  "_comment_device_id": "Device identifier for MQTT messages. Leave empty to auto-detect from MAC address",
+  "device_id": "",
+  
   "input": {
     "rtsp_url": "rtsp://192.168.0.203:8554/live",
     "usb_device": "/dev/video0",

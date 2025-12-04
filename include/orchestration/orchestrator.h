@@ -25,6 +25,9 @@ struct PipelineConfig {
   ModelSpec primary_model{};   // Usually RetinaFace (face + gaze)
   ModelSpec secondary_model{}; // Usually YOLOX (objects/people)
   
+  // Device identification
+  std::string device_id;       // Device identifier for MQTT (empty = auto-detect from MAC)
+  
   int heartbeat_timeout_ms{1500}; // if worker misses heartbeats -> restart
   
   // Test mode: control which models are enabled (default: both enabled)

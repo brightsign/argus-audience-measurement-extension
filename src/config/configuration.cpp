@@ -118,6 +118,11 @@ bool load_from_file(const std::string& path, AppConfig& out, bool /*strict*/, ch
       out.input_source_priority = j["input_source_priority"].get<std::string>();
     }
     
+    // Parse device ID
+    if (j.contains("device_id") && j["device_id"].is_string()) {
+      out.device_id = j["device_id"].get<std::string>();
+    }
+    
     // Parse explicit input source selection (new field)
     if (j.contains("input_source") && j["input_source"].is_string()) {
       out.input_source = j["input_source"].get<std::string>();

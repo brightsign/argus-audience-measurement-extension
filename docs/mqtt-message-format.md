@@ -13,59 +13,78 @@ The attention analytics system publishes real-time tracking data via MQTT to the
 ```json
 {
   "schema": "analytics/v7.0",
-  "ts": 955.23,
+  "ts": 164.68,
   "device": "XS-156",
-  "stream": "/dev/video0",
-  "frame_w": 640,
-  "frame_h": 480,
+  "stream": "rtsp://192.168.0.203:8554/live",
+  "frame_w": 1280,
+  "frame_h": 720,
   "model": "yolox_s",
   "fw_version": "7.0.0",
-  "npu_load": 45.2,
-  "people": 2,
-  "people_confident": 1,
+  "npu_load": 87.0,
+  "people": 8,
+  "people_confident": 6,
   "gaze": 1,
-  "gaze_conf": 0.85,
   "fps": 29,
   "roi": {
     "type": "border",
     "border_frac": 0.10,
-    "rect": [64, 48, 576, 432]
+    "rect": [128, 72, 1152, 648]
   },
   "health": {
-    "detector_fps": 29.5,
-    "tracker_fps": 29.8,
-    "queue_latency_ms": 12,
+    "detector_fps": 29.0,
+    "tracker_fps": 29.0,
+    "queue_latency_ms": 0,
     "dropped_frames": 0,
-    "last_model_reload_ts": 850.0
+    "last_model_reload_ts": 0.0
   },
   "tracks": [
     {
-      "id": 4,
+      "id": 79,
       "state": "Confirmed",
-      "bbox": [583.5, 23.7, 638.2, 469.0],
-      "score": 0.61,
-      "zones": ["edge"],
-      "dir": "U",
-      "deg": 81.5,
-      "dir_conf": 0.91,
-      "speed": 70.8,
-      "speed_norm": 0.111,
-      "dwell": 0.00,
-      "enter": false,
-      "exit": false
-    },
-    {
-      "id": 2,
-      "state": "Confirmed",
-      "bbox": [21.2, 143.7, 421.3, 475.1],
-      "score": 0.93,
-      "zones": ["main", "roi"],
+      "bbox": [1017.3, 328.1, 1141.3, 526.7],
+      "score": 0.53,
+      "zones": ["roi"],
       "dir": "?",
       "deg": 0.0,
       "dir_conf": 0.00,
       "speed": 0.0,
       "speed_norm": 0.000,
-      "dwell": 280.16,
+      "dwell": 14.01,
+      "enter": false,
+      "exit": false
+    },
+    {
+      "id": 63,
+      "state": "Confirmed",
+      "bbox": [52.9, 227.4, 286.6, 720.0],
+      "score": 0.93,
+      "zones": ["roi"],
+      "dir": "?",
+      "deg": 0.0,
+      "dir_conf": 0.00,
+      "speed": 0.0,
+      "speed_norm": 0.000,
+      "dwell": 31.03,
+      "enter": false,
+      "exit": false,
+      "gaze": {
+        "detected": 1,
+        "time": 8.00,
+        "face_bbox": [231.0, 167.0, 240.0, 180.0]
+      }
+    },
+    {
+      "id": 50,
+      "state": "Confirmed",
+      "bbox": [696.7, 278.1, 790.0, 699.9],
+      "score": 0.53,
+      "zones": ["roi"],
+      "dir": "UR",
+      "deg": 37.7,
+      "dir_conf": 0.67,
+      "speed": 4.5,
+      "speed_norm": 0.003,
+      "dwell": 77.07,
       "enter": false,
       "exit": false
     }
@@ -148,7 +167,31 @@ The attention analytics system publishes real-time tracking data via MQTT to the
           "speed_norm": { "type": "number", "minimum": 0, "maximum": 1 },
           "dwell": { "type": "number", "minimum": 0 },
           "enter": { "type": "boolean" },
-          "exit": { "type": "boolean" }
+          "exit": { "type": "boolean" },
+          "gaze": {
+            "type": "object",
+            "description": "Per-person gaze tracking data (optional, only present when face detected)",
+            "properties": {
+              "detected": { 
+                "type": "integer", 
+                "enum": [0, 1],
+                "description": "Whether person is looking at camera (1=yes, 0=no)"
+              },
+              "time": { 
+                "type": "number", 
+                "minimum": 0,
+                "description": "Accumulated gaze time in seconds (cumulative across track lifetime)"
+              },
+              "face_bbox": {
+                "type": "array",
+                "items": { "type": "number" },
+                "minItems": 4,
+                "maxItems": 4,
+                "description": "Face bounding box [x0, y0, x1, y1] in camera coordinates"
+              }
+            },
+            "required": ["detected", "time", "face_bbox"]
+          }
         }
       }
     }
@@ -159,24 +202,29 @@ The attention analytics system publishes real-time tracking data via MQTT to the
 ### Numeric Precision & Coordinate Policy
 
 **Floating-Point Precision:**
+
 - Most numeric fields use **one decimal place** (e.g., `81.5`, `0.87`, `280.16`)
 - Exceptions: `ts` (2 decimals), `latency_ms` (0-1 decimals)
 - Coordinates and speeds: 1 decimal precision
 
 **Coordinate System:**
+
 - **Bbox coordinates** (`bbox: [x0, y0, x1, y1]`) are **pixel-space floats**
 - **Origin:** Top-left corner (0, 0)
-- **Bounds:** Relative to `frame_w` and `frame_h`
-  - Valid x range: [0.0, frame_w)
-  - Valid y range: [0.0, frame_h)
+- __Bounds:__ Relative to `frame_w` and `frame_h`
+   - Valid x range: [0.0, frame_w)
+   - Valid y range: [0.0, frame_h)
+
 - **Ordering:** `[x0, y0, x1, y1]` where (x0, y0) = top-left, (x1, y1) = bottom-right
 - **Sub-pixel accuracy:** Coordinates may have fractional values (e.g., `21.2`)
 
 **Normalized Values:**
+
 - All fractions (e.g., `score`, `dir_conf`, `speed_norm`) are in range [0.0, 1.0]
 - Percentages (e.g., `npu_load`) are in range [0.0, 100.0]
 
 **Integer Fields:**
+
 - `people`, `people_confident`, `gaze`, `fps`, `frame_w`, `frame_h`, `dropped_frames` are integers (no decimals)
 
 ## Top-Level Fields
@@ -186,6 +234,7 @@ The attention analytics system publishes real-time tracking data via MQTT to the
 ## Schema Version & Breaking Changes
 
 ### `schema` (string)
+
 **Schema version identifier**
 
 - **Format:** `"analytics/v{major}.{minor}"`
@@ -195,20 +244,25 @@ The attention analytics system publishes real-time tracking data via MQTT to the
 ### Client Compatibility & Fallback Behavior
 
 **Handling Unknown Versions:**
+
 - **Major version change (v7 → v8):** Breaking changes likely
-  - **Recommended:** Fail fast with clear error message
-  - **Alternative:** Parse best-effort, log warnings for unknown fields
+   - **Recommended:** Fail fast with clear error message
+   - **Alternative:** Parse best-effort, log warnings for unknown fields
+
 - **Minor version change (v7.0 → v7.1):** Additive changes only (new fields, backward compatible)
-  - **Recommended:** Ignore unknown fields, continue processing
+   - **Recommended:** Ignore unknown fields, continue processing
 
 **Topic-Based Versioning (Optional):**
+
 - System publishes to: `bs/argus/analytics` (version-agnostic topic)
 - For consumers preferring topic-based routing:
-  - **Option 1:** Subscribe to `bs/argus/analytics/v7` (version-specific)
-  - **Option 2:** Subscribe to `bs/argus/analytics/#` (all versions, filter by `schema` field)
+   - **Option 1:** Subscribe to `bs/argus/analytics/v7` (version-specific)
+   - **Option 2:** Subscribe to `bs/argus/analytics/#` (all versions, filter by `schema` field)
+
 - **Note:** Current implementation publishes to single topic; topic versioning is optional future extension
 
 **Example Version Check:**
+
 ```javascript
 const data = JSON.parse(message);
 const [_, major, minor] = data.schema.match(/v(\d+)\.(\d+)/);
@@ -223,26 +277,29 @@ if (parseInt(major) > 7) {
 ### Version History & Breaking Changes
 
 **v7.0 (Current) - ByteTrack Era**
+
 - ✅ **BREAKING:** Changed from IoU-based to ByteTrack tracking (IDs more stable)
 - ✅ **BREAKING:** `speed` now from Kalman Filter velocity (not bbox deltas)
 - ✅ **NEW:** Added `schema` field for versioning
 - ✅ **NEW:** Added `state` field to tracks (`Tentative`/`Confirmed`/`Lost`)
 - ✅ **NEW:** Added `zones` array to tracks
-- ✅ **NEW:** Added `frame_w`, `frame_h`, `model`, `fw_version`, `npu_load`
-- ✅ **NEW:** Added `people_confident` (score ≥ 0.70)
-- ✅ **NEW:** Added `gaze_conf` (gaze detection confidence)
+- ✅ __NEW:__ Added `frame_w`, `frame_h`, `model`, `fw_version`, `npu_load`
+- ✅ __NEW:__ Added `people_confident` (score ≥ 0.70)
+- ✅ __NEW:__ Added `gaze_conf` (gaze detection confidence)
 - ✅ **NEW:** Added `roi` metadata object
 - ✅ **NEW:** Added `health` object (system metrics)
-- ✅ **NEW:** Added `dir_conf` to tracks
-- ✅ **NEW:** Added `speed_norm` to tracks
+- ✅ __NEW:__ Added `dir_conf` to tracks
+- ✅ __NEW:__ Added `speed_norm` to tracks
 - ✅ **CHANGED:** Publish filtering suppresses low-score/edge tracks (motion forced to 0)
 
 **v6.2 - Direction Confidence**
+
 - Added `dir_conf` field (direction confidence tracking)
 - Improved stationary detection
 - ROI-based dwell time accumulation
 
 **v6.0 - Initial Release**
+
 - Initial MQTT analytics output
 - Multi-track support with persistent IDs
 - Entry/exit events
@@ -279,11 +336,13 @@ if (parseInt(major) > 7) {
 - **Description:** Camera or video input path
 - **Type:** String
 - **Examples:**
+
    - USB camera: `"/dev/video0"`
    - RTSP stream: `"rtsp://192.168.1.100:8554/stream"`
    - Video file: `"/path/to/video.mp4"`
 
 - **Usage:**
+
    - Identify which camera the data is from
    - Multi-camera setups
    - Debug input source issues
@@ -298,9 +357,10 @@ if (parseInt(major) > 7) {
 - **Example:** `2` = two people currently tracked
 - **Important:** `people` equals the length of the `tracks` array. Internal tracker state may have more tracks (Tentative, Lost, or filtered), but only Confirmed tracks passing publish filters appear here.
 - **Usage:**
-  - Real-time occupancy counting
-  - Crowd density monitoring
-  - Alert when exceeds threshold
+   - Real-time occupancy counting
+   - Crowd density monitoring
+   - Alert when exceeds threshold
+
 - **Note:** Only counts **confirmed tracks** that pass publish filters (score ≥ 0.70, not edge tracks, not tentative)
 
 ### `gaze` (integer)
@@ -312,13 +372,15 @@ if (parseInt(major) > 7) {
 - **Range:** 0 to `people` (always ≤ people count)
 - **Example:** `1` = one person is gazing
 - **When Present:**
-  - Always present in message
-  - Set to `0` when gaze detection model is disabled
-  - Set to `0` when no one is gazing
+   - Always present in message
+   - Set to `0` when gaze detection model is disabled
+   - Set to `0` when no one is gazing
+
 - **Usage:**
-  - Engagement metrics
-  - Attention tracking for digital signage
-  - Interactive display triggers
+   - Engagement metrics
+   - Attention tracking for digital signage
+   - Interactive display triggers
+
 - **Note:** Requires gaze detection model to be enabled for non-zero values (optional feature)
 
 ### `fps` (integer)
@@ -335,51 +397,56 @@ if (parseInt(major) > 7) {
    - Alert when FPS drops below threshold
 
 ### `frame_w` (integer)
+
 **Frame width**
 
 - **Description:** Camera frame width in pixels
 - **Type:** Integer
 - **Example:** `640` = 640 pixels wide
 - **Usage:**
-  - Calculate aspect ratio
-  - Convert normalized coordinates
-  - Resolution-aware UI scaling
-  - Validate bbox coordinates
+   - Calculate aspect ratio
+   - Convert normalized coordinates
+   - Resolution-aware UI scaling
+   - Validate bbox coordinates
 
 ### `frame_h` (integer)
+
 **Frame height**
 
 - **Description:** Camera frame height in pixels
 - **Type:** Integer
 - **Example:** `480` = 480 pixels tall
 - **Usage:**
-  - Calculate frame diagonal for speed normalization
-  - Validate bbox coordinates
-  - ROI boundary calculations
+   - Calculate frame diagonal for speed normalization
+   - Validate bbox coordinates
+   - ROI boundary calculations
 
 ### `model` (string)
+
 **Detection model name**
 
 - **Description:** Name of the person detection model being used
 - **Type:** String
-- **Examples:** `"yolox_s"`, `"yolox_m"`, `"retinaface"`
+- __Examples:__ `"yolox_s"`, `"yolox_m"`, `"retinaface"`
 - **Usage:**
-  - Model performance tracking
-  - Troubleshooting accuracy issues
-  - A/B testing different models
+   - Model performance tracking
+   - Troubleshooting accuracy issues
+   - A/B testing different models
 
 ### `fw_version` (string)
+
 **Firmware version**
 
 - **Description:** Software/firmware version of the analytics system
 - **Type:** String
 - **Example:** `"7.0.0"`
 - **Usage:**
-  - Compatibility checking
-  - Bug tracking and support
-  - Feature availability detection
+   - Compatibility checking
+   - Bug tracking and support
+   - Feature availability detection
 
 ### `npu_load` (number)
+
 **NPU utilization percentage**
 
 - **Description:** Current Neural Processing Unit load (0-100%)
@@ -389,13 +456,15 @@ if (parseInt(major) > 7) {
 - **Averaging:** Exponential moving average (EMA) over last ~1 second
 - **Update Rate:** Smoothed to avoid reacting to instantaneous spikes
 - **Usage:**
-  - Performance monitoring
-  - Thermal management
-  - Load balancing decisions
-  - Alert on sustained overload (> 90% for 10+ seconds)
+   - Performance monitoring
+   - Thermal management
+   - Load balancing decisions
+   - Alert on sustained overload (> 90% for 10+ seconds)
+
 - **Note:** Use windowed averages on dashboards to avoid false alarms from transient spikes
 
 ### `people_confident` (integer)
+
 **High-confidence person count**
 
 - **Description:** Number of tracks with score ≥ 0.70 (after publish filtering)
@@ -403,12 +472,14 @@ if (parseInt(major) > 7) {
 - **Range:** 0 to `people`
 - **Example:** `1` = one high-confidence track (vs. 2 total)
 - **Usage:**
-  - Quality-filtered occupancy counting
-  - Separate reliable tracks from edge cases
-  - Dashboard "verified count" display
-- **Calculation:** `people_confident = count(tracks where score >= publish_score_min)`
+   - Quality-filtered occupancy counting
+   - Separate reliable tracks from edge cases
+   - Dashboard "verified count" display
+
+- __Calculation:__ `people_confident = count(tracks where score >= publish_score_min)`
 
 ### `gaze_conf` (number)
+
 **Gaze detection confidence**
 
 - **Description:** Average confidence of gaze detections across all gazing people
@@ -416,25 +487,30 @@ if (parseInt(major) > 7) {
 - **Range:** 0.0 to 1.0
 - **Example:** `0.85` = 85% average gaze confidence
 - **When Present:**
-  - Always present in message if gaze model is enabled
-  - Set to `0.0` when `gaze = 0` (no one gazing)
-  - Omitted entirely when gaze detection model is disabled
+   - Always present in message if gaze model is enabled
+   - Set to `0.0` when `gaze = 0` (no one gazing)
+   - Omitted entirely when gaze detection model is disabled
+
 - **Usage:**
-  - Filter uncertain gaze events
-  - Engagement quality metrics
-  - Weight gaze analytics by confidence
+   - Filter uncertain gaze events
+   - Engagement quality metrics
+   - Weight gaze analytics by confidence
+
 - **Note:** Only present if gaze detection is enabled. Downstream consumers should check for field presence before use.
 
 ### `roi` (object)
+
 **Region of Interest metadata**
 
 - **Description:** Configuration of the ROI used for entry/exit and dwell tracking
 - **Type:** Object
 - **Properties:**
-  - `type` (string): `"border"` or `"polygon"`
-  - `border_frac` (number): Border fraction for inset ROI (e.g., 0.10 = 10%)
-  - `rect` (array): Computed ROI rectangle `[x0, y0, x1, y1]` in pixels
+   - `type` (string): `"border"` or `"polygon"`
+   - `border_frac` (number): Border fraction for inset ROI (e.g., 0.10 = 10%)
+   - `rect` (array): Computed ROI rectangle `[x0, y0, x1, y1]` in pixels
+
 - **Example:**
+
 ```json
 "roi": {
   "type": "border",
@@ -442,28 +518,33 @@ if (parseInt(major) > 7) {
   "rect": [64, 48, 576, 432]
 }
 ```
+
 - **Usage:**
-  - Visualize ROI boundary on dashboard
-  - Validate zone membership calculations
-  - Debug entry/exit event timing
+   - Visualize ROI boundary on dashboard
+   - Validate zone membership calculations
+   - Debug entry/exit event timing
 
 ### `health` (object)
+
 **System health metrics**
 
 - **Description:** Performance and diagnostic metrics for operational monitoring
 - **Type:** Object (optional)
 - **Properties:**
-  - `detector_fps` (number): Detection model inference rate (EMA over ~1s window)
-  - `tracker_fps` (number): Tracker update rate (EMA over ~1s window)
-  - `queue_latency_ms` (number): Processing queue latency in milliseconds (instantaneous)
-  - `dropped_frames` (integer): Frames dropped since last publish (accumulator)
-  - `last_model_reload_ts` (number): Timestamp of last model reload
+   - `detector_fps` (number): Detection model inference rate (EMA over ~1s window)
+   - `tracker_fps` (number): Tracker update rate (EMA over ~1s window)
+   - `queue_latency_ms` (number): Processing queue latency in milliseconds (instantaneous)
+   - `dropped_frames` (integer): Frames dropped since last publish (accumulator)
+   - `last_model_reload_ts` (number): Timestamp of last model reload
+
 - **Averaging Windows:**
-  - `detector_fps` and `tracker_fps` use exponential moving average (EMA) over last ~1 second
-  - This smooths transient spikes; dashboards should still use 10-30s windows for alerting
-  - `queue_latency_ms` is instantaneous (current value), can spike briefly
-  - `dropped_frames` resets each publish cycle (typically every 1-30 seconds)
+   - `detector_fps` and `tracker_fps` use exponential moving average (EMA) over last ~1 second
+   - This smooths transient spikes; dashboards should still use 10-30s windows for alerting
+   - `queue_latency_ms` is instantaneous (current value), can spike briefly
+   - `dropped_frames` resets each publish cycle (typically every 1-30 seconds)
+
 - **Example:**
+
 ```json
 "health": {
   "detector_fps": 29.5,
@@ -473,15 +554,17 @@ if (parseInt(major) > 7) {
   "last_model_reload_ts": 850.0
 }
 ```
+
 - **Usage:**
-  - Operations dashboard (monitor fleet health)
-  - Performance degradation alerts
-  - Capacity planning
-  - Root cause analysis for tracking issues
+   - Operations dashboard (monitor fleet health)
+   - Performance degradation alerts
+   - Capacity planning
+   - Root cause analysis for tracking issues
+
 - **Alerts:**
-  - `detector_fps < 15` → Model overload
-  - `queue_latency_ms > 100` → Processing bottleneck
-  - `dropped_frames > 0` → System under stress
+   - `detector_fps < 15` → Model overload
+   - `queue_latency_ms > 100` → Processing bottleneck
+   - `dropped_frames > 0` → System under stress
 
 ---
 
@@ -498,6 +581,7 @@ Each object in the `tracks` array represents one tracked person:
 - **Range:** 1 to N (increments globally, never reused in same session)
 - **Example:** `4` = fourth person tracked since system start
 - **Usage:**
+
    - Track individual movement paths over time
    - Calculate per-person dwell time
    - Count unique visitors
@@ -505,48 +589,57 @@ Each object in the `tracks` array represents one tracked person:
 - **Persistence:** ID remains stable as person moves around frame, even through brief occlusions
 
 ### `state` (string)
+
 **Track lifecycle state**
 
 - **Description:** Current state in the tracking lifecycle
 - **Type:** String (enum)
 - **Values:**
-  - `"Tentative"` = New detection, not yet confirmed (1-3 frames)
-  - `"Confirmed"` = Stable track, passes confidence threshold
-  - `"Lost"` = Track lost (occlusion or exit), about to be deleted
+   - `"Tentative"` = New detection, not yet confirmed (1-3 frames)
+   - `"Confirmed"` = Stable track, passes confidence threshold
+   - `"Lost"` = Track lost (occlusion or exit), about to be deleted
+
 - **Example:** `"Confirmed"` = track is stable and reliable
 - **Published Output:** In MQTT messages, `state` will **always be `"Confirmed"`** because only Confirmed tracks are published. The enum includes all three values for schema completeness, but Tentative and Lost tracks are filtered before publishing.
 - **Usage:**
-  - Filter out tentative tracks for cleaner analytics (already done by publisher)
-  - Detect track churn (rapid Tentative→Lost cycles) — requires internal logs
-  - Lifecycle event handling (only count Confirmed→Lost as exits)
+   - Filter out tentative tracks for cleaner analytics (already done by publisher)
+   - Detect track churn (rapid Tentative→Lost cycles) — requires internal logs
+   - Lifecycle event handling (only count Confirmed→Lost as exits)
+
 - **Lifecycle Flow:**
-```
+
+```ini
 Tentative (1-3 frames) → Confirmed (N frames) → Lost (1-3 frames) → Deleted
          ↓                         ↓                     ↓
     (not published)           (published)          (not published, then removed)
 ```
+
 - **ID Assignment:** IDs assigned in Tentative state, persist through Confirmed, never reused after deletion
 
 ### `zones` (array of strings)
+
 **Zone membership**
 
 - **Description:** List of named zones this track's bbox center currently intersects
 - **Type:** Array of strings
 - **Example:** `["main", "roi"]` = track is in both "main" and "roi" zones
 - **Common Zones:**
-  - `"roi"` = Inside the main region of interest
-  - `"edge"` = Near frame border (within publish_border_frac)
-  - `"main"` = Primary monitoring area
-  - `"promo"` = Promotional display zone
-  - `"checkout"` = Checkout/exit zone
-  - Custom zones defined in configuration
+   - `"roi"` = Inside the main region of interest
+   - `"edge"` = Near frame border (within publish_border_frac)
+   - `"main"` = Primary monitoring area
+   - `"promo"` = Promotional display zone
+   - `"checkout"` = Checkout/exit zone
+   - Custom zones defined in configuration
+
 - **Usage:**
-  - Zone-specific analytics (dwell per zone, zone transitions)
-  - Heat maps by zone
-  - Trigger zone-specific actions
-  - Filter tracks by location
+   - Zone-specific analytics (dwell per zone, zone transitions)
+   - Heat maps by zone
+   - Trigger zone-specific actions
+   - Filter tracks by location
+
 - **Calculation:** Evaluated per frame based on bbox center `(cx, cy)` against configured zone polygons/rectangles
 - **Example Workflow:**
+
 ```javascript
 // Count people in checkout zone
 const checkoutCount = data.tracks.filter(t => 
@@ -562,11 +655,13 @@ const checkoutCount = data.tracks.filter(t =>
 - **Type:** Array of 4 floating-point numbers
 - **Units:** Pixels in camera resolution (e.g., 640×480, 1280×720)
 - **Example:** `[583.5, 23.7, 638.2, 469.0]`
+
    - Top-left: (583.5, 23.7)
    - Bottom-right: (638.2, 469.0)
    - Width: 54.7 px, Height: 445.3 px
 
 - **Usage:**
+
    - Draw bounding boxes on video overlay
    - Calculate person size (distance estimation)
    - Heatmap generation (where people stand)
@@ -594,11 +689,13 @@ const area = width * height;
 - **Range:** 0.0 to 1.0
 - **Example:** `0.93` = 93% confidence
 - **Interpretation:**
+
    - **≥ 0.90:** High confidence (well-lit, center frame, full body visible)
    - **0.70 - 0.89:** Medium confidence (partial occlusion, edge of frame)
    - **< 0.70:** Low confidence (filtered out, motion suppressed)
 
 - **Usage:**
+
    - Quality filtering (only trust high-score tracks)
    - Debug false detections
    - Lighting quality indicator
@@ -612,6 +709,7 @@ const area = width * height;
 - **Description:** 8-way compass direction or "?" for stationary/unknown
 - **Type:** String (enum)
 - **Values:**
+
    - `"R"` = Right (0°)
    - `"UR"` = Up-Right (45°)
    - `"U"` = Up (90°)
@@ -624,6 +722,7 @@ const area = width * height;
 
 - **Example:** `"U"` = person walking upward (away from camera)
 - **Usage:**
+
    - Traffic flow analysis
    - Entry/exit counting
    - Path prediction
@@ -642,15 +741,17 @@ const area = width * height;
 - **Example:** `81.5` = moving almost straight up, slightly right
 - **Stationary:** When `dir = "?"` (stationary or below speed threshold), `deg = 0.0`
 - **Coordinate System:**
-  - 0° = Right (+X direction)
-  - 90° = Up (-Y direction)
-  - 180° = Left (-X direction)
-  - 270° = Down (+Y direction)
+
+   - 0° = Right (+X direction)
+   - 90° = Up (-Y direction)
+   - 180° = Left (-X direction)
+   - 270° = Down (+Y direction)
 
 - **Usage:**
-  - Precise trajectory analysis
-  - Calculate angle differences
-  - Advanced pathfinding algorithms
+
+   - Precise trajectory analysis
+   - Calculate angle differences
+   - Advanced pathfinding algorithms
 
 - **Note:** Values wrap at 360° (e.g., 359.5° + 1° = 0.5°). Always `0.0` when stationary.
 
@@ -663,15 +764,18 @@ const area = width * height;
 - **Range:** 0.0 to 1.0
 - **Example:** `0.91` = 91% confident in the reported direction
 - **Calculation:** Based on speed margin above threshold and distance from 8-way bin edges
+
    - High when: fast speed + direction clearly in bin center
    - Low when: slow speed + direction near bin boundary (e.g., 42° between R and UR)
 
 - **Usage:**
+
    - Filter uncertain directions
    - Weight direction data by confidence
    - Detect indecisive movement (hovering, turning)
 
 - **Interpretation:**
+
    - **≥ 0.80:** High confidence (clear, sustained motion)
    - **0.50 - 0.79:** Medium confidence (slow or changing direction)
    - **< 0.50:** Low confidence (barely above speed threshold)
@@ -687,6 +791,7 @@ const area = width * height;
 - __Range:__ 0.0 to ~120.0 (clamped to max_speed_px_s)
 - **Example:** `70.8` = moving at 70.8 px/s
 - **Interpretation (640×480 @ 30 FPS):**
+
    - **0 px/s:** Stationary
    - **30-60 px/s:** Slow walking (~1-2 m/s)
    - **60-90 px/s:** Normal walking (~2-3 m/s)
@@ -694,6 +799,7 @@ const area = width * height;
    - **> 120 px/s:** Clamped (prevents spikes from edge tracks)
 
 - **Usage:**
+
    - Detect running vs. walking
    - Measure traffic flow rate
    - Identify loitering (low speed + high dwell)
@@ -711,15 +817,18 @@ const area = width * height;
 - **Range:** 0.0 to ~1.0
 - **Example:** `0.111` = 11.1% of frame diagonal per second
 - __Calculation:__ `speed_norm = speed / frame_diagonal`
+
    - For 640×480: `diagonal = sqrt(640² + 480²) = 800 px`
    - Example: `70.8 / 800 = 0.0885`
 
 - **Usage:**
+
    - Compare speeds across different camera resolutions
    - Resolution-independent metrics
    - Percentage-based thresholds
 
 - **Interpretation:**
+
    - **< 0.05:** Stationary or very slow
    - **0.05 - 0.15:** Normal walking
    - **> 0.15:** Fast walking/running
@@ -734,18 +843,21 @@ const area = width * height;
 - **Range:** 0.0 to N (increases monotonically while in ROI)
 - **Example:** `280.16` = 280.16 seconds = 4 minutes 40 seconds
 - **Accumulation Rules:**
+
    - Only increments when **confirmed** (not tentative)
    - Only increments when **inside ROI** (default: 10% inset from frame border)
    - Pauses when person exits ROI
    - Resets to 0 when track is deleted
 
 - **Usage:**
+
    - Measure engagement time
    - Identify long-term viewers vs. passers-by
    - Calculate average dwell per visitor
    - Trigger actions after dwell threshold (e.g., "customer service needed after 60s")
 
 - __ROI Definition:__ Configurable via `enter_exit_border_frac` (default 0.10 = 10% border)
+
    - For 640×480: ROI is approximately [64, 48] to [576, 432]
 
 ### `enter` (boolean)
@@ -756,16 +868,19 @@ const area = width * height;
 - **Type:** Boolean
 - **Example:** `true` = person crossed into ROI boundary this frame
 - **Behavior:**
-  - `true` for **exactly one frame** when person enters ROI
-  - `false` all other times (including while inside ROI)
-  - Resets to `false` after being read/published
-  - **Cannot be true simultaneously with `exit`** (mutually exclusive per frame per track)
-  - **Can repeat** if person exits and re-enters ROI (new entry event triggered)
+
+   - `true` for **exactly one frame** when person enters ROI
+   - `false` all other times (including while inside ROI)
+   - Resets to `false` after being read/published
+   - **Cannot be true simultaneously with `exit`** (mutually exclusive per frame per track)
+   - **Can repeat** if person exits and re-enters ROI (new entry event triggered)
+
 - **Usage:**
-  - Count entries (increment counter when `enter = true`)
-  - Trigger entry notifications/events
-  - Log entry timestamps
-  - Calculate traffic patterns
+
+   - Count entries (increment counter when `enter = true`)
+   - Trigger entry notifications/events
+   - Log entry timestamps
+   - Calculate traffic patterns
 
 - **Typical Pattern:**
 
@@ -786,16 +901,19 @@ Frame 5: enter=false (inside ROI)
 - **Type:** Boolean
 - **Example:** `true` = person crossed out of ROI boundary this frame
 - **Behavior:**
-  - `true` for **exactly one frame** when person exits ROI
-  - `false` all other times (including while outside ROI)
-  - Resets to `false` after being read/published
-  - **Cannot be true simultaneously with `enter`** (mutually exclusive per frame per track)
-  - **Can repeat** if person re-enters and exits ROI again (new exit event triggered)
+
+   - `true` for **exactly one frame** when person exits ROI
+   - `false` all other times (including while outside ROI)
+   - Resets to `false` after being read/published
+   - **Cannot be true simultaneously with `enter`** (mutually exclusive per frame per track)
+   - **Can repeat** if person re-enters and exits ROI again (new exit event triggered)
+
 - **Usage:**
-  - Count exits (increment counter when `exit = true`)
-  - Trigger exit notifications/events
-  - Calculate pass-through vs. dwell time
-  - Pair with `enter` for visit duration
+
+   - Count exits (increment counter when `exit = true`)
+   - Trigger exit notifications/events
+   - Calculate pass-through vs. dwell time
+   - Pair with `enter` for visit duration
 
 - **Example Workflow:**
 
@@ -811,6 +929,211 @@ if (track.exit) {
   totalDwell += visitDuration;
 }
 ```
+
+### `gaze` (object, optional)
+
+**Per-person gaze tracking data**
+
+- **Description:** Per-person gaze detection data linking face detection to person tracks. **Only present when a face is detected and successfully matched to this person track.**
+- **Type:** Object with three fields: `detected`, `time`, and `face_bbox`
+- **Conditional Presence:**
+  - **Present:** When RetinaFace detects a face AND the face is matched to this person using spatial IoU matching
+  - **Absent:** When no face detected for this person, or face detected but not matched
+  - In production, typically 10-20% of person tracks have gaze data at any given moment
+  
+- **Matching Algorithm:** 
+  - Face bounding boxes are expanded 30% upward to bridge spatial gap between head detection (YOLOX) and face detection (RetinaFace)
+  - IoU (Intersection over Union) threshold of 0.1 used for matching
+  - Each face matched to at most one person track per frame
+
+- **Example (from production 1280×720 RTSP stream):**
+  ```json
+  "gaze": {
+    "detected": 1,
+    "time": 8.00,
+    "face_bbox": [231, 167, 240, 180]
+  }
+  ```
+  
+- **Usage:**
+  - Identify which specific people are looking at the camera/display
+  - Measure per-person attention duration
+  - Correlate gaze with demographics, movement patterns, dwell time
+  - Generate engagement heatmaps by person location
+
+- **Limitations:**
+  - 320×320 RetinaFace model may struggle with distant faces in high-resolution streams
+  - Face detection rate depends on lighting, angle, distance, and occlusion
+  - Not all person tracks will have gaze data simultaneously
+
+#### `gaze.detected` (number)
+
+**Current gaze state (0 = looking away, 1 = gazing at camera)**
+
+- **Description:** Binary indicator of whether this person is currently looking at the camera/display
+- **Type:** Integer (0 or 1)
+- **Values:**
+  - `0` = Person's face is visible but they are **looking away** (not making eye contact with camera)
+  - `1` = Person is **gazing at the camera/display** (making eye contact)
+  
+- **Example:** `"detected": 1` = person is currently looking at the camera
+
+- **Persistence:**
+  - Value updates every frame based on real-time gaze classification
+  - Can change from 0 ↔ 1 as person looks toward/away from camera
+  - Used to gate the accumulation of `gaze.time`
+
+- **Classification:** 
+  - Based on head pose estimation and facial landmark analysis
+  - Threshold optimized for retail/signage viewing angles
+  
+- **Usage:**
+  - Real-time attention alerts ("Customer 52 is looking at display NOW")
+  - Live engagement dashboards showing who is currently engaged
+  - Trigger content changes when gaze detected
+  - Filter analytics to only count attentive viewers
+
+#### `gaze.time` (number)
+
+**Cumulative gaze duration in seconds**
+
+- **Description:** Total time (seconds) this person has spent **gazing at the camera/display** across the entire lifetime of their track
+- **Type:** Floating-point number
+- **Units:** Seconds
+- **Range:** 0.0 to N (increases monotonically when `detected = 1`)
+- **Example:** `"time": 8.00` = person has looked at camera for 8.00 seconds total
+
+- **Accumulation Rules:**
+  - Only increments when `gaze.detected = 1` (actively gazing)
+  - Pauses when `gaze.detected = 0` (looking away) but does **not reset**
+  - Persists across the entire track lifetime
+  - Increments at frame rate (e.g., +0.033s per frame at 30 FPS when gazing)
+  - Resets to 0 only when track is deleted/lost
+
+- **Usage:**
+  - Measure total attention/engagement per person
+  - Rank people by attention duration ("Top 10 most engaged viewers")
+  - Calculate attention metrics: `attention_rate = gaze.time / dwell`
+  - Identify highly engaged vs. distracted viewers
+  - Trigger actions after attention threshold (e.g., "Show special offer after 5s gaze")
+
+- **Interpretation:**
+  - **< 1.0s:** Brief glance
+  - **1-5s:** Short engagement
+  - **5-15s:** Moderate engagement
+  - **> 15s:** High engagement / interested viewer
+
+- **Production Example (1280×720 RTSP, 8 people):**
+  - Track 63: `gaze.time = 8.00` (8 seconds of accumulated gaze)
+  - Track 79, 50: No gaze object (faces not detected)
+  - This demonstrates typical conditional presence: 1 of 8 people with gaze data
+
+#### `gaze.face_bbox` (array[4])
+
+**Face bounding box coordinates [x0, y0, x1, y1]**
+
+- **Description:** Pixel coordinates of the detected face in the camera frame
+- **Type:** Array of 4 integers
+- **Format:** `[x0, y0, x1, y1]` where (x0, y0) is top-left corner, (x1, y1) is bottom-right corner
+- **Coordinate System:** Same as track `bbox` (camera pixel coordinates)
+- **Example:** `"face_bbox": [231, 167, 240, 180]`
+  - Top-left: (231, 167)
+  - Bottom-right: (240, 180)
+  - Face width: 9 pixels
+  - Face height: 13 pixels
+
+- **Usage:**
+  - Draw face bounding boxes in debug/visualization mode
+  - Calculate face size for quality assessment
+  - Verify spatial alignment between person `bbox` and `face_bbox`
+  - Detect faces that are too small/distant for reliable gaze classification
+
+- **Spatial Relationship:**
+  - Face bbox typically appears in **upper portion** of person bbox
+  - In production, face Y-coordinates often 100-200px above person bbox Y-coordinates
+  - This spatial gap is bridged by 30% upward expansion during matching
+
+- **Size Guidelines:**
+  - **< 10×10 px:** Very small face, gaze classification may be unreliable
+  - **10-30 px:** Small face, typical for distant people in high-res streams
+  - **30-100 px:** Medium face, good gaze classification quality
+  - **> 100 px:** Large face, excellent gaze classification quality
+
+- **Production Example (1280×720 RTSP):**
+  ```json
+  "gaze": {
+    "detected": 1,
+    "time": 8.00,
+    "face_bbox": [231, 167, 240, 180]  // 9×13 pixel face
+  }
+  ```
+  - Small face size (9×13 px) indicates person is relatively distant from camera
+  - Despite small size, gaze was successfully classified as detected=1
+
+**Handling Optional Gaze Data (JavaScript Example):**
+
+```javascript
+// Process tracks with optional gaze data
+data.tracks.forEach(track => {
+  console.log(`Track ${track.id}: dwell=${track.dwell.toFixed(1)}s`);
+  
+  // Check if gaze data is available for this person
+  if (track.gaze) {
+    const isGazing = track.gaze.detected === 1;
+    const gazeTime = track.gaze.time;
+    const attentionRate = (gazeTime / track.dwell * 100).toFixed(1);
+    
+    console.log(`  Gaze: ${isGazing ? 'LOOKING' : 'away'}, ` +
+                `time=${gazeTime.toFixed(1)}s, ` +
+                `attention=${attentionRate}%`);
+    
+    // Trigger action if person gazing for > 5 seconds
+    if (gazeTime > 5.0 && isGazing) {
+      displaySpecialOffer(track.id);
+    }
+  } else {
+    console.log('  Gaze: no face detected');
+  }
+});
+```
+
+**Real-World Example (8 people in 1280×720 RTSP stream):**
+
+```json
+{
+  "tracks": [
+    {
+      "id": 63,
+      "bbox": [622, 285, 654, 370],
+      "dwell": 12.5,
+      "gaze": {
+        "detected": 1,
+        "time": 8.00,
+        "face_bbox": [231, 167, 240, 180]
+      }
+    },
+    {
+      "id": 79,
+      "bbox": [890, 310, 925, 410],
+      "dwell": 5.2
+      // No gaze object - face not detected for this person
+    },
+    {
+      "id": 50,
+      "bbox": [450, 295, 485, 385],
+      "dwell": 18.7
+      // No gaze object - face detected but not matched to this track
+    }
+  ]
+}
+```
+
+**Interpretation:**
+- Track 63: **Has gaze data** - face detected, matched, currently gazing (detected=1), 8s total gaze time, 64% attention rate (8.0/12.5)
+- Track 79: **No gaze data** - person detected but face not visible/detected (turned away, too far, occluded)
+- Track 50: **No gaze data** - face may have been detected but failed IoU matching threshold with this track's bbox
+
+This is typical production behavior: in a scene with 8 people, only 1-3 will have gaze data at any moment. Dashboard code must handle both cases gracefully with null checks.
 
 ---
 
@@ -857,13 +1180,15 @@ if (track.exit) {
 
 ### Hysteresis & Debouncing
 
-- **Moving Streak:** Requires `moving_streak_req` consecutive frames above `min_speed_px_s` before setting direction
-  - **Purpose:** Prevents jitter from detector noise
-  - **Example:** 3 consecutive frames at ≥36 px/s before `dir != "?"`
-  
+- __Moving Streak:__ Requires `moving_streak_req` consecutive frames above `min_speed_px_s` before setting direction
+
+   - **Purpose:** Prevents jitter from detector noise
+   - **Example:** 3 consecutive frames at ≥36 px/s before `dir != "?"`
+
 - **Direction Confidence:** Increases with distance from bin edges
-  - **High conf:** Speed well above threshold + direction in bin center
-  - **Low conf:** Speed near threshold + direction near bin boundary (e.g., 42° between R and UR)
+
+   - **High conf:** Speed well above threshold + direction in bin center
+   - **Low conf:** Speed near threshold + direction near bin boundary (e.g., 42° between R and UR)
 
 ---
 
@@ -1171,6 +1496,7 @@ A track will show `speed: 0.0, dir: "?"` (stationary) if **any** of these condit
 ```
 
 **Interpretation:**
+
 - **Track 2:** High-quality stationary person, long dwell, gazing at camera
 - **Track 4:** Edge track with low score → motion suppressed despite KF velocity
 - **Track 8:** Person walking up-right at moderate speed, good quality
@@ -1395,6 +1721,7 @@ mqtt.on('message', (topic, message) => {
 ## Message Frequency
 
 - **Publish Rate:** Configurable, typically 1-30 Hz
+
    - Default: 1 Hz (1 message per second)
    - Low latency: 10-30 Hz
    - Bandwidth constrained: 0.2-1 Hz
@@ -1414,10 +1741,12 @@ mqtt.on('message', (topic, message) => {
 ### QoS (Quality of Service)
 
 - **Recommended:** QoS 0 (At most once)
+
    - Low latency, no retries
    - Acceptable for real-time analytics (occasional message loss OK)
 
 - **Alternative:** QoS 1 (At least once)
+
    - Guaranteed delivery, higher overhead
    - Use if exact counts are critical
 
@@ -1485,11 +1814,13 @@ client.on('error', (err) => {
 ### Security Best Practices
 
 **Local Network (Non-Production):**
+
 - QoS 0, no TLS (low latency, acceptable for isolated networks)
 - No authentication required for local-only brokers
 - Firewall rules to prevent external access
 
 **Remote/Cloud Brokers (Production):**
+
 - **Always use TLS** (port 8883, `mqtts://` protocol)
 - **Client certificates** for mutual TLS authentication
 - **Username/password** authentication minimum
@@ -1498,6 +1829,7 @@ client.on('error', (err) => {
 - **Regular certificate rotation** (90-day max)
 
 **Data Privacy:**
+
 - Analytics data may contain PII (track positions, dwell times)
 - Consider encryption at rest for stored messages
 - Comply with GDPR/privacy regulations if applicable

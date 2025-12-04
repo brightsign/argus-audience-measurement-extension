@@ -24,6 +24,9 @@ struct AppConfig {
   // Priority is always: CLI args > [config or registry based on this setting] > [other] > auto-detect
   std::string     input_source_priority{"config"};  // "config" or "registry"
 
+  // Device identification
+  std::string     device_id{};  // Device identifier for MQTT (empty = auto-detect from MAC)
+
   // Models
   ModelSpec       primary_model{};           // e.g., detector
   std::vector<ModelSpec> secondary_models;  // e.g., trackers, classifiers
