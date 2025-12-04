@@ -206,22 +206,61 @@ std::string MqttPublisher::make_payload_locked() const {
     // V7.1b: Cosmetic - zero tiny speeds for cleaner telemetry
     const float pub_speed = (t.speed >= 2.0f) ? t.speed : 0.0f;
     
-    char buf[512];  // Larger buffer for v7.0
-    std::snprintf(buf, sizeof(buf),
-      "{\"id\":%d,\"state\":\"Confirmed\","
-      "\"bbox\":[%.1f,%.1f,%.1f,%.1f],\"score\":%.2f,"
-      "\"zones\":%s,"
-      "\"dir\":\"%s\",\"deg\":%.1f,\"dir_conf\":%.2f,"
-      "\"speed\":%.1f,\"speed_norm\":%.3f,"
-      "\"dwell\":%.2f,\"enter\":%s,\"exit\":%s}",
-      t.id,
-      t.x0, t.y0, t.x1, t.y1, t.score,
-      zones_str,
-      pub_dir, pub_deg, pub_conf,  // V7.1b: Use gated values instead of raw tracker values
-      pub_speed, speed_norm,        // V7.1b: Use cleaned speed (zero if < 2.0 px/s)
-      t.dwell_s,
-      t.just_entered ? "true" : "false",
-      t.just_exited ? "true" : "false");
+    char buf[768];  // Larger buffer for v7.0 + gaze data
+    
+    // Build gaze object if available
+    if (t.has_gaze) {
+      // DEBUG: Log when publishing gaze data
+      static int mqtt_gaze_log_counter = 0;
+      if (++mqtt_gaze_log_counter % 3 == 0) {
+        LG_INFO("[MQTT-GAZE] Publishing Track %d with gaze: detected=%d, time=%.2f, face_bbox=[%.1f,%.1f,%.1f,%.1f]",
+                t.id, t.is_gazing ? 1 : 0, t.gaze_time, t.face_bbox_x0, t.face_bbox_y0, t.face_bbox_x1, t.face_bbox_y1);
+      }
+      
+      std::snprintf(buf, sizeof(buf),
+        "{\"id\":%d,\"state\":\"Confirmed\","
+        "\"bbox\":[%.1f,%.1f,%.1f,%.1f],\"score\":%.2f,"
+        "\"zones\":%s,"
+        "\"dir\":\"%s\",\"deg\":%.1f,\"dir_conf\":%.2f,"
+        "\"speed\":%.1f,\"speed_norm\":%.3f,"
+        "\"dwell\":%.2f,\"enter\":%s,\"exit\":%s,"
+        "\"gaze\":{\"detected\":%d,\"time\":%.2f,\"face_bbox\":[%.1f,%.1f,%.1f,%.1f]}}",
+        t.id,
+        t.x0, t.y0, t.x1, t.y1, t.score,
+        zones_str,
+        pub_dir, pub_deg, pub_conf,  // V7.1b: Use gated values instead of raw tracker values
+        pub_speed, speed_norm,        // V7.1b: Use cleaned speed (zero if < 2.0 px/s)
+        t.dwell_s,
+        t.just_entered ? "true" : "false",
+        t.just_exited ? "true" : "false",
+        t.is_gazing ? 1 : 0,
+        t.gaze_time,
+        t.face_bbox_x0, t.face_bbox_y0, t.face_bbox_x1, t.face_bbox_y1);
+    } else {
+      // No gaze data available for this track
+      // DEBUG: Log when track has no gaze data
+      static int mqtt_no_gaze_log_counter = 0;
+      if (++mqtt_no_gaze_log_counter % 10 == 0) {  // Log less frequently
+        LG_INFO("[MQTT-NO-GAZE] Track %d has no gaze data (has_gaze=false)", t.id);
+      }
+      
+      std::snprintf(buf, sizeof(buf),
+        "{\"id\":%d,\"state\":\"Confirmed\","
+        "\"bbox\":[%.1f,%.1f,%.1f,%.1f],\"score\":%.2f,"
+        "\"zones\":%s,"
+        "\"dir\":\"%s\",\"deg\":%.1f,\"dir_conf\":%.2f,"
+        "\"speed\":%.1f,\"speed_norm\":%.3f,"
+        "\"dwell\":%.2f,\"enter\":%s,\"exit\":%s}",
+        t.id,
+        t.x0, t.y0, t.x1, t.y1, t.score,
+        zones_str,
+        pub_dir, pub_deg, pub_conf,  // V7.1b: Use gated values instead of raw tracker values
+        pub_speed, speed_norm,        // V7.1b: Use cleaned speed (zero if < 2.0 px/s)
+        t.dwell_s,
+        t.just_entered ? "true" : "false",
+        t.just_exited ? "true" : "false");
+    }
+    
     if (i > 0) payload += ",";
     payload += buf;
   }

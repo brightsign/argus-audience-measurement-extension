@@ -1,6 +1,7 @@
 #include <chrono>
 #include <thread>
 #include <iostream>
+#include <unordered_set>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 #include <opencv2/core.hpp>
@@ -623,6 +624,12 @@ void Orchestrator::supervisor_loop() noexcept {
       PipelineResult result{};
       std::vector<Detection> yolo_dets_copy;  // Copy for tracker update
       std::vector<TrackedBox> tracks;  // Tracking results
+      
+      // CRITICAL: Declare snapshot variables outside lock scope for use throughout iteration
+      // This prevents race condition where faces are cleared between global count and matching
+      std::vector<Detection> face_dets_snapshot;
+      std::vector<Landmarks> face_lms_snapshot;
+      
       {
         std::lock_guard<std::mutex> lk(fusion_.m);
         
@@ -640,9 +647,20 @@ void Orchestrator::supervisor_loop() noexcept {
         }
         result.people_count = person_count;
         
-        // Count RetinaFace face detections (all faces are gaze candidates)
+        // Copy face detections for consistent snapshot
+        face_dets_snapshot = fusion_.face_dets;
+        face_lms_snapshot = fusion_.face_lms;
+        
+        // Count RetinaFace face detections from snapshot (all faces are gaze candidates)
         // RetinaFace detections already have confidence filtering applied
-        result.gaze_count = static_cast<int>(fusion_.face_dets.size());
+        result.gaze_count = static_cast<int>(face_dets_snapshot.size());
+        
+        // Debug: Log gaze count at analytics time
+        static int analytics_debug_counter = 0;
+        if (++analytics_debug_counter % 3 == 0) {
+          LG_INFO("[ANALYTICS] Global gaze_count=%d (face_dets_snapshot.size=%zu)", 
+                  result.gaze_count, face_dets_snapshot.size());
+        }
         
         result.ts_ns = static_cast<uint64_t>(now);
         result.seq = current_seq;
@@ -711,6 +729,144 @@ void Orchestrator::supervisor_loop() noexcept {
         const double ts_s = now * 1e-9;  // Convert nanoseconds to seconds
         tracks = person_tracker_.update(nms_filtered, ts_s);
         
+        // Associate face detections with person tracks for gaze data
+        // Use snapshot captured earlier to ensure consistency with global count
+        
+        // Debug: Log face detection count and matching
+        static int debug_gaze_counter = 0;
+        debug_gaze_counter++;
+        if (debug_gaze_counter % 3 == 0) {  // Log every 3 seconds for debugging
+          LG_INFO("[GAZE] Face detections: %zu, Person tracks: %zu (using snapshot)", 
+                  face_dets_snapshot.size(), tracks.size());
+          // Log face bounding boxes when faces are detected
+          for (size_t i = 0; i < face_dets_snapshot.size(); ++i) {
+            const auto& face = face_dets_snapshot[i];
+            LG_INFO("[GAZE-FACE] Face %zu: bbox=[%.1f,%.1f,%.1f,%.1f] score=%.2f", 
+                    i, face.x0, face.y0, face.x1, face.y1, face.score);
+          }
+        }
+        
+        // For each person track, find best matching face detection
+        for (auto& track : tracks) {
+          // Reset gaze info for this frame
+          track.has_gaze = false;
+          track.is_gazing = false;
+          
+          // Debug: Log track bbox when we have faces to match
+          bool should_log = (debug_gaze_counter % 3 == 0) && (face_dets_snapshot.size() > 0);
+          if (should_log) {
+            LG_INFO("[GAZE-TRACK] Track %d: bbox=[%.1f,%.1f,%.1f,%.1f]", 
+                    track.id, track.x0, track.y0, track.x1, track.y1);
+          }
+          
+          // Find best overlapping face detection
+          float best_iou = 0.0f;
+          int best_face_idx = -1;
+          
+          // Expand person bbox upward to include head region (faces detected above person bbox)
+          // Observed: faces at y=120-180, person boxes start at y=280+ (YOLOX crops heads)
+          float track_height = track.y1 - track.y0;
+          float head_expansion = track_height * 0.3f;  // Expand 30% of body height upward for head
+          float expanded_y0 = std::max(0.f, track.y0 - head_expansion);
+          
+          for (size_t i = 0; i < face_dets_snapshot.size(); ++i) {
+            const auto& face = face_dets_snapshot[i];
+            
+            // Calculate IoU between EXPANDED person bbox and face bbox
+            float x0 = std::max(track.x0, face.x0);
+            float y0 = std::max(expanded_y0, face.y0);  // Use expanded top edge
+            float x1 = std::min(track.x1, face.x1);
+            float y1 = std::min(track.y1, face.y1);
+            float inter_w = std::max(0.f, x1 - x0);
+            float inter_h = std::max(0.f, y1 - y0);
+            float inter = inter_w * inter_h;
+            
+            float face_area = (face.x1 - face.x0) * (face.y1 - face.y0);
+            float expanded_track_area = (track.x1 - track.x0) * (track.y1 - expanded_y0);  // Use expanded height
+            float uni = face_area + expanded_track_area - inter;
+            float iou = (uni > 0) ? (inter / uni) : 0.f;
+            
+            // Also check if face center is within EXPANDED person bbox (handles face smaller than body)
+            float face_cx = (face.x0 + face.x1) * 0.5f;
+            float face_cy = (face.y0 + face.y1) * 0.5f;
+            bool face_inside_track = (face_cx >= track.x0 && face_cx <= track.x1 &&
+                                     face_cy >= expanded_y0 && face_cy <= track.y1);  // Use expanded top
+            
+            // Accept if good IoU OR face center is inside person bbox
+            if ((iou > 0.1f || face_inside_track) && iou > best_iou) {
+              best_iou = iou;
+              best_face_idx = static_cast<int>(i);
+            }
+            
+            // Debug: Log IoU calculations when we have faces
+            if (should_log) {
+              LG_INFO("[GAZE-IOU] Track %d <-> Face %zu: IoU=%.3f, face_inside=%d, accepted=%d", 
+                      track.id, i, iou, face_inside_track ? 1 : 0, 
+                      (iou > 0.1f || face_inside_track) ? 1 : 0);
+            }
+          }
+          
+          // If we found a matching face, check gaze and update track
+          if (best_face_idx >= 0) {
+            const auto& face = face_dets_snapshot[best_face_idx];
+            track.has_gaze = true;
+            track.face_bbox_x0 = face.x0;
+            track.face_bbox_y0 = face.y0;
+            track.face_bbox_x1 = face.x1;
+            track.face_bbox_y1 = face.y1;
+            
+            // DEBUG: Always log when we set has_gaze=true
+            LG_INFO("[GAZE-MATCH] Track %d MATCHED to Face %d: IoU=%.3f, face_bbox=[%.1f,%.1f,%.1f,%.1f]", 
+                    track.id, best_face_idx, best_iou, face.x0, face.y0, face.x1, face.y1);
+            
+            // Convert Detection to retinaface_object_t for gaze check
+            if (best_face_idx < static_cast<int>(face_lms_snapshot.size())) {
+              retinaface_object_t rf_face{};
+              rf_face.box.left = static_cast<int>(face.x0);
+              rf_face.box.top = static_cast<int>(face.y0);
+              rf_face.box.right = static_cast<int>(face.x1);
+              rf_face.box.bottom = static_cast<int>(face.y1);
+              rf_face.score = face.score;
+              
+              // Copy landmarks if available
+              const auto& lms = face_lms_snapshot[best_face_idx];
+              for (int j = 0; j < 5; ++j) {
+                rf_face.ponit[j].x = static_cast<int>(lms.pts[j * 2 + 0]);
+                rf_face.ponit[j].y = static_cast<int>(lms.pts[j * 2 + 1]);
+              }
+              
+              // Check if face is looking at camera
+              track.is_gazing = face_is_looking_at_us(rf_face);
+              
+              // Update gaze time using persistent map (increment by publish interval ~1 second)
+              if (track.is_gazing) {
+                gaze_time_map_[track.id] += 1.0;  // Add 1 second of gaze time
+              }
+              track.gaze_time = gaze_time_map_[track.id];  // Apply accumulated time
+              
+              // DEBUG: Always log gaze details
+              LG_INFO("[GAZE-DIR] Track %d: is_gazing=%d, gaze_time=%.1f (total accumulated)", 
+                      track.id, track.is_gazing ? 1 : 0, track.gaze_time);
+              
+              // DEBUG: Always log gaze details
+              LG_INFO("[GAZE-DIR] Track %d: is_gazing=%d, gaze_time=%.1f (total accumulated)", 
+                      track.id, track.is_gazing ? 1 : 0, track.gaze_time);
+              
+              // Debug: Log every gaze match
+              if (debug_gaze_counter % 3 == 0) {
+                LG_INFO("[GAZE] Track %d: matched face (IoU=%.2f), gazing=%d, time=%.1f", 
+                        track.id, best_iou, track.is_gazing ? 1 : 0, track.gaze_time);
+              }
+            }
+          } else {
+            // DEBUG: Log when track has no matching face
+            if (should_log) {
+              LG_INFO("[GAZE-NOMATCH] Track %d: no face match (best_iou=%.3f, faces=%zu)", 
+                      track.id, best_iou, face_dets_snapshot.size());
+            }
+          }
+        }  // End for (auto& track : tracks)
+        
         // Emission cache: hold last non-empty tracks for brief detector misses
         constexpr double HOLD_TTL_S = 0.5;  // 500ms hold time
         
@@ -722,6 +878,19 @@ void Orchestrator::supervisor_loop() noexcept {
           tracks_to_emit = tracks;
           emit_cache_.last_nonempty = tracks;
           emit_cache_.last_nonempty_ts = ts_s;
+          
+          // Cleanup gaze_time_map: remove entries for tracks that no longer exist
+          std::unordered_set<int> active_ids;
+          for (const auto& t : tracks) {
+            active_ids.insert(t.id);
+          }
+          for (auto it = gaze_time_map_.begin(); it != gaze_time_map_.end(); ) {
+            if (active_ids.find(it->first) == active_ids.end()) {
+              it = gaze_time_map_.erase(it);
+            } else {
+              ++it;
+            }
+          }
         } else if ((ts_s - emit_cache_.last_nonempty_ts) <= HOLD_TTL_S) {
           // No fresh tracks, but within hold period - reuse last
           tracks_to_emit = emit_cache_.last_nonempty;
@@ -739,6 +908,16 @@ void Orchestrator::supervisor_loop() noexcept {
         
         // Add tracks to PipelineResult for publishers
         result.person_tracks = tracks_to_emit;
+        
+        // DEBUG: Log track states before publishing
+        static int pre_publish_log_counter = 0;
+        if (++pre_publish_log_counter % 3 == 0 && !tracks_to_emit.empty()) {
+          LG_INFO("[PRE-PUBLISH] Sending %zu tracks to MQTT:", tracks_to_emit.size());
+          for (const auto& t : tracks_to_emit) {
+            LG_INFO("  Track %d: has_gaze=%d, is_gazing=%d, gaze_time=%.1f", 
+                    t.id, t.has_gaze ? 1 : 0, t.is_gazing ? 1 : 0, t.gaze_time);
+          }
+        }
         
         // Override people_count to match emitted tracks (not raw detections)
         result.people_count = static_cast<int>(tracks_to_emit.size());

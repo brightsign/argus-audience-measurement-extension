@@ -194,6 +194,9 @@ private:
     std::vector<TrackedBox> last_nonempty;
     double last_nonempty_ts{0.0};
   } emit_cache_;
+  
+  // Gaze time accumulator per track ID
+  std::unordered_map<int, double> gaze_time_map_;
 
   // Device and stream identifiers for MQTT namespacing
   std::string device_id_;          // e.g., "xt5-01"

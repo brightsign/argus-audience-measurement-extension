@@ -822,6 +822,15 @@ std::vector<TrackedBox> Tracker::update(const std::vector<Detection>& dets_raw, 
     o.hits=t.hits;
     o.missed=t.missed;
     
+    // Gaze fields (will be populated by orchestrator)
+    o.has_gaze = false;
+    o.is_gazing = false;
+    o.gaze_time = 0.0;
+    o.face_bbox_x0 = 0.0f;
+    o.face_bbox_y0 = 0.0f;
+    o.face_bbox_x1 = 0.0f;
+    o.face_bbox_y1 = 0.0f;
+    
     // V6.2.3: Enforce stationary guard - only force dir:"?" when below speed threshold
     if (o.speed < cfg_.min_speed_px_s) {
       o.dir_label = "?";
@@ -854,6 +863,15 @@ std::vector<TrackedBox> Tracker::active() const {
     o.first_ts=t.first_ts; o.last_ts=t.last_ts; o.dwell_s=(t.last_ts - t.first_ts);
     o.age_frames=t.age_frames;
     o.missed=t.missed;
+    
+    // Gaze fields (will be populated by orchestrator)
+    o.has_gaze = false;
+    o.is_gazing = false;
+    o.gaze_time = 0.0;
+    o.face_bbox_x0 = 0.0f;
+    o.face_bbox_y0 = 0.0f;
+    o.face_bbox_x1 = 0.0f;
+    o.face_bbox_y1 = 0.0f;
     
     // V6.2.3: Enforce consistent "stationary/unknown" state at publish time
     // Only force dir:"?" when truly below speed threshold
