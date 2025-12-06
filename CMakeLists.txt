@@ -479,4 +479,24 @@ install(CODE "
   else()
     message(WARNING \"ext-bundle tarball missing; skipping GStreamer runtime bundling\")
   endif()
+
+  # CRITICAL: Add essential plugins missing from ext-bundle-payload
+  # 1. libgstcoreelements.so (contains queue plugin)
+  # 2. libgstlibav.so (contains avdec_h264 decoder)
+  set(_coreelements_path \"${OECORE_TARGET_SYSROOT_ABS}/usr/lib/gstreamer-1.0/libgstcoreelements.so\")
+  set(_libav_path \"${OECORE_TARGET_SYSROOT_ABS}/usr/lib/gstreamer-1.0/libgstlibav.so\")
+  
+  if(EXISTS \${_coreelements_path})
+    execute_process(COMMAND cp -L \${_coreelements_path} \${CMAKE_INSTALL_PREFIX}/lib/gstreamer-1.0/)
+    message(STATUS \"Added libgstcoreelements.so (queue plugin) to GStreamer bundle\")
+  else()
+    message(WARNING \"libgstcoreelements.so not found in SDK - queue plugin will be missing!\")
+  endif()
+  
+  if(EXISTS \${_libav_path})
+    execute_process(COMMAND cp -L \${_libav_path} \${CMAKE_INSTALL_PREFIX}/lib/gstreamer-1.0/)
+    message(STATUS \"Added libgstlibav.so (avdec_h264 decoder) to GStreamer bundle\")
+  else()
+    message(WARNING \"libgstlibav.so not found in SDK - H.264 software decoder will be missing!\")
+  endif()
 ")
