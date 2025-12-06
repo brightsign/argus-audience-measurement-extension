@@ -40,7 +40,9 @@ struct ModelSpec {
 
   // NPU core affinity (for multi-core inference)
   // -1 = auto (runner picks best), 0/1/2 = pin to specific core
-  int   npu_core{-1};
+  // RK3568 (LS5/HS145) has only 1 NPU core (core 0)
+  // RK3588 (XT5) has 3 NPU cores (0, 1, 2)
+  int   npu_core{0};  // Default to core 0 for RK3568 compatibility
 
   // Basic validation; no throws
   bool validate(char* err, size_t err_sz) const noexcept;

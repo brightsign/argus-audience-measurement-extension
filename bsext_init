@@ -227,9 +227,9 @@ EOF
 setup_gstreamer_env() {
     echo "Setting up GStreamer environment for SOC: $SOC_NAME"
     
-    # CRITICAL: Bundled plugins MUST come FIRST on LS5
-    # System /usr/lib/gstreamer-1.0 is MISSING rtspsrc, appsink, videoconvert, decodebin
-    # Only has: alsa, audioconvert, coreelements, libav, mpp, rtp, udp, v4l2, parsers
+    # CRITICAL: Bundled plugins MUST come FIRST
+    # ext-bundle includes RTSP plugins + libgstcoreelements.so (queue)
+    # All plugins are from same GStreamer version for compatibility
     export GST_PLUGIN_PATH=/var/volatile/bsext/ext_npu_argus/$SOC_NAME/lib/gstreamer-1.0:/usr/lib/gstreamer-1.0
     export GST_PLUGIN_SYSTEM_PATH=$GST_PLUGIN_PATH
     
