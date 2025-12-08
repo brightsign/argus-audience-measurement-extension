@@ -657,8 +657,67 @@ void Orchestrator::supervisor_loop() noexcept {
         result.people_count = person_count;
         
         // Copy face detections for consistent snapshot
-        face_dets_snapshot = fusion_.face_dets;
-        face_lms_snapshot = fusion_.face_lms;
+        // CRITICAL FIX: Convert faces from model/letterbox space (320x320) to camera space (e.g., 1920x1080)
+        // This ensures IoU matching works correctly (both faces and tracks in same coordinate system)
+        face_dets_snapshot.clear();
+        face_lms_snapshot.clear();
+        
+        // Calculate de-letterbox transform (same as visualization.cpp)
+        const float model_size = 320.0f;
+        const int cam_w = fusion_.frame_width;   // e.g., 1920
+        const int cam_h = fusion_.frame_height;  // e.g., 1080
+        const float s = std::min(model_size / cam_w, model_size / cam_h);  // letterbox scale
+        const float pad_x = (model_size - cam_w * s) / 2.0f;
+        const float pad_y = (model_size - cam_h * s) / 2.0f;
+        
+        static int delbox_log_count = 0;
+        if (delbox_log_count < 3) {
+          LG_INFO("[COORD-FIX] De-letterbox transform: cam=%dx%d model=320x320 s=%.3f pad=(%.1f,%.1f)", 
+                  cam_w, cam_h, s, pad_x, pad_y);
+          delbox_log_count++;
+        }
+        
+        // Transform each face AND its landmarks from model/letterbox space → camera space
+        for (size_t i = 0; i < fusion_.face_dets.size(); ++i) {
+          const auto& face_model = fusion_.face_dets[i];
+          Detection face_cam = face_model;  // Copy
+          
+          // De-letterbox face bbox: (model coords - padding) / scale = camera coords
+          face_cam.x0 = (face_model.x0 - pad_x) / s;
+          face_cam.y0 = (face_model.y0 - pad_y) / s;
+          face_cam.x1 = (face_model.x1 - pad_x) / s;
+          face_cam.y1 = (face_model.y1 - pad_y) / s;
+          
+          face_dets_snapshot.push_back(face_cam);
+          
+          // CRITICAL: Also transform landmarks to camera space for gaze detection
+          if (i < fusion_.face_lms.size()) {
+            const auto& lms_model = fusion_.face_lms[i];
+            Landmarks lms_cam = lms_model;  // Copy
+            
+            // Transform each of the 5 landmark points (left_eye, right_eye, nose, left_mouth, right_mouth)
+            for (int j = 0; j < 5; ++j) {
+              lms_cam.pts[j * 2 + 0] = (lms_model.pts[j * 2 + 0] - pad_x) / s;  // x
+              lms_cam.pts[j * 2 + 1] = (lms_model.pts[j * 2 + 1] - pad_y) / s;  // y
+            }
+            
+            face_lms_snapshot.push_back(lms_cam);
+          }
+          
+          // Debug: Log first few transformations
+          if (delbox_log_count < 3 && face_dets_snapshot.size() <= 2) {
+            LG_INFO("[COORD-FIX] Face #%zu: model=(%.1f,%.1f,%.1f,%.1f) → camera=(%.1f,%.1f,%.1f,%.1f)",
+                    face_dets_snapshot.size() - 1,
+                    face_model.x0, face_model.y0, face_model.x1, face_model.y1,
+                    face_cam.x0, face_cam.y0, face_cam.x1, face_cam.y1);
+            if (i < fusion_.face_lms.size()) {
+              const auto& lms_model = fusion_.face_lms[i];
+              const auto& lms_cam = face_lms_snapshot.back();
+              LG_INFO("[COORD-FIX] Landmarks #%zu: left_eye model=(%.1f,%.1f) → camera=(%.1f,%.1f)",
+                      i, lms_model.pts[0], lms_model.pts[1], lms_cam.pts[0], lms_cam.pts[1]);
+            }
+          }
+        }
         
         // Count RetinaFace face detections from snapshot (all faces are gaze candidates)
         // RetinaFace detections already have confidence filtering applied
@@ -802,7 +861,8 @@ void Orchestrator::supervisor_loop() noexcept {
                                      face_cy >= expanded_y0 && face_cy <= track.y1);  // Use expanded top
             
             // Accept if good IoU OR face center is inside person bbox
-            if ((iou > 0.1f || face_inside_track) && iou > best_iou) {
+            // LOWERED from 0.1 to 0.05: faces are small (66-96px) compared to full body boxes
+            if ((iou > 0.05f || face_inside_track) && iou > best_iou) {
               best_iou = iou;
               best_face_idx = static_cast<int>(i);
             }
@@ -811,7 +871,7 @@ void Orchestrator::supervisor_loop() noexcept {
             if (should_log) {
               LG_INFO("[GAZE-IOU] Track %d <-> Face %zu: IoU=%.3f, face_inside=%d, accepted=%d", 
                       track.id, i, iou, face_inside_track ? 1 : 0, 
-                      (iou > 0.1f || face_inside_track) ? 1 : 0);
+                      (iou > 0.05f || face_inside_track) ? 1 : 0);
             }
           }
           
@@ -876,6 +936,18 @@ void Orchestrator::supervisor_loop() noexcept {
           }
         }  // End for (auto& track : tracks)
         
+        // DEBUG: Log matching summary
+        int tracks_with_gaze_match = 0;
+        int tracks_gazing = 0;
+        for (const auto& t : tracks) {
+          if (t.has_gaze) tracks_with_gaze_match++;
+          if (t.has_gaze && t.is_gazing) tracks_gazing++;
+        }
+        if (debug_gaze_counter % 3 == 0 && face_dets_snapshot.size() > 0) {
+          LG_INFO("[GAZE-SUMMARY] Faces detected: %zu, Tracks: %zu, Matched: %d, Gazing: %d",
+                  face_dets_snapshot.size(), tracks.size(), tracks_with_gaze_match, tracks_gazing);
+        }
+        
         // Emission cache: hold last non-empty tracks for brief detector misses
         constexpr double HOLD_TTL_S = 0.5;  // 500ms hold time
         
@@ -918,10 +990,20 @@ void Orchestrator::supervisor_loop() noexcept {
         // Add tracks to PipelineResult for publishers
         result.person_tracks = tracks_to_emit;
         
+        // Count tracks that actually have gaze data (faces matched to people)
+        int tracks_with_gaze = 0;
+        for (const auto& t : tracks_to_emit) {
+          if (t.has_gaze) {
+            tracks_with_gaze++;
+          }
+        }
+        result.gaze_count = tracks_with_gaze;  // Override: count matched faces, not total detections
+        
         // DEBUG: Log track states before publishing
         static int pre_publish_log_counter = 0;
         if (++pre_publish_log_counter % 3 == 0 && !tracks_to_emit.empty()) {
-          LG_INFO("[PRE-PUBLISH] Sending %zu tracks to MQTT:", tracks_to_emit.size());
+          LG_INFO("[PRE-PUBLISH] Sending %zu tracks to MQTT (gaze_count=%d):", 
+                  tracks_to_emit.size(), tracks_with_gaze);
           for (const auto& t : tracks_to_emit) {
             LG_INFO("  Track %d: has_gaze=%d, is_gazing=%d, gaze_time=%.1f", 
                     t.id, t.has_gaze ? 1 : 0, t.is_gazing ? 1 : 0, t.gaze_time);
@@ -943,7 +1025,7 @@ void Orchestrator::supervisor_loop() noexcept {
       }
     }
     
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));  // 10 Hz MQTT publishing (was 200ms/5Hz)
   }
 }
 

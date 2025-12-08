@@ -133,8 +133,18 @@ static void draw_face_detections(
             // Attention detection heuristic (same as face_is_looking_at_us)
             // Face aspect ratio should be ~1.618 (golden ratio)
             // Interocular ratio should be ~0.5
-            attending = (face_aspect_ratio > 1.2 && face_aspect_ratio < 2.0 &&
-                        interocular_face_ratio > 0.3 && interocular_face_ratio < 0.7);
+            // Relaxed thresholds: 1.0-2.5 for aspect, 0.25-0.75 for interocular
+            attending = (face_aspect_ratio > 1.0 && face_aspect_ratio < 2.5 &&
+                        interocular_face_ratio > 0.25 && interocular_face_ratio < 0.75);
+            
+            // DEBUG: Log when green box is drawn for timing analysis
+            if (attending) {
+              static int green_box_counter = 0;
+              if (++green_box_counter % 5 == 0) {  // Every 5th green box (~0.5s at 10 Hz)
+                LG_INFO("[VIZ-GAZE] Drawing GREEN box for face #%zu (aspect=%.2f, ioc=%.2f)", 
+                        i, face_aspect_ratio, interocular_face_ratio);
+              }
+            }
         }
         
         // Choose box color: green if looking, red otherwise

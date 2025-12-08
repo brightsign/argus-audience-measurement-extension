@@ -18,8 +18,9 @@ bool face_is_looking_at_us(retinaface_object_t face) {
      * face_aspect_ratio should be approximately the golden ratio ~ 1.618
      * interocular_face_ratio should be approximately 0.5
      * 
-     * If face_aspect_ratio is < 1.5 or > 1.72, the face is not looking at the camera
-     * if interocular_face_ratio is < 0.4 or > 0.6, the face is not looking at the camera
+     * Relaxed thresholds for better gaze detection at various angles/distances:
+     * - Face aspect ratio: 1.0 to 2.5 (was 1.2 to 2.0)
+     * - Interocular ratio: 0.25 to 0.75 (was 0.3 to 0.7)
 
     CF: https://pmc.ncbi.nlm.nih.gov/articles/PMC2814183/
     and https://www.researchgate.net/publication/341711316_Autoencoder-based_image_processing_framework_for_object_appearance_modifications
@@ -27,8 +28,9 @@ bool face_is_looking_at_us(retinaface_object_t face) {
 //    std::cout << "face_aspect_ratio: " << face_aspect_ratio << "  "
 //      << "interocular_face_ratio: " << interocular_face_ratio << std::endl;
 
-   auto is_looking = face_aspect_ratio > 1.2 && face_aspect_ratio < 2.0
-        && interocular_face_ratio > 0.3 && interocular_face_ratio < 0.7;
+   // Relaxed thresholds for better gaze detection coverage
+   auto is_looking = face_aspect_ratio > 1.0 && face_aspect_ratio < 2.5
+        && interocular_face_ratio > 0.25 && interocular_face_ratio < 0.75;
     // if (is_looking) {
     //     std::cout << "Face is looking at us" << std::endl;
     // } else {
