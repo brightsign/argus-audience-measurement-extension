@@ -1,0 +1,91 @@
+{
+  "_comment": "DEBUG CONFIG - Lower RetinaFace threshold to detect more faces",
+  "_comment_input_source": "Select 'rtsp', 'usb', or 'file' for your input source",
+  "input_source": "rtsp",
+  
+  "_comment_device_id": "Device identifier for MQTT messages. Leave empty to auto-detect from MAC address",
+  "device_id": "",
+  
+  "input": {
+    "rtsp_url": "rtsp://192.168.0.203:8554/live",
+    "usb_device": "/dev/video0",
+    "file_path": "/storage/sd/000921246-shopping-area.mov",
+
+    "usb": {
+      "width": 640,
+      "height": 480,
+      "fps": 30
+    },
+    "rtsp": {
+      "latency_ms": 100
+    },
+    "file": {                   
+      "loop": true
+    }
+  },
+
+  "input_source_priority": "config",
+
+  "primary_model": {
+    "name": "retinaface",
+    "model_path": "model/retinaface.rknn",
+    "input_size": [320, 320],
+    "npu_core": 0,
+    "norm": {
+      "mean": [123.675, 116.28, 103.53],
+      "std":  [58.395, 57.12, 57.375]
+    },
+    "conf_threshold": 0.15,
+    "_comment_threshold": "LOWERED from 0.3 to 0.15 to detect more faces - may have false positives",
+    "nms_threshold": 0.45
+  },
+
+  "secondary_models": [
+    {
+      "name": "yolox",
+      "model_path": "model/yolox_s.rknn",
+      "input_size": [640, 640],
+      "npu_core": 0,
+      "norm": {
+        "mean": [0, 0, 0],
+        "std": [1, 1, 1]
+      },
+      "conf_threshold": 0.5,
+      "nms_threshold": 0.45
+    }
+  ],
+
+  "processing": {
+    "th": { "score": 0.5, "iou": 0.45 },
+    "nms_max_dets": 100
+  },
+
+  "runtime": {
+    "target_fps": 30,
+    "heartbeat_ms": 1000
+  },
+
+  "publishers": [
+    {
+      "kind": "mqtt",
+      "mqtt": {
+        "host": "localhost",
+        "port": 1883,
+        "topic": "bs/argus/analytics",
+        "qos": 0,
+        "retain": false,
+        "period_ms": 1000
+      }
+    }
+  ],
+
+  "log_level": "info",
+  "log_dir": "/storage/sd/logs",
+  "log_json": true,
+
+  "enable_frame_output": true,
+  "output_dir": "/tmp",
+
+  "test_face_only": false,
+  "test_yolo_only": false
+}

@@ -210,12 +210,10 @@ std::string MqttPublisher::make_payload_locked() const {
     
     // Build gaze object if available
     if (t.has_gaze) {
-      // DEBUG: Log when publishing gaze data
-      static int mqtt_gaze_log_counter = 0;
-      if (++mqtt_gaze_log_counter % 3 == 0) {
-        LG_INFO("[MQTT-GAZE] Publishing Track %d with gaze: detected=%d, time=%.2f, face_bbox=[%.1f,%.1f,%.1f,%.1f]",
-                t.id, t.is_gazing ? 1 : 0, t.gaze_time, t.face_bbox_x0, t.face_bbox_y0, t.face_bbox_x1, t.face_bbox_y1);
-      }
+      // DEBUG: Log every gaze publish for better timing visibility
+      LG_INFO("[MQTT-GAZE] Track %d: gaze=%d, time=%.2f, face=[%.0f,%.0f,%.0f,%.0f]",
+              t.id, t.is_gazing ? 1 : 0, t.gaze_time, 
+              t.face_bbox_x0, t.face_bbox_y0, t.face_bbox_x1, t.face_bbox_y1);
       
       std::snprintf(buf, sizeof(buf),
         "{\"id\":%d,\"state\":\"Confirmed\","
@@ -238,10 +236,10 @@ std::string MqttPublisher::make_payload_locked() const {
         t.face_bbox_x0, t.face_bbox_y0, t.face_bbox_x1, t.face_bbox_y1);
     } else {
       // No gaze data available for this track
-      // DEBUG: Log when track has no gaze data
+      // DEBUG: Reduced logging for no-gaze tracks
       static int mqtt_no_gaze_log_counter = 0;
-      if (++mqtt_no_gaze_log_counter % 10 == 0) {  // Log less frequently
-        LG_INFO("[MQTT-NO-GAZE] Track %d has no gaze data (has_gaze=false)", t.id);
+      if (++mqtt_no_gaze_log_counter % 20 == 0) {  // Log every 20th to reduce noise
+        LG_DEBUG("[MQTT-NO-GAZE] Track %d has no gaze data (has_gaze=false)", t.id);
       }
       
       std::snprintf(buf, sizeof(buf),
