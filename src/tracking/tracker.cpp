@@ -2,6 +2,7 @@
 #include "tracking/byte_tracker_lite.h"
 #include "tracking/byte_types.h"
 #include "models/model_runner.h"  // For Detection struct definition
+#include "metrics/log_global.h"   // For LG_INFO logging
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -239,20 +240,64 @@ void Tracker::update_track(TrackStateInternal& t, const Detection& d, double ts,
   float dy_hist = fy - prev_fy;
 
   // 3.1) ROI enter/exit tracking
-  auto inside_roi = [&](float cx, float cy) -> bool {
+  // V7.2b: Lowered threshold to 35% for wide bboxes (close to camera)
+  // Track is IN ROI if >35% of bbox overlaps with ROI bounds
+  auto inside_roi = [&](float x0, float y0, float x1, float y1, float cx, float cy) -> bool {
     const float bx = cfg_.enter_exit_border_frac * frame_w_;
     const float by = cfg_.enter_exit_border_frac * frame_h_;
-    return (cx >= bx && cx <= (frame_w_ - bx) &&
-            cy >= by && cy <= (frame_h_ - by));
+    
+    // Clip bbox to ROI boundaries to get overlapping region
+    float roi_left = bx;
+    float roi_right = frame_w_ - bx;
+    float roi_top = by;
+    float roi_bottom = frame_h_ - by;
+    
+    float overlap_left = std::max(x0, roi_left);
+    float overlap_right = std::min(x1, roi_right);
+    float overlap_top = std::max(y0, roi_top);
+    float overlap_bottom = std::min(y1, roi_bottom);
+    
+    // Calculate overlap area and bbox area
+    float overlap_width = std::max(0.0f, overlap_right - overlap_left);
+    float overlap_height = std::max(0.0f, overlap_bottom - overlap_top);
+    float overlap_area = overlap_width * overlap_height;
+    
+    float bbox_width = x1 - x0;
+    float bbox_height = y1 - y0;
+    float bbox_area = bbox_width * bbox_height;
+    
+    // Track is IN ROI if >35% of bbox overlaps with ROI (lowered from 50% for wide bboxes)
+    float overlap_ratio = (bbox_area > 0) ? (overlap_area / bbox_area) : 0.0f;
+    return overlap_ratio > 0.35f;
   };
-  bool now_inside = inside_roi(t.cx, t.cy);
+  bool now_inside = inside_roi(t.x0, t.y0, t.x1, t.y1, t.cx, t.cy);
+  
+  // DEBUG: Log overlap ratio calculation
+  static int overlap_log_count = 0;
+  if (overlap_log_count++ < 50) {
+    const float bx = cfg_.enter_exit_border_frac * frame_w_;
+    const float by = cfg_.enter_exit_border_frac * frame_h_;
+    float overlap_left = std::max(t.x0, bx);
+    float overlap_right = std::min(t.x1, frame_w_ - bx);
+    float overlap_top = std::max(t.y0, by);
+    float overlap_bottom = std::min(t.y1, frame_h_ - by);
+    float overlap_area = std::max(0.0f, overlap_right - overlap_left) * std::max(0.0f, overlap_bottom - overlap_top);
+    float bbox_area = (t.x1 - t.x0) * (t.y1 - t.y0);
+    float overlap_ratio = (bbox_area > 0) ? (overlap_area / bbox_area) : 0.0f;
+    LG_INFO("[ROI-OVERLAP] Track %d: ratio=%.2f%% (>35%%=%s) bbox=[%.1f,%.1f,%.1f,%.1f]", 
+            t.id, overlap_ratio * 100.0f, now_inside ? "YES-IN-ROI" : "NO-IN-EDGE", t.x0, t.y0, t.x1, t.y1);
+  }
   
   // Enter/exit one-shots (on state change)
   if (!t.was_inside && now_inside && !t.enter_sent) {
     t.enter_sent = true;
+    LG_INFO("[ENTER-EXIT] Track %d ENTERED ROI: was_inside=%d now_inside=%d bbox=[%.1f,%.1f,%.1f,%.1f]", 
+            t.id, t.was_inside ? 1 : 0, now_inside ? 1 : 0, t.x0, t.y0, t.x1, t.y1);
   }
   if (t.was_inside && !now_inside && !t.exit_sent) {
     t.exit_sent = true;
+    LG_INFO("[ENTER-EXIT] Track %d EXITED ROI: was_inside=%d now_inside=%d bbox=[%.1f,%.1f,%.1f,%.1f]", 
+            t.id, t.was_inside ? 1 : 0, now_inside ? 1 : 0, t.x0, t.y0, t.x1, t.y1);
   }
 
   // ==== V7.1f: RELAXED STATIONARY GATE for slow-motion detection ====
@@ -700,6 +745,13 @@ std::vector<TrackedBox> Tracker::update(const std::vector<Detection>& dets_raw, 
       
       o.just_entered = t.enter_sent;
       o.just_exited = t.exit_sent;
+      
+      // Debug logging for enter/exit events
+      static int enter_exit_log_count = 0;
+      if (t.enter_sent || t.exit_sent || (++enter_exit_log_count % 30 == 0 && o.id < 5)) {
+        LG_INFO("[ENTER-EXIT-PUB] Track %d: enter=%d exit=%d flags_in_output (will reset flags)", 
+                o.id, t.enter_sent ? 1 : 0, t.exit_sent ? 1 : 0);
+      }
       
       t.enter_sent = false;
       t.exit_sent = false;

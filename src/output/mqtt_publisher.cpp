@@ -154,7 +154,7 @@ std::string MqttPublisher::make_payload_locked() const {
     "\"npu_load\":%.1f,"
     "\"people\":%d,\"people_confident\":%d,"
     "\"gaze\":%d,\"fps\":%d,"
-    "\"roi\":{\"type\":\"border\",\"border_frac\":0.10,\"rect\":[%d,%d,%d,%d]},"
+    "\"roi\":{\"type\":\"border\",\"border_frac\":0.30,\"rect\":[%d,%d,%d,%d]},"
     "\"health\":{\"detector_fps\":%.1f,\"tracker_fps\":%.1f,\"queue_latency_ms\":0,\"dropped_frames\":%d,\"last_model_reload_ts\":%.1f},"
     "\"tracks\":[",
     ts_s,
@@ -164,9 +164,9 @@ std::string MqttPublisher::make_payload_locked() const {
     npu_load_,
     people_count, people_confident,
     gaze_, fps,
-    // ROI rect (10% border inset)
-    int(frame_width_ * 0.10f), int(frame_height_ * 0.10f),
-    int(frame_width_ * 0.90f), int(frame_height_ * 0.90f),
+    // ROI rect (30% border inset - increased to handle fast-moving people and detection gaps)
+    int(frame_width_ * 0.30f), int(frame_height_ * 0.30f),
+    int(frame_width_ * 0.70f), int(frame_height_ * 0.70f),
     detector_fps_, tracker_fps_, dropped_frames_, last_model_reload_ts_);
   payload += header;
   
@@ -181,11 +181,14 @@ std::string MqttPublisher::make_payload_locked() const {
     float speed_norm = (frame_diag > 0) ? (t.speed / frame_diag) : 0.0f;
     
     // V7.0: Determine zones (simplified - just "roi" vs "edge")
+    // V7.2b: Use same border_frac (30%) as tracker for consistency
     const float cx = (t.x0 + t.x1) * 0.5f;
     const float cy = (t.y0 + t.y1) * 0.5f;
-    const float border_px = frame_width_ * 0.03f;  // 3% border for "edge" zone
-    const bool is_edge = (cx < border_px || cx > frame_width_ - border_px ||
-                          cy < border_px || cy > frame_height_ - border_px);
+    const float border_frac = 0.30f;  // Match tracker's enter_exit_border_frac
+    const float border_px_x = frame_width_ * border_frac;   // 192px for 640px frame
+    const float border_px_y = frame_height_ * border_frac;  // 144px for 480px frame
+    const bool is_edge = (cx < border_px_x || cx > frame_width_ - border_px_x ||
+                          cy < border_px_y || cy > frame_height_ - border_px_y);
     const char* zones_str = is_edge ? "[\"edge\"]" : "[\"roi\"]";
     
     // V7.1b: Strict publisher gate with resolution-adaptive threshold
