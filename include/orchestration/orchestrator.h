@@ -186,7 +186,7 @@ private:
     .max_center_dist_px  = 80.f,        // Distance fallback for association
     .min_speed_px_s      = 3.0f,        // Motion floor in px/s (reduced from 6.0)
     .publish_grace_missed = 6,          // Publish up to 6 misses (increased from 4)
-    .enter_exit_border_frac = 0.10f,    // 10% inset for ROI
+    .enter_exit_border_frac = 0.30f,    // 30% inset for ROI (increased to handle fast-moving people better)
     .dir_hold_ms         = 300.0,       // V6.2: Keep direction for 300ms when slow
     .dir_decay_per_s     = 0.5f,        // V6.2: Confidence decay rate
     .low_score_thresh    = 0.80f        // V6.2: Dampen direction when score < 0.80
