@@ -1,6 +1,20 @@
 # Multiple Model Architecture
 
-This document describes how to extend the BrightSign NPU Gaze Extension architecture to support running multiple models concurrently, leveraging all 3 cores of the RK3588's NPU for retail analytics.
+This document describes the multi-model architecture for running multiple neural networks concurrently on Rockchip NPU platforms.
+
+## Current Implementation Status
+
+**Currently Implemented (v7.0):**
+- **RetinaFace** (NPU Core 0): Face detection + 5-point landmarks for gaze estimation
+- **YOLOX** (NPU Core 1): Person/object detection for tracking
+
+**Planned Extensions:**
+- YOLOv8-pose for 17-keypoint skeleton tracking
+- Third model on NPU Core 2 (RK3588 only)
+
+The architecture described below covers both the current 2-model system and the full 3-model vision.
+
+---
 
 ## Executive Summary
 
@@ -39,13 +53,23 @@ The system provides comprehensive shopper analytics by combining outputs from th
 
 ## Architecture Changes
 
-### Current Single-Model Architecture (Recap)
+### Current 2-Model Architecture (Implemented in v7.0)
 
 ```
-Capture -> QueueA -> Preprocess -> QueueB -> ModelRunner -> Postprocess -> Publishers
+                          ┌─ FrameMailbox ─→ RetinaFace(NPU0) ─→ face_dets ─┐
+                          │     (face)                                       │
+Capture ─→ CaptureThread ─┤                                                  ├─→ FusionState ─→ Tracker ─→ Publishers
+                          │                                                  │
+                          └─ FrameMailbox ─→ YOLOX(NPU1) ─────→ yolo_dets ──┘
+                               (yolo)
 ```
 
-### New 3-Model Architecture (Full NPU Utilization)
+**Key features of current implementation:**
+- **FrameMailbox**: Lock-free single-slot buffer with atomic swap (drop-old policy)
+- **FusionState**: Mutex-protected shared state for multi-model results
+- **Supervisor thread**: Reads fusion state, runs tracker, publishes analytics
+
+### Planned 3-Model Architecture (Full NPU Utilization)
 
 ```
                     -> PreprocRetina -> QueueRetina -> RetinaFace(NPU0)   -\

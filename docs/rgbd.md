@@ -1,6 +1,11 @@
 # RGBD Camera Integration Guide
 
-This document describes how to swap out the standard camera for an RGBD camera in the BrightSign NPU Gaze Extension system.
+> **Status: Planned Feature**
+> This document describes the design for integrating RGB-D (depth) cameras. This feature is not yet implemented in the current codebase.
+
+---
+
+This document describes how to integrate an RGBD camera with the BrightSign NPU Gaze Extension system.
 
 ## Overview
 
@@ -8,7 +13,7 @@ Integrating an RGBD camera allows you to capture both RGB color frames and depth
 
 ## Required Modifications
 
-### 1. Input Sources (lines 118-122 in design.md)
+### 1. Input Sources
 
 Add a new input source strategy for RGBD cameras alongside RTSP and USB:
 - Create an RGBD camera capture implementation in the Capture Worker
@@ -20,7 +25,7 @@ Add a new input source strategy for RGBD cameras alongside RTSP and USB:
 - Use vendor SDK (e.g., librealsense2 for Intel RealSense) or generic UVC + depth extensions
 - Manage device lifecycle and stream synchronization
 
-### 2. Capture Worker (lines 111-117 in design.md)
+### 2. Capture Worker
 
 Modify to pull both RGB and depth frames from the RGBD source:
 - Pull synchronized RGB and depth frames from the RGBD device
@@ -33,7 +38,7 @@ Modify to pull both RGB and depth frames from the RGBD source:
 - Handle cases where depth frame rate may differ from RGB frame rate
 - Monitor device temperature and auto-exposure settings that affect depth quality
 
-### 3. FrameQueue A (lines 126-129 in design.md)
+### 3. FrameQueue A
 
 Extend to carry both RGB and depth data:
 - **Option A**: Extend frame structure to include optional depth channel
@@ -50,10 +55,10 @@ struct RGBDFrame {
 };
 ```
 
-### 4. Preprocessing Pipeline (lines 132-137 in design.md)
+### 4. Preprocessing Pipeline
 
 Keep existing RGB preprocessing for the face/gaze model, add optional depth path:
-- RGB preprocessing remains unchanged (NV12’RGB, resize, normalize)
+- RGB preprocessing remains unchanged (NV12ï¿½RGB, resize, normalize)
 - Add optional depth preprocessing:
   - Depth map scaling/normalization
   - Invalid depth pixel handling
@@ -65,7 +70,7 @@ Keep existing RGB preprocessing for the face/gaze model, add optional depth path
 - Filter out invalid depth pixels (0 or max range)
 - Optional depth map smoothing for noise reduction
 
-### 5. Configuration (lines 298-324 in design.md)
+### 5. Configuration
 
 Update input configuration to support RGBD:
 
@@ -116,7 +121,7 @@ recovery:
   backoff_max_ms: 30000
 ```
 
-### 6. Post-processing (Optional, lines 150-155 in design.md)
+### 6. Post-processing (Optional)
 
 If you want to use depth data for improved gaze tracking:
 
@@ -152,7 +157,7 @@ The core gaze detection pipeline remains unchanged:
 - RetinaFace, YOLO models work with standard RGB input
 - Depth is optional enhancement, not required for inference
 
-### 8. Output Systems (lines 186-199 in design.md)
+### 8. Output Systems
 
 Optionally extend publishers to include depth information:
 

@@ -1,262 +1,129 @@
-# Rockchip NPU Gaze Detection Architecture
+# BrightSign NPU Gaze Detection Extension
 
-**High-performance edge AI architecture for real-time computer vision on Rockchip NPU platforms**
+**Real-time edge AI for person tracking and gaze detection on Rockchip NPU platforms**
 
-This repository contains the technical architecture and design for an NPU-accelerated gaze detection and multi-model inference system targeting Rockchip SoCs with integrated NPU capabilities.
+This repository contains a high-performance C++ application that runs on BrightSign players with integrated NPU capabilities. It captures video from cameras or streams, runs multiple neural network models in parallel for person detection and face/gaze analysis, tracks individuals across frames, and publishes analytics via MQTT.
 
-## Supported Hardware Platforms
+## Supported Hardware
 
-The architecture supports three Rockchip NPU-enabled SoCs:
+| Platform | SoC | NPU | Parallel Models |
+|----------|-----|-----|-----------------|
+| **XT5** | RK3588 | 3-core, 6 TOPS | 2-3 models |
+| **XS156** | RK3576 | 2-core, 4 TOPS | 2 models |
+| **LS5/HS5** | RK3568 | 1-core, 1 TOPS | 1 model |
 
-- **RK3588** (3-core NPU, 6 TOPS) - Supports 3 models in parallel
-- **RK3576** (2-core NPU, 4 TOPS) - Supports 2 models in parallel
-- **RK3568** (1-core NPU, 1 TOPS) - Supports 1 model
+## Key Features
 
-*Note: Documentation primarily focuses on the RK3588 implementation as the reference platform. Lower-tier SoCs use the same software architecture but run fewer models concurrently based on available NPU cores.*
+**Multi-Model Parallel Inference:**
+- **RetinaFace**: Face detection with 5-point landmarks for gaze estimation
+- **YOLOX**: Person/object detection for accurate tracking
 
-## Architecture Highlights
+**Advanced Tracking:**
+- ByteTrack or legacy EMA-based multi-object tracking
+- Stable IDs across frame gaps and occlusions
+- 8-way direction detection with confidence scoring
+- Dwell time and enter/exit event detection
 
-**Software Design:**
+**Per-Person Gaze Analytics:**
+- Associates face detections with tracked persons via IoU matching
+- Determines if each person is looking at the camera
+- Accumulates per-track gaze time
 
-- **C++ implementation** with optimized RKNN runtime for maximum efficiency
-- **Multi-model parallelism** - run up to 3 AI models simultaneously on separate NPU cores
-- **Zero-copy data pipelines** for minimal memory bandwidth usage
-- **Sub-15ms inference latency** per model at full resolution
-- **Modular pipeline architecture** supporting multiple input sources (RTSP, USB, RGBD cameras)
+**Production-Ready:**
+- Sub-15ms inference latency per model
+- ~3.5W power consumption (enables fanless operation)
+- Automatic recovery from camera disconnections
+- MQTT, UDP, and file output options
 
-**Performance Characteristics (RK3588):**
+## Performance
 
-- **0.80W incremental power per NPU core** for face detection workload
-- **~5.5W total power** for 3-model parallel execution
-- **3.3x more power-efficient** than Python implementations on identical hardware
-- **Memory-efficient design** enables true 3-model parallel execution
+| Metric | Value |
+|--------|-------|
+| Inference latency | <15ms per model |
+| End-to-end latency | 35-55ms |
+| Power per NPU core | +0.80W |
+| Processing rate | 25-30 FPS |
 
-## Supported Models
+## Quick Start
 
-The architecture supports concurrent execution of multiple specialized models:
+### Build for All Platforms
 
-- **Face Detection** - RetinaFace for face localization and gaze estimation
-- **Pose Estimation** - YOLOv8-pose for 17-keypoint skeleton tracking
-- **Object Detection** - YOLOx for general object detection
-
-Models are assigned to dedicated NPU cores with independent preprocessing pipelines and merged in post-processing for comprehensive scene understanding.
-
-## Documentation
-
-### Core Architecture
-
-- **[Design Overview](docs/design.md)** - System architecture, pipeline design, and implementation details
-- **[Multi-Model Architecture](docs/multiple-models.md)** - Technical design for parallel NPU execution across multiple cores
-
-### Integration Guides
-
-- **[RGB-D Camera Support](docs/rgbd.md)** - Integrating depth cameras for enhanced scene understanding
-
-### Product Implementation
-
-- **[BrightShopper](brightshopper/)** - Reference implementation for retail analytics use case
-
-## Key Technical Features
-
-**Modular Pipeline Design:**
-
-- Pluggable input sources (RTSP, USB camera, RGBD)
-- Configurable preprocessing per model type
-- Independent NPU core affinity management
-- Unified post-processing with multi-model fusion
-
-**Optimized for Edge Deployment:**
-
-- Low-latency real-time inference
-- Minimal memory footprint
-- Fanless operation on passively cooled hardware
-- Production-ready error handling and recovery
-
-**Multi-Model Capabilities:**
-
-- Concurrent model execution on separate NPU cores
-- Frame synchronization across models
-- Cross-model result correlation
-- Scalable architecture supporting 1-3 models based on available cores
-
-## Performance Metrics (RK3588)
-
-| Metric | Value | Notes |
-|--------|-------|-------|
-| **Incremental power/core** | +0.80W | C++ implementation vs +2.69W for Python |
-| **Power (3-core workload)** | ~5.5W | Enables fanless operation |
-| **Inference latency** | <15ms | Per model at full resolution |
-| **Memory efficiency** | High | Zero-copy pipelines, enables 3-model parallel execution |
-
-## Getting Started
-
-### Prerequisites
-
-- **Build System**: Yocto-based BrightSign OE build environment
-- **Toolchain**: ARM cross-compilation toolchain for Rockchip SoCs
-- **Dependencies**: RKNN SDK, GStreamer, MQTT client libraries
-- **Target Device**: BrightSign player with RK3568, RK3576, or RK3588 SoC
-
-### Build Instructions
-
-**Build for All Platforms (LS5, XT5, Firebird)**:
 ```bash
 # Full build - creates packages for all supported devices
 ./scripts/runall.sh --auto
 
-# Output packages:
+# Output:
 # - argus-ext-<timestamp>.zip (production package)
-# - argus-dev-<timestamp>.zip (development package with debug symbols)
+# - argus-dev-<timestamp>.zip (development package)
 ```
 
-**Build for Single Platform (Faster)**:
+### Build for Single Platform
+
 ```bash
-# Build only for RK3568 (LS5) - ~13 seconds
+# RK3568 (LS5) - fastest build
 ./build-apps LS5
 
-# Build only for RK3588 (XT5)
+# RK3588 (XT5)
 ./build-apps XT5
 
-# Build only for RK3576 (Firebird)
+# RK3576 (Firebird)
 ./build-apps Firebird
 
-# Binaries output to: install/<platform>/attention_demo
+# Binary location: install/<platform>/attention_demo
 ```
 
-**Clean Build**:
+### Deploy to Device
+
 ```bash
-# Clean all build artifacts
-./scripts/clean_build.sh
-
-# Then rebuild
-./scripts/runall.sh --auto
-```
-
-### Deployment
-
-**Deploy to BrightSign Device**:
-```bash
-# 1. Copy package to device
+# Copy package to device
 scp argus-ext-<timestamp>.zip brightsign@<DEVICE_IP>:/storage/sd/
 
-# 2. On device, extract and install
+# On device: install and start
 ssh brightsign@<DEVICE_IP>
 cd /storage/sd
-/var/volatile/bsext/ext_npu_argus/bsext_init stop
 unzip argus-ext-<timestamp>.zip
 bash ./ext_npu_argus_install-lvm.sh
-
-# 3. Start the service
 cd /var/volatile/bsext/ext_npu_argus
 ./bsext_init start
 
-# 4. Check status
+# Check status and logs
 ./bsext_init status
-
-# 5. View logs
-tail -f /storage/sd/logs/gaze.log
+tail -f /tmp/ext-npu-argus.log
 ```
 
 ## Configuration
 
-### Configuration File Priority
+### Configuration Priority
 
-The application searches for configuration in this priority order:
+1. **CLI argument**: `--config /path/to/config.json`
+2. **Environment variable**: `BSEXT_CONFIG=/path/to/config.json`
+3. **SD card override**: `/storage/sd/configs/config.json` (recommended)
+4. **Package default**: Built-in configuration
 
-1. **CLI argument**: `--config /path/to/config.json` (highest priority)
-2. **Environment variable**: `export BSEXT_CONFIG=/path/to/config.json`
-3. **SD card override**: `/storage/sd/configs/config.json` (writable, recommended for customization)
-4. **Package default**: `/var/volatile/bsext/ext_npu_argus/RK3568/configs/config.json` (read-only)
+### Customizing Settings
 
-### Customizing Configuration
+Create or edit `/storage/sd/configs/config.json`:
 
-**Recommended: Use SD Card Override** (persists across upgrades):
-```bash
-# 1. Create config directory on SD card
-mkdir -p /storage/sd/configs
-
-# 2. Copy default config as starting point
-cp /var/volatile/bsext/ext_npu_argus/RK3568/configs/config.json /storage/sd/configs/
-
-# 3. Edit your custom config
-vi /storage/sd/configs/config.json
-
-# 4. Restart service to apply changes
-cd /var/volatile/bsext/ext_npu_argus
-./bsext_init restart
-```
-
-### Key Configuration Options
-
-**Log Level** - Control verbosity without recompiling:
 ```json
 {
-  "log_level": "info"
-}
-```
-Options:
-- `"debug"` - Most verbose (all logs including DEBUG messages)
-- `"info"` - General information (recommended default)
-- `"warn"` - Warnings and errors only (production mode)
-- `"error"` - Errors only (minimal logging)
-
-Change log level and restart service - no rebuild required!
-
-**Input Source** - Switch between camera types:
-```json
-{
+  "log_level": "info",
   "input_source": "rtsp",
   "input": {
-    "rtsp_url": "rtsp://192.168.0.203:8554/live",
-    "usb_device": "/dev/video0",
-    "file_path": "/storage/sd/video.mp4"
-  }
-}
-```
-Options:
-- `"rtsp"` - Network camera stream
-- `"usb"` - USB webcam
-- `"file"` - Video file for testing
-
-Configure all three sources, then switch by changing `input_source` value.
-
-**Model Configuration**:
-```json
-{
+    "rtsp_url": "rtsp://192.168.0.100:8554/live",
+    "usb_device": "/dev/video0"
+  },
   "primary_model": {
     "name": "retinaface",
     "model_path": "model/retinaface.rknn",
-    "npu_core": 1,
-    "conf_threshold": 0.5,
-    "nms_threshold": 0.45
+    "npu_core": 0,
+    "conf_threshold": 0.5
   },
-  "secondary_models": [
-    {
-      "name": "yolox",
-      "model_path": "model/yolox_s.rknn",
-      "npu_core": 0,
-      "conf_threshold": 0.5
-    }
-  ]
-}
-```
-
-Adjust confidence thresholds to tune detection sensitivity.
-
-**Test Modes** - Debug individual models:
-```json
-{
-  "test_face_only": false,
-  "test_yolo_only": false
-}
-```
-- Set `test_face_only: true` to run ONLY RetinaFace (disable YOLOX)
-- Set `test_yolo_only: true` to run ONLY YOLOX (disable RetinaFace)
-- Both `false` runs all models in parallel (production mode)
-
-**MQTT Publishing**:
-```json
-{
+  "secondary_model": {
+    "name": "yolox",
+    "model_path": "model/yolox_s.rknn",
+    "npu_core": 1,
+    "conf_threshold": 0.5
+  },
   "publishers": [
     {
       "kind": "mqtt",
@@ -264,8 +131,6 @@ Adjust confidence thresholds to tune detection sensitivity.
         "host": "localhost",
         "port": 1883,
         "topic": "bs/argus/analytics",
-        "qos": 0,
-        "retain": false,
         "period_ms": 1000
       }
     }
@@ -273,23 +138,9 @@ Adjust confidence thresholds to tune detection sensitivity.
 }
 ```
 
-### Verify Configuration
+### Common Configurations
 
-**Check which config is being used**:
-```bash
-# View startup logs
-tail -100 /tmp/ext-npu-argus.log | grep "Config path selected"
-
-# Expected output if using SD card:
-# [INF] Config path selected: /storage/sd/configs/config.json
-
-# Expected output if using package default:
-# [INF] Config path selected: /var/volatile/bsext/ext_npu_argus/RK3568/configs/config.json
-```
-
-### Common Configuration Scenarios
-
-**Production Mode** (minimal logging, network camera):
+**Production (RTSP camera, minimal logging):**
 ```json
 {
   "log_level": "warn",
@@ -299,7 +150,7 @@ tail -100 /tmp/ext-npu-argus.log | grep "Config path selected"
 }
 ```
 
-**Debug Mode** (verbose logging, USB camera, face detection only):
+**Debug (USB camera, verbose logging, face detection only):**
 ```json
 {
   "log_level": "debug",
@@ -309,69 +160,157 @@ tail -100 /tmp/ext-npu-argus.log | grep "Config path selected"
 }
 ```
 
-**Testing Mode** (video file loop):
+**Testing (video file loop):**
 ```json
 {
   "log_level": "info",
   "input_source": "file",
   "input": {
     "file_path": "/storage/sd/test-video.mp4",
-    "file": {
-      "loop": true
-    }
+    "file": { "loop": true }
   }
 }
 ```
 
+## MQTT Output
+
+Analytics are published to `bs/argus/analytics` using schema version `analytics/v7.0`:
+
+```json
+{
+  "schema": "analytics/v7.0",
+  "ts": 164.68,
+  "device": "XS-156",
+  "stream": "rtsp://192.168.0.100:8554/live",
+  "frame_w": 1280,
+  "frame_h": 720,
+  "npu_load": 45.2,
+  "people": 3,
+  "gaze": 1,
+  "fps": 29,
+  "tracks": [
+    {
+      "id": 42,
+      "bbox": [100, 200, 300, 600],
+      "score": 0.93,
+      "dir": "L",
+      "speed": 55.3,
+      "dwell": 12.5,
+      "gaze": {
+        "detected": 1,
+        "time": 8.0,
+        "face_bbox": [150, 180, 200, 240]
+      }
+    }
+  ]
+}
+```
+
+For complete schema documentation, see [MQTT Message Format](docs/mqtt-message-format.md).
+
+## Architecture
+
+The system uses a multi-threaded architecture with parallel model execution:
+
+```
+┌─────────────┐
+│ Input Source│  RTSP / USB / File
+└──────┬──────┘
+       ▼
+┌─────────────┐
+│   Capture   │  Frame fetch, NV12→BGR, letterbox
+│   Thread    │
+└──────┬──────┘
+       │ FrameMailbox (lock-free)
+       ├─────────────────┐
+       ▼                 ▼
+┌─────────────┐   ┌─────────────┐
+│  RetinaFace │   │    YOLOX    │
+│  NPU Core 0 │   │  NPU Core 1 │
+└──────┬──────┘   └──────┬──────┘
+       │                 │
+       ▼                 ▼
+┌────────────────────────────────┐
+│         Fusion State           │
+│   (face_dets, yolo_dets, ...)  │
+└────────────────┬───────────────┘
+                 ▼
+┌─────────────────────────────────┐
+│ Supervisor: Tracker + Publisher │
+│   - Person tracking (ByteTrack) │
+│   - Gaze association            │
+│   - MQTT publishing             │
+└─────────────────────────────────┘
+```
+
+For detailed architecture documentation, see [Design Document](docs/DESIGN.md).
+
+## Documentation
+
+| Document | Description |
+|----------|-------------|
+| [Design Document](docs/DESIGN.md) | Full architecture, pipelines, and data structures |
+| [MQTT Message Format](docs/mqtt-message-format.md) | Complete v7.0 schema reference with examples |
+| [Multi-Model Architecture](docs/multiple-models.md) | Parallel NPU execution design |
+| [RGB-D Camera Support](docs/rgbd.md) | Depth camera integration guide |
+
 ## Troubleshooting
 
-**Check Application Logs**:
+### Check Logs
+
 ```bash
-# View real-time logs
+# Real-time logs
 tail -f /tmp/ext-npu-argus.log
 
-# View recent errors
+# Recent errors
 tail -100 /tmp/ext-npu-argus.log | grep -E "ERR|WARN"
 
-# Check startup sequence
-tail -100 /tmp/ext-npu-argus.log | grep -E "Config path|Log level|input_source"
+# Configuration loaded
+tail -100 /tmp/ext-npu-argus.log | grep "Config path"
 ```
 
-**Service Management**:
+### Service Management
+
 ```bash
 cd /var/volatile/bsext/ext_npu_argus
-
-# Check status
-./bsext_init status
-
-# Restart service
-./bsext_init restart
-
-# Stop service
-./bsext_init stop
-
-# Start service
-./bsext_init start
+./bsext_init status   # Check status
+./bsext_init restart  # Restart service
+./bsext_init stop     # Stop service
 ```
 
-**Config Not Being Read**:
-```bash
-# Verify file exists and is readable
-ls -la /storage/sd/configs/config.json
-cat /storage/sd/configs/config.json | head -20
+### Common Issues
 
-# Check for JSON syntax errors (should see valid JSON structure)
-cat /storage/sd/configs/config.json | python3 -m json.tool > /dev/null && echo "Valid JSON" || echo "Invalid JSON"
+**No MQTT messages:**
+- Check MQTT broker is running: `ps aux | grep mosquitto`
+- Test subscription: `mosquitto_sub -h localhost -t 'bs/argus/#' -v`
 
-# Verify application can access the file
-tail /tmp/ext-npu-argus.log | grep "pick_config_path"
-```
+**Camera not detected:**
+- List USB devices: `ls -la /dev/video*`
+- Check V4L2: `v4l2-ctl --list-devices`
+
+**High NPU load / low FPS:**
+- Reduce resolution in RTSP camera settings
+- Enable only one model: `test_face_only: true` or `test_yolo_only: true`
+
+## Build Requirements
+
+- **Build Environment**: Yocto-based BrightSign OE build environment
+- **Toolchain**: ARM cross-compilation toolchain for aarch64
+- **C++ Standard**: C++20
+
+### Dependencies
+
+- RKNN SDK and runtime
+- OpenCV 4.x
+- GStreamer 1.0
+- Mosquitto MQTT
+- Boost (filesystem, system)
 
 ## License
 
 *License information to be determined.*
 
----
+## Support
 
-**Technical Focus**: Computer vision architecture for Rockchip NPU platforms
-**Key Applications**: Gaze detection, pose estimation, real-time behavioral analytics
+- **Issues**: [GitHub Issues](https://github.com/BrightSign-Playground/brightsign-npu-gaze-extension-ng/issues)
+- **Documentation**: See `/docs` folder
