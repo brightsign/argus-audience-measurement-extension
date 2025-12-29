@@ -234,6 +234,7 @@ add_executable(attention_demo
         src/output/annotator.cpp
         src/output/async_publisher.cpp
         src/output/brightsign_v3_publisher.cpp
+        src/output/face_blur.cpp
         src/output/file_sinks.cpp
         src/output/frame_writer.cpp
         src/output/mqtt_broker.cpp

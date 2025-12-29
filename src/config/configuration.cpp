@@ -138,6 +138,31 @@ bool load_from_file(const std::string& path, AppConfig& out, bool /*strict*/, ch
     if (j.contains("log_json") && j["log_json"].is_boolean()) {
       out.log_json = j["log_json"].get<bool>();
     }
+
+    // Parse frame output options
+    if (j.contains("enable_frame_output") && j["enable_frame_output"].is_boolean()) {
+      out.enable_frame_output = j["enable_frame_output"].get<bool>();
+    }
+    if (j.contains("output_dir") && j["output_dir"].is_string()) {
+      out.output_dir = j["output_dir"].get<std::string>();
+    }
+    if (j.contains("max_frames") && j["max_frames"].is_number_integer()) {
+      out.max_frames = j["max_frames"].get<int>();
+    }
+    if (j.contains("frame_quality") && j["frame_quality"].is_number_integer()) {
+      out.frame_quality = j["frame_quality"].get<int>();
+    }
+
+    // Parse face blur options
+    if (j.contains("blur_faces") && j["blur_faces"].is_boolean()) {
+      out.blur_faces = j["blur_faces"].get<bool>();
+    }
+    if (j.contains("blur_method") && j["blur_method"].is_string()) {
+      out.blur_method = j["blur_method"].get<std::string>();
+    }
+    if (j.contains("blur_intensity") && j["blur_intensity"].is_number_integer()) {
+      out.blur_intensity = j["blur_intensity"].get<int>();
+    }
     
     // Parse publishers array
     if (j.contains("publishers") && j["publishers"].is_array()) {

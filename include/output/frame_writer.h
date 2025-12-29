@@ -4,6 +4,7 @@
 #include <memory>
 #include <string>
 #include <opencv2/core.hpp>
+#include "output/face_blur.h"
 
 // Forward declarations
 struct PipelineResult;
@@ -41,10 +42,12 @@ public:
 // output_dir: directory to save frames (will be created if needed)
 // max_frames: max frames to keep (0 = unlimited)
 // quality: JPEG quality (0-100)
+// blur_config: optional face blur configuration for privacy
 std::unique_ptr<IFrameWriter> make_frame_writer_disk(
     const std::string& output_dir,
     int max_frames = 0,
-    int quality = 85) noexcept;
+    int quality = 85,
+    const output::BlurConfig& blur_config = output::BlurConfig{}) noexcept;
 
 // Create a no-op frame writer (useful for disabling frame output)
 std::unique_ptr<IFrameWriter> make_frame_writer_null() noexcept;

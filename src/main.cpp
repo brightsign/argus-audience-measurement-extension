@@ -13,6 +13,7 @@
 #include "input/input_from_registry.h"
 #include "input/registry_helper.h"
 #include "output/mqtt_broker.h"
+#include "output/face_blur.h"
 #include "util/util.h"
 
 static std::atomic<bool> g_stop{false};
@@ -332,7 +333,16 @@ int main(int argc, char** argv) {
     pc.output_dir = appcfg.output_dir;
     pc.max_frames = appcfg.max_frames;
     pc.frame_quality = appcfg.frame_quality;
-    
+
+    // Configure face blur for privacy
+    pc.blur_config.enabled = appcfg.blur_faces;
+    pc.blur_config.intensity = appcfg.blur_intensity;
+    if (appcfg.blur_method == "gaussian") {
+        pc.blur_config.method = output::BlurMethod::GAUSSIAN;
+    } else {
+        pc.blur_config.method = output::BlurMethod::PIXELATE;  // Default
+    }
+
     // If frame output not configured, enable with defaults
     if (!pc.enable_frame_output) {
         pc.enable_frame_output = true;
