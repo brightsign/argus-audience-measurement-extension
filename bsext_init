@@ -22,6 +22,7 @@ DAEMON_NAME="bsext-argus"
 PIDFILE="/var/run/${DAEMON_NAME}.pid"
 STREAM_SERVER_PIDFILE="/var/run/bsext-image-stream-server.pid"
 MQTT_BROKER_PIDFILE="/var/run/bsext-mosquitto.pid"
+ARGUS_EXPORTER_PIDFILE="/var/run/bsext-argus-exporter.pid"
 
 # defaults -- these can be overridden by environment variables
 DISABLE_AUTO_START=false
@@ -177,10 +178,10 @@ run_stream_server() {
     local background=$1
     local port=$2
     echo "run_stream_server called with port=${port}"
-    
+
     SOC_NAME=$(get_soc_name)
     SOC_HOME=${SCRIPT_PATH}/${SOC_NAME}
-    
+
     if [ "$background" = "true" ]; then
         # Run as a daemon in the background
         echo "start-stop daemon =${SOC_HOME}/image-stream-server"
@@ -189,6 +190,26 @@ run_stream_server() {
     else
         # Run directly in foreground
         ${SOC_HOME}/image-stream-server -port ${port}
+    fi
+}
+
+run_argus_exporter() {
+    echo "run_argus_exporter called with background=$1"
+    local background=$1
+    local port=${2:-19100}  # Default Prometheus metrics port
+    echo "run_argus_exporter called with port=${port}"
+
+    SOC_NAME=$(get_soc_name)
+    SOC_HOME=${SCRIPT_PATH}/${SOC_NAME}
+
+    if [ "$background" = "true" ]; then
+        # Run as a daemon in the background
+        echo "Starting argus-exporter on port ${port}"
+        start-stop-daemon --start --background --make-pidfile --pidfile ${ARGUS_EXPORTER_PIDFILE} \
+                          --exec ${SOC_HOME}/argus-exporter -- -port ${port}
+    else
+        # Run directly in foreground
+        ${SOC_HOME}/argus-exporter -port ${port}
     fi
 }
 
@@ -283,9 +304,14 @@ do_start() {
         pkill -9 -f "mosquitto.*bsext" 2>/dev/null || true
         sleep 1
     fi
-    
+    if pgrep -f "argus-exporter" >/dev/null 2>&1; then
+        echo "  Found existing argus-exporter process, killing it..."
+        pkill -9 -f "argus-exporter" 2>/dev/null || true
+        sleep 1
+    fi
+
     # Clean up stale PID files
-    rm -f ${PIDFILE} ${STREAM_SERVER_PIDFILE} ${MQTT_BROKER_PIDFILE} 2>/dev/null || true
+    rm -f ${PIDFILE} ${STREAM_SERVER_PIDFILE} ${MQTT_BROKER_PIDFILE} ${ARGUS_EXPORTER_PIDFILE} 2>/dev/null || true
 
     SOC_NAME=$(get_soc_name)
     setup_gstreamer_env
@@ -316,11 +342,24 @@ do_start() {
 
     if [ "${STREAM_SERVER_PORT}" = "0" ]; then
         echo "Image stream server is disabled (port set to 0)"
-        return
+    else
+        # Start the image stream server process as a daemon
+        run_stream_server true ${STREAM_SERVER_PORT}
     fi
 
-    # Start the image stream server process as a daemon
-    run_stream_server true ${STREAM_SERVER_PORT}
+    # Start argus-exporter (Prometheus metrics exporter)
+    ARGUS_EXPORTER_PORT=19100  # default Prometheus metrics port
+    reg_exporter_port=$(registry networking bs-argus-exporter-port)
+    if [ -n "${reg_exporter_port}" ]; then
+        ARGUS_EXPORTER_PORT=${reg_exporter_port}
+    fi
+
+    if [ "${ARGUS_EXPORTER_PORT}" = "0" ]; then
+        echo "Argus exporter is disabled (port set to 0)"
+    else
+        echo "Starting argus-exporter on port ${ARGUS_EXPORTER_PORT}"
+        run_argus_exporter true ${ARGUS_EXPORTER_PORT}
+    fi
 }
 
 do_stop() {
@@ -407,6 +446,22 @@ do_stop() {
     else
         echo "  image-stream-server stopped successfully"
     fi
+
+    # Stop argus-exporter
+    echo "Stopping argus-exporter..."
+    pkill -9 -f "argus-exporter" 2>/dev/null || true
+    killall -9 argus-exporter 2>/dev/null || true
+
+    if [ -f "${ARGUS_EXPORTER_PIDFILE}" ]; then
+        local pid=$(cat ${ARGUS_EXPORTER_PIDFILE} 2>/dev/null)
+        if [ -n "$pid" ]; then
+            echo "  Also killing PID $pid from PID file..."
+            kill -9 $pid 2>/dev/null || true
+            pkill -9 -P $pid 2>/dev/null || true
+        fi
+        rm -f ${ARGUS_EXPORTER_PIDFILE}
+    fi
+    echo "  argus-exporter stopped"
 
     # Stop mosquitto broker
     if [ -f "${MQTT_BROKER_PIDFILE}" ]; then

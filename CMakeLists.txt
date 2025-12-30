@@ -362,6 +362,18 @@ add_custom_target(image_stream_server ALL
   VERBATIM
 )
 
+# Clone and build the argus-exporter (Prometheus metrics exporter)
+set(ARGUS_EXPORTER_DIR "${CMAKE_BINARY_DIR}/argus-exporter")
+set(ARGUS_EXPORTER_BINARY "${ARGUS_EXPORTER_DIR}/bin/argus-exporter-arm64")
+
+add_custom_target(argus_exporter ALL
+  COMMAND ${CMAKE_COMMAND} -E echo "Cloning and building argus-exporter (auto toolchain if needed)..."
+  COMMAND bash ${CMAKE_SOURCE_DIR}/scripts/build_argus_exporter.sh ${ARGUS_EXPORTER_DIR} ${ARGUS_EXPORTER_BINARY} ${CMAKE_BINARY_DIR}
+  WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+  COMMENT "Cloning and building argus-exporter"
+  VERBATIM
+)
+
 # Copy shared libs and models. Copy the Go binary only if it exists.
 if(HAVE_RGA)
   add_custom_command(TARGET attention_demo POST_BUILD
@@ -369,6 +381,7 @@ if(HAVE_RGA)
     COMMAND ${CMAKE_COMMAND} -E copy ${RGA_LIB} $<TARGET_FILE_DIR:attention_demo>
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/install/${SOC_DIR}/model $<TARGET_FILE_DIR:attention_demo>/model
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_BINARY_DIR}/image-stream-server $<TARGET_FILE_DIR:attention_demo>/image-stream-server || ${CMAKE_COMMAND} -E true
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_BINARY_DIR}/argus-exporter $<TARGET_FILE_DIR:attention_demo>/argus-exporter || ${CMAKE_COMMAND} -E true
   COMMENT "Copying libraries and binaries to build directory"
   )
 else()
@@ -376,6 +389,7 @@ else()
     COMMAND ${CMAKE_COMMAND} -E copy ${RKNN_RT_LIB} $<TARGET_FILE_DIR:attention_demo>
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/install/${SOC_DIR}/model $<TARGET_FILE_DIR:attention_demo>/model
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_BINARY_DIR}/image-stream-server $<TARGET_FILE_DIR:attention_demo>/image-stream-server || ${CMAKE_COMMAND} -E true
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_BINARY_DIR}/argus-exporter $<TARGET_FILE_DIR:attention_demo>/argus-exporter || ${CMAKE_COMMAND} -E true
   COMMENT "Copying libraries and binaries to build directory (no RGA)"
   )
 endif()
@@ -385,6 +399,7 @@ if(TARGET mosquitto_broker)
   add_dependencies(attention_demo mosquitto_broker)
 endif()
 add_dependencies(attention_demo image_stream_server)
+add_dependencies(attention_demo argus_exporter)
 
 # install target and libraries
 set(CMAKE_INSTALL_PREFIX ${CMAKE_SOURCE_DIR}/install/${SOC_DIR})
@@ -392,6 +407,14 @@ install(TARGETS attention_demo DESTINATION ./)
 
 # Install the image stream server binary from the copied location
 install(FILES ${CMAKE_BINARY_DIR}/image-stream-server
+        DESTINATION ./
+        PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE
+                   GROUP_READ GROUP_EXECUTE
+                   WORLD_READ WORLD_EXECUTE
+        OPTIONAL)
+
+# Install the argus-exporter binary
+install(FILES ${CMAKE_BINARY_DIR}/argus-exporter
         DESTINATION ./
         PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE
                    GROUP_READ GROUP_EXECUTE

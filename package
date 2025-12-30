@@ -262,6 +262,14 @@ copy_binaries() {
             warn "image-stream-server not found in $source_dir"
         fi
 
+        # Copy argus-exporter binary (Prometheus metrics exporter)
+        if [[ -f "$source_dir/argus-exporter" ]]; then
+            cp "$source_dir/argus-exporter" "$package_soc_dir/"
+            chmod +x "$package_soc_dir/argus-exporter"
+        else
+            warn "argus-exporter not found in $source_dir"
+        fi
+
         # Copy mosquitto broker binary and utilities
         mkdir -p "$package_soc_dir/bin"
         if [[ -f "$install_dir/bin/mosquitto" ]]; then
