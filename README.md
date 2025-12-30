@@ -95,14 +95,14 @@ tail -f /tmp/ext-npu-argus.log
 
 ### Configuration Priority
 
-1. **CLI argument**: `--config /path/to/config.json`
-2. **Environment variable**: `BSEXT_CONFIG=/path/to/config.json`
-3. **SD card override**: `/storage/sd/configs/config.json` (recommended)
+1. **CLI argument**: `--config /path/to/argus-config.json`
+2. **Environment variable**: `BSEXT_CONFIG=/path/to/argus-config.json`
+3. **SD card override**: `/storage/sd/configs/argus-config.json` (recommended)
 4. **Package default**: Built-in configuration
 
 ### Customizing Settings
 
-Create or edit `/storage/sd/configs/config.json`:
+Create or edit `/storage/sd/configs/argus-config.json`:
 
 ```json
 {
@@ -291,6 +291,36 @@ cd /var/volatile/bsext/ext_npu_argus
 **High NPU load / low FPS:**
 - Reduce resolution in RTSP camera settings
 - Enable only one model: `test_face_only: true` or `test_yolo_only: true`
+
+## Uninstall
+
+### Manual Removal
+
+Connect to the player over SSH and drop to the Linux shell.
+
+**Stop the extension:**
+
+```bash
+/var/volatile/bsext/ext_npu_argus/bsext_init stop
+```
+
+**Verify all processes for the extension have stopped:**
+
+```bash
+ps | grep -E "attention_demo|argus-exporter|mosquitto"
+```
+
+**Run the uninstall script:**
+
+```bash
+/var/volatile/bsext/ext_npu_argus/uninstall.sh
+```
+
+**Reboot to apply changes:**
+
+```bash
+reboot
+```
 
 ## Build Requirements
 
