@@ -363,8 +363,8 @@ add_custom_target(image_stream_server ALL
 )
 
 # Clone and build the argus-exporter (Prometheus metrics exporter)
-set(ARGUS_EXPORTER_DIR "${CMAKE_BINARY_DIR}/argus-exporter")
-set(ARGUS_EXPORTER_BINARY "${ARGUS_EXPORTER_DIR}/bin/argus-exporter-arm64")
+set(ARGUS_EXPORTER_DIR "${CMAKE_BINARY_DIR}/argus-exporter-repo")
+set(ARGUS_EXPORTER_BINARY "${ARGUS_EXPORTER_DIR}/argus-exporter-arm64")
 
 add_custom_target(argus_exporter ALL
   COMMAND ${CMAKE_COMMAND} -E echo "Cloning and building argus-exporter (auto toolchain if needed)..."

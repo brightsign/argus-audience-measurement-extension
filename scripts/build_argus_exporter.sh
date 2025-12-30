@@ -79,8 +79,8 @@ main() {
   echo "PWD: $(pwd)"
 
   # Build from cmd/argus-exporter (standard Go project layout)
-  mkdir -p bin
-  GOOS=linux GOARCH=arm64 CGO_ENABLED=0 "$GO_BIN" build -o bin/argus-exporter-arm64 ./cmd/argus-exporter
+  # Output to repo root as argus-exporter-arm64
+  GOOS=linux GOARCH=arm64 CGO_ENABLED=0 "$GO_BIN" build -o argus-exporter-arm64 ./cmd/argus-exporter
 
   if [ -f "$ARGUS_EXPORTER_BINARY" ]; then
     echo 'Build completed; copying binary...'
