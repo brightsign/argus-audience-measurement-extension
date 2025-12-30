@@ -267,6 +267,51 @@ void run_inference_loop(
             if (frame_writer) {
                 PipelineResult result{};
                 result.seq = sf->seq;
+
+                // Populate face tracks for blur processing
+                // Transform coordinates: RetinaFace model space (320x320) -> canvas space (dst_w x dst_h)
+                if (fusion_output && sf->orig_width > 0 && sf->orig_height > 0) {
+                    std::lock_guard<std::mutex> g(fusion_output->m);
+                    if (!fusion_output->face_dets.empty()) {
+                        // Step 1: De-letterbox parameters (RetinaFace model is 320x320)
+                        const float model_size = 320.0f;
+                        const float s = std::min(model_size / sf->orig_width, model_size / sf->orig_height);
+                        const float pad_x = (model_size - sf->orig_width * s) / 2.0f;
+                        const float pad_y = (model_size - sf->orig_height * s) / 2.0f;
+
+                        // Step 2: Canvas letterbox parameters
+                        const float canvas_scale = std::min((float)dst_w / sf->orig_width,
+                                                           (float)dst_h / sf->orig_height);
+                        const int offset_x = (dst_w - (int)(sf->orig_width * canvas_scale)) / 2;
+                        const int offset_y = (dst_h - (int)(sf->orig_height * canvas_scale)) / 2;
+
+                        result.tracks.reserve(fusion_output->face_dets.size());
+                        for (size_t i = 0; i < fusion_output->face_dets.size(); ++i) {
+                            const auto& det = fusion_output->face_dets[i];
+
+                            // De-letterbox: model space -> camera space
+                            float cx0 = (det.x0 - pad_x) / s;
+                            float cy0 = (det.y0 - pad_y) / s;
+                            float cx1 = (det.x1 - pad_x) / s;
+                            float cy1 = (det.y1 - pad_y) / s;
+
+                            // Scale: camera space -> canvas space
+                            Track t;
+                            t.box.x0 = cx0 * canvas_scale + offset_x;
+                            t.box.y0 = cy0 * canvas_scale + offset_y;
+                            t.box.x1 = cx1 * canvas_scale + offset_x;
+                            t.box.y1 = cy1 * canvas_scale + offset_y;
+                            t.box.score = det.score;
+                            t.box.class_id = det.class_id;
+
+                            if (i < fusion_output->face_lms.size()) {
+                                t.lms = fusion_output->face_lms[i];
+                            }
+                            result.tracks.push_back(t);
+                        }
+                    }
+                }
+
                 frame_writer->writeFrame(rgb_mat, result);
             }
 
