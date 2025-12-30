@@ -54,7 +54,7 @@ std::string dirname_of_exe(const char* argv0) noexcept {
 }
 
 static std::string choose_local_sample(const std::string& bin_dir) {
-  return join_path(join_path(bin_dir, "configs"), "config.json");
+  return join_path(join_path(bin_dir, "configs"), "argus-config.json");
 }
 
 std::string pick_config_path(int argc, char** argv) noexcept {
@@ -78,7 +78,7 @@ std::string pick_config_path(int argc, char** argv) noexcept {
   
   // 3) Writable SD card location (user override, preferred)
   
-  static const char* kSdConfig = "/storage/sd/configs/config.json";
+  static const char* kSdConfig = "/storage/sd/configs/argus-config.json";
   LG_INFO("[pick_config_path] Using SD config: %s", kSdConfig);
   bool sd_exists = file_exists(kSdConfig);
   LG_INFO("[pick_config_path] SD config check: %s -> %s", 
@@ -108,7 +108,7 @@ bool ensure_device_config_present(const char* src_sample_json, const char* dst_d
   if (!dst_dir || !*dst_dir) return false;
   if (!dir_exists(dst_dir))  { if (!ensure_dir(dst_dir)) return false; }
 
-  const std::string dst = join_path(dst_dir, "config.json");
+  const std::string dst = join_path(dst_dir, "argus-config.json");
   if (file_exists(dst.c_str())) return true;         // already there
 
   if (!src_sample_json || !file_exists(src_sample_json)) return file_exists(dst.c_str());

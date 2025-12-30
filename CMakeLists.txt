@@ -421,8 +421,8 @@ install(FILES ${CMAKE_BINARY_DIR}/argus-exporter
                    WORLD_READ WORLD_EXECUTE
         OPTIONAL)
 
-# Install config.json to the install directory
-install(FILES ${CMAKE_SOURCE_DIR}/configs/config.json
+# Install argus-config.json to the install directory
+install(FILES ${CMAKE_SOURCE_DIR}/configs/argus-config.json
         DESTINATION ./configs
         PERMISSIONS OWNER_READ OWNER_WRITE
                    GROUP_READ

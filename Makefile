@@ -4,7 +4,7 @@ all:
 	@echo "Targets: clean, pdf"
 
 clean:
-	rm -rf build_xt5 build_ls5 build_rk3576 build_rk3568 staging
+	rm -rf build_xt5 build_ls5 build_rk3576 build_rk3568 staging install
 	rm -f *.pdf docs/*.pdf
 
 pdf:
