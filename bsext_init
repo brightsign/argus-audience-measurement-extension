@@ -276,48 +276,33 @@ setup_gstreamer_env() {
 # This ensures the Argus People Analytics dashboard is automatically installed
 # when the prometheus-grafana-extension is also present
 setup_argus_dashboard() {
-    echo "Setting up Argus Grafana dashboard provisioning..."
+    echo "Setting up Argus Grafana dashboard..."
 
-    # Grafana data directories (must match prometheus-grafana-extension paths)
-    local GRAFANA_BASE="/storage/flash/grafana"
-    local GRAFANA_DATA="${GRAFANA_BASE}/data"
-    local GRAFANA_PROVISIONING="${GRAFANA_DATA}/provisioning/dashboards"
-    local GRAFANA_DASHBOARDS="${GRAFANA_BASE}/dashboards/argus"
-
-    # Source locations in this extension
-    local SRC_PROVISIONING="${SCRIPT_PATH}/configs/provisioning/dashboards/argus.yml"
+    # Source dashboard location in this extension
     local SRC_DASHBOARD="${SCRIPT_PATH}/configs/dashboards/argus-analytics.json"
 
-    # Check if source files exist
-    if [ ! -f "${SRC_PROVISIONING}" ]; then
-        echo "  WARNING: Provisioning file not found: ${SRC_PROVISIONING}"
-        return 1
-    fi
+    # Check if source file exists
     if [ ! -f "${SRC_DASHBOARD}" ]; then
         echo "  WARNING: Dashboard file not found: ${SRC_DASHBOARD}"
         return 1
     fi
 
-    # Create target directories
-    mkdir -p "${GRAFANA_PROVISIONING}" 2>/dev/null || true
-    mkdir -p "${GRAFANA_DASHBOARDS}" 2>/dev/null || true
+    # Target: prometheus-grafana-extension's dashboard directory
+    # This directory is watched by the existing 'BrightSign' provisioner with updateIntervalSeconds: 30
+    # Grafana will automatically pick up new JSON files without needing a restart
+    local PROMGRAF_DASHBOARDS="/var/volatile/bsext/ext_promgraf/configs/dashboards"
 
-    # Copy provisioning file (tells Grafana where to find dashboards)
-    if [ -d "${GRAFANA_PROVISIONING}" ]; then
-        cp "${SRC_PROVISIONING}" "${GRAFANA_PROVISIONING}/" 2>/dev/null && \
-            echo "  Installed: ${GRAFANA_PROVISIONING}/argus.yml" || \
-            echo "  WARNING: Could not copy provisioning file (read-only filesystem?)"
+    # Check if prometheus-grafana-extension is installed
+    if [ -d "${PROMGRAF_DASHBOARDS}" ]; then
+        cp "${SRC_DASHBOARD}" "${PROMGRAF_DASHBOARDS}/" 2>/dev/null && \
+            echo "  Installed: ${PROMGRAF_DASHBOARDS}/argus-analytics.json" && \
+            echo "  Dashboard will appear in Grafana within 30 seconds" || \
+            echo "  WARNING: Could not copy dashboard file"
+    else
+        echo "  prometheus-grafana-extension not found at ${PROMGRAF_DASHBOARDS}"
+        echo "  Argus dashboard will not be auto-installed"
+        echo "  Install prometheus-grafana-extension first, then restart this extension"
     fi
-
-    # Copy dashboard JSON
-    if [ -d "${GRAFANA_DASHBOARDS}" ]; then
-        cp "${SRC_DASHBOARD}" "${GRAFANA_DASHBOARDS}/" 2>/dev/null && \
-            echo "  Installed: ${GRAFANA_DASHBOARDS}/argus-analytics.json" || \
-            echo "  WARNING: Could not copy dashboard file (read-only filesystem?)"
-    fi
-
-    echo "  Argus dashboard provisioning complete"
-    echo "  Dashboard will appear in Grafana under 'BrightSign Analytics' folder"
 }
 
 do_start() {
