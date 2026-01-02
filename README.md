@@ -322,6 +322,21 @@ ps | grep -E "attention_demo|argus-exporter|mosquitto"
 reboot
 ```
 
+## Clearing the Data Stored on the Player
+
+Prometheus and Grafana store their data on `/storage/flash`. To clear all stored metrics and start fresh:
+
+```bash
+# Stop the extension
+/var/volatile/bsext/ext_npu_argus/bsext_init stop
+
+# Clear Prometheus data
+rm -rf /storage/flash/prometheus/data/*
+
+# Reboot to restart services with clean data
+reboot
+```
+
 ## Build Requirements
 
 - **Build Environment**: Yocto-based BrightSign OE build environment

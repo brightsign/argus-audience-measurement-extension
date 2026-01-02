@@ -196,20 +196,18 @@ run_stream_server() {
 run_argus_exporter() {
     echo "run_argus_exporter called with background=$1"
     local background=$1
-    local port=${2:-9101}  # Default Prometheus metrics port
-    echo "run_argus_exporter called with port=${port}"
 
     SOC_NAME=$(get_soc_name)
     SOC_HOME=${SCRIPT_PATH}/${SOC_NAME}
 
     if [ "$background" = "true" ]; then
         # Run as a daemon in the background
-        echo "Starting argus-exporter on port ${port}"
+        echo "Starting argus-exporter (will use default config search paths)"
         start-stop-daemon --start --background --make-pidfile --pidfile ${ARGUS_EXPORTER_PIDFILE} \
-                          --exec ${SOC_HOME}/argus-exporter -- -port ${port}
+                          --exec ${SOC_HOME}/argus-exporter
     else
         # Run directly in foreground
-        ${SOC_HOME}/argus-exporter -port ${port}
+        ${SOC_HOME}/argus-exporter
     fi
 }
 
@@ -348,17 +346,13 @@ do_start() {
     fi
 
     # Start argus-exporter (Prometheus metrics exporter)
-    ARGUS_EXPORTER_PORT=9101  # default Prometheus metrics port
-    reg_exporter_port=$(registry networking bs-argus-exporter-port)
-    if [ -n "${reg_exporter_port}" ]; then
-        ARGUS_EXPORTER_PORT=${reg_exporter_port}
-    fi
-
-    if [ "${ARGUS_EXPORTER_PORT}" = "0" ]; then
-        echo "Argus exporter is disabled (port set to 0)"
+    # Check if disabled via registry (set port to 0 to disable)
+    reg_exporter_disabled=$(registry networking bs-argus-exporter-port)
+    if [ "${reg_exporter_disabled}" = "0" ]; then
+        echo "Argus exporter is disabled (registry bs-argus-exporter-port=0)"
     else
-        echo "Starting argus-exporter on port ${ARGUS_EXPORTER_PORT}"
-        run_argus_exporter true ${ARGUS_EXPORTER_PORT}
+        echo "Starting argus-exporter..."
+        run_argus_exporter true
     fi
 }
 
