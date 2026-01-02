@@ -5,13 +5,48 @@ IMAGE_STREAM_SERVER_DIR="$1"
 IMAGE_STREAM_SERVER_BINARY="$2"
 CMAKE_BINARY_DIR="$3"
 
+# Commit tracking file for incremental builds
+COMMIT_FILE="$CMAKE_BINARY_DIR/.image-stream-server-commit"
+
 clone_or_update() {
   if [ ! -d "$IMAGE_STREAM_SERVER_DIR" ]; then
     echo 'Cloning bs-image-stream-server...'
     git clone --depth=1 https://github.com/brightsign/bs-image-stream-server.git "$IMAGE_STREAM_SERVER_DIR"
-  else
-    echo 'Repository already exists, updating...'
+  elif [ "${FORCE_UPDATE:-0}" = "1" ]; then
+    echo 'FORCE_UPDATE set, pulling latest...'
     git -C "$IMAGE_STREAM_SERVER_DIR" pull --rebase --autostash origin main || true
+  else
+    echo 'Repository exists, skipping git pull (set FORCE_UPDATE=1 to update)'
+  fi
+}
+
+# Check if build can be skipped (binary exists and commit unchanged)
+skip_if_unchanged() {
+  local current_commit
+  current_commit=$(git -C "$IMAGE_STREAM_SERVER_DIR" rev-parse HEAD 2>/dev/null || echo "")
+
+  if [ -z "$current_commit" ]; then
+    return 1  # Can't determine commit, rebuild
+  fi
+
+  if [ -f "$COMMIT_FILE" ] && [ -f "$CMAKE_BINARY_DIR/image-stream-server" ]; then
+    local last_commit
+    last_commit=$(cat "$COMMIT_FILE")
+    if [ "$last_commit" = "$current_commit" ]; then
+      echo "[image-stream-server] No changes since last build (commit ${current_commit:0:8}), skipping..."
+      return 0  # Skip build
+    fi
+  fi
+  return 1  # Rebuild needed
+}
+
+# Save commit hash after successful build
+save_commit() {
+  local current_commit
+  current_commit=$(git -C "$IMAGE_STREAM_SERVER_DIR" rev-parse HEAD 2>/dev/null || echo "")
+  if [ -n "$current_commit" ]; then
+    echo "$current_commit" > "$COMMIT_FILE"
+    echo "[image-stream-server] Saved build commit: ${current_commit:0:8}"
   fi
 }
 
@@ -24,8 +59,14 @@ ver_ge() { # return 0 if $1 >= $2 (X.Y[.Z])
 main() {
   # Set GOTOOLCHAIN=local initially to prevent auto-download during version detection
   export GOTOOLCHAIN=local
-  
+
   clone_or_update
+
+  # Check if we can skip the build (commit unchanged)
+  if skip_if_unchanged; then
+    exit 0
+  fi
+
   cd "$IMAGE_STREAM_SERVER_DIR"
 
   # Local go version (full & X.Y)
@@ -82,6 +123,8 @@ main() {
   if [ -f "$IMAGE_STREAM_SERVER_BINARY" ]; then
     echo 'Build completed; copying binary...'
     cp "$IMAGE_STREAM_SERVER_BINARY" "$CMAKE_BINARY_DIR/image-stream-server"
+    # Save commit hash for future incremental build checks
+    save_commit
   else
     echo "Build failed - binary not found at $IMAGE_STREAM_SERVER_BINARY"
     exit 1
