@@ -83,6 +83,27 @@ public:
         output_img = img;  // No copy needed if not blurring
       }
 
+      // Crop letterbox (remove black bars) if original dimensions are available
+      if (result.frame_width > 0 && result.frame_height > 0 &&
+          output_img.cols > 0 && output_img.rows > 0) {
+        // Calculate letterbox region (same logic as resize_frame_rga)
+        const float scale = std::min((float)output_img.cols / result.frame_width,
+                                     (float)output_img.rows / result.frame_height);
+        const int letterbox_w = (int)(result.frame_width * scale);
+        const int letterbox_h = (int)(result.frame_height * scale);
+        const int offset_x = (output_img.cols - letterbox_w) / 2;
+        const int offset_y = (output_img.rows - letterbox_h) / 2;
+
+        // Crop to letterbox region (removes black bars)
+        if (letterbox_w > 0 && letterbox_h > 0 &&
+            offset_x >= 0 && offset_y >= 0 &&
+            offset_x + letterbox_w <= output_img.cols &&
+            offset_y + letterbox_h <= output_img.rows) {
+          cv::Rect crop_region(offset_x, offset_y, letterbox_w, letterbox_h);
+          output_img = output_img(crop_region).clone();
+        }
+      }
+
       // Write frame as JPEG (data is already in correct format)
       // The RGA pipeline actually outputs BGR despite the misleading variable names
       std::vector<int> compression_params;

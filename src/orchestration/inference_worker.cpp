@@ -267,6 +267,8 @@ void run_inference_loop(
             if (frame_writer) {
                 PipelineResult result{};
                 result.seq = sf->seq;
+                result.frame_width = sf->orig_width;    // Original camera dimensions for letterbox crop
+                result.frame_height = sf->orig_height;
 
                 // Populate face tracks for blur processing
                 // Transform coordinates: RetinaFace model space (320x320) -> canvas space (dst_w x dst_h)
