@@ -46,7 +46,9 @@ This repository contains a high-performance C++ application that runs on BrightS
 
 ## Quick Start
 
-### Build for All Platforms
+### Full Build (First Time)
+
+Requires Docker or Podman. Builds SDK, compiles models, and creates packages:
 
 ```bash
 # Full build - creates packages for all supported devices
@@ -57,19 +59,24 @@ This repository contains a high-performance C++ application that runs on BrightS
 # - argus-dev-<timestamp>.zip (development package)
 ```
 
-### Build for Single Platform
+### Incremental Build (Development)
+
+Once SDK and models exist, use `./build-apps` for fast iteration (no container needed):
 
 ```bash
-# RK3568 (LS5) - fastest build
-./build-apps LS5
+# Build for all platforms
+./build-apps
 
-# RK3588 (XT5)
-./build-apps XT5
+# Build for single platform
+./build-apps LS5       # RK3568 (LS5) - fastest build
+./build-apps XT5       # RK3588 (XT5)
+./build-apps Firebird  # RK3576 (Firebird)
 
-# RK3576 (Firebird)
-./build-apps Firebird
+# Force update Go dependencies from upstream
+make build-update
 
-# Binary location: install/<platform>/attention_demo
+# Package after building
+./package
 ```
 
 ### Deploy to Device
@@ -208,6 +215,100 @@ Analytics are published to `bs/argus/analytics` using schema version `analytics/
 
 For complete schema documentation, see [MQTT Message Format](docs/mqtt-message-format.md).
 
+## Prometheus Metrics
+
+The extension includes `argus-exporter`, a Prometheus metrics exporter that exposes analytics on port 9101.
+
+### Metrics Endpoint
+
+Once the extension is running, metrics are available at:
+
+```
+http://<PLAYER_IP>:9101/metrics
+```
+
+### Key Metrics
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `argus_visitors_total` | Counter | Total visitors entered |
+| `argus_occupancy_current` | Gauge | Current person count |
+| `argus_gaze_current` | Gauge | People currently gazing |
+| `argus_dwell_seconds` | Histogram | Dwell time distribution |
+| `argus_fps_current` | Gauge | Analytics FPS |
+| `argus_npu_load_percent` | Gauge | NPU utilization |
+
+### Configuring Prometheus on the Player
+
+Prometheus and Grafana run as separate services on the player. To configure Prometheus to scrape argus-exporter metrics:
+
+**1. Create or edit the Prometheus configuration:**
+
+```bash
+# SSH into the player
+ssh brightsign@<PLAYER_IP>
+
+# Edit Prometheus config
+vi /storage/flash/prometheus/prometheus.yml
+```
+
+**2. Add the argus-exporter scrape target:**
+
+```yaml
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: "argus-exporter"
+    scrape_interval: 10s
+    scrape_timeout: 5s
+    static_configs:
+      - targets: ["localhost:9101"]
+```
+
+**3. Restart Prometheus to apply changes:**
+
+```bash
+# Restart Prometheus (method depends on how it's installed)
+systemctl restart prometheus
+# or
+killall prometheus && /path/to/prometheus --config.file=/storage/flash/prometheus/prometheus.yml &
+```
+
+**4. Verify scraping is working:**
+
+```bash
+# Check Prometheus targets
+curl http://localhost:9090/api/v1/targets
+```
+
+### Configuring Grafana
+
+Grafana connects to Prometheus as a data source:
+
+1. Open Grafana web UI (typically `http://<PLAYER_IP>:3000`)
+2. Go to **Configuration → Data Sources → Add data source**
+3. Select **Prometheus**
+4. Set URL to `http://localhost:9090`
+5. Click **Save & Test**
+
+Create dashboards using the `argus_*` metrics listed above.
+
+### Auto-Installing the Dashboard
+
+The Argus Analytics Grafana dashboard can be automatically installed using Grafana provisioning. See [Prometheus & Grafana Setup](docs/prometheus-grafana-setup.md) for:
+
+- Complete BrightSign player directory structure (`/storage/flash/` paths)
+- Prometheus and Grafana configuration files
+- Recording rules for pre-computed aggregations
+- Alerting rules for system health monitoring
+- Step-by-step auto-installation instructions
+
 ## Architecture
 
 The system uses a multi-threaded architecture with parallel model execution:
@@ -253,6 +354,7 @@ For detailed architecture documentation, see [Design Document](docs/DESIGN.md).
 | [MQTT Message Format](docs/mqtt-message-format.md) | Complete v7.0 schema reference with examples |
 | [Multi-Model Architecture](docs/multiple-models.md) | Parallel NPU execution design |
 | [RGB-D Camera Support](docs/rgbd.md) | Depth camera integration guide |
+| [Prometheus & Grafana Setup](docs/prometheus-grafana-setup.md) | Dashboard auto-installation and BrightSign paths |
 
 ## Troubleshooting
 
@@ -339,9 +441,33 @@ reboot
 
 ## Build Requirements
 
+- **Container Runtime**: Docker or Podman (auto-detected)
 - **Build Environment**: Yocto-based BrightSign OE build environment
 - **Toolchain**: ARM cross-compilation toolchain for aarch64
 - **C++ Standard**: C++20
+- **Go**: 1.21+ (for argus-exporter and image-stream-server)
+
+### Container Runtime
+
+The build system automatically detects and uses Docker or Podman:
+
+```bash
+# With Docker
+[INFO] Using Docker as container runtime
+
+# With Podman (if Docker not available)
+[INFO] Using Podman as container runtime
+```
+
+Install one of:
+- **Docker**: https://docs.docker.com/engine/install/
+- **Podman**: https://podman.io/getting-started/installation
+
+**Note**: Container runtime is only required for:
+- Building the SDK from source (one-time setup)
+- Model compilation (RKNN toolkit)
+
+For iterative development with an existing SDK, use `./build-apps` directly (no container needed).
 
 ### Dependencies
 

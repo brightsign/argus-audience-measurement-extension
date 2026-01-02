@@ -272,6 +272,54 @@ setup_gstreamer_env() {
     echo "  MQTT utilities available in: /var/volatile/bsext/ext_npu_argus/$SOC_NAME/bin/"
 }
 
+# Setup Argus dashboard for Grafana auto-provisioning
+# This ensures the Argus People Analytics dashboard is automatically installed
+# when the prometheus-grafana-extension is also present
+setup_argus_dashboard() {
+    echo "Setting up Argus Grafana dashboard provisioning..."
+
+    # Grafana data directories (must match prometheus-grafana-extension paths)
+    local GRAFANA_BASE="/storage/flash/grafana"
+    local GRAFANA_DATA="${GRAFANA_BASE}/data"
+    local GRAFANA_PROVISIONING="${GRAFANA_DATA}/provisioning/dashboards"
+    local GRAFANA_DASHBOARDS="${GRAFANA_BASE}/dashboards/argus"
+
+    # Source locations in this extension
+    local SRC_PROVISIONING="${SCRIPT_PATH}/configs/provisioning/dashboards/argus.yml"
+    local SRC_DASHBOARD="${SCRIPT_PATH}/configs/dashboards/argus-analytics.json"
+
+    # Check if source files exist
+    if [ ! -f "${SRC_PROVISIONING}" ]; then
+        echo "  WARNING: Provisioning file not found: ${SRC_PROVISIONING}"
+        return 1
+    fi
+    if [ ! -f "${SRC_DASHBOARD}" ]; then
+        echo "  WARNING: Dashboard file not found: ${SRC_DASHBOARD}"
+        return 1
+    fi
+
+    # Create target directories
+    mkdir -p "${GRAFANA_PROVISIONING}" 2>/dev/null || true
+    mkdir -p "${GRAFANA_DASHBOARDS}" 2>/dev/null || true
+
+    # Copy provisioning file (tells Grafana where to find dashboards)
+    if [ -d "${GRAFANA_PROVISIONING}" ]; then
+        cp "${SRC_PROVISIONING}" "${GRAFANA_PROVISIONING}/" 2>/dev/null && \
+            echo "  Installed: ${GRAFANA_PROVISIONING}/argus.yml" || \
+            echo "  WARNING: Could not copy provisioning file (read-only filesystem?)"
+    fi
+
+    # Copy dashboard JSON
+    if [ -d "${GRAFANA_DASHBOARDS}" ]; then
+        cp "${SRC_DASHBOARD}" "${GRAFANA_DASHBOARDS}/" 2>/dev/null && \
+            echo "  Installed: ${GRAFANA_DASHBOARDS}/argus-analytics.json" || \
+            echo "  WARNING: Could not copy dashboard file (read-only filesystem?)"
+    fi
+
+    echo "  Argus dashboard provisioning complete"
+    echo "  Dashboard will appear in Grafana under 'BrightSign Analytics' folder"
+}
+
 do_start() {
     # check registry for auto-start
     reg_disable_auto_start=$(registry extension ${DAEMON_NAME}-disable-auto-start)
@@ -313,6 +361,9 @@ do_start() {
 
     SOC_NAME=$(get_soc_name)
     setup_gstreamer_env
+
+    # Setup Argus dashboard for Grafana (if prometheus-grafana-extension is present)
+    setup_argus_dashboard
 
     # Start MQTT broker first (so it's ready when attention_demo starts)
     MQTT_PORT=1883  # default MQTT port
