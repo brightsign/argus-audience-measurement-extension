@@ -376,26 +376,40 @@ copy_configs() {
         if [[ -n "$SPECIFIC_SOC" && "$SPECIFIC_SOC" != "$soc" ]]; then
             continue
         fi
-        
+
         local platform="${SOC_PLATFORMS[$soc]}"
         local install_dir="install/$soc"
         local package_soc_dir="staging/$soc"
-        
+
         log "Copying $soc ($platform) configs from $install_dir..."
-        
+
         if [[ ! -d "$install_dir/configs" ]]; then
             warn "Config directory $install_dir/configs not found, skipping $soc configs"
             continue
         fi
 
         mkdir -p "$package_soc_dir/configs"
-        
+
         # Copy all config files
         cp -r "$install_dir/configs"/* "$package_soc_dir/configs/"
         log "Copied configs for $soc"
 
         success "$soc configs copied"
     done
+}
+
+# Copy shared configs (dashboards, etc.) to extension root
+copy_shared_configs() {
+    log "Copying shared configuration files..."
+
+    # Copy dashboards directory for Grafana auto-provisioning
+    if [[ -d "configs/dashboards" ]]; then
+        mkdir -p "staging/configs/dashboards"
+        cp -r configs/dashboards/* "staging/configs/dashboards/"
+        success "Dashboards copied to staging/configs/dashboards/"
+    else
+        warn "No dashboards directory found at configs/dashboards"
+    fi
 }
 
 # Generate manifest.json from manifest-config.json
@@ -753,6 +767,7 @@ main() {
     copy_binaries
     copy_models
     copy_configs
+    copy_shared_configs
     generate_manifest
     copy_extension_scripts
     echo ""
