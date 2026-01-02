@@ -58,12 +58,34 @@ command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
 
-# Function to check if docker is running
-check_docker_running() {
-    if ! docker info >/dev/null 2>&1; then
-        print_error "Docker is not running. Please start Docker and try again."
+# Container runtime (docker or podman)
+CONTAINER_CMD=""
+
+# Function to detect container runtime (docker or podman)
+detect_container_runtime() {
+    if command_exists docker && docker info >/dev/null 2>&1; then
+        CONTAINER_CMD="docker"
+        print_status "Using Docker as container runtime"
+    elif command_exists podman && podman info >/dev/null 2>&1; then
+        CONTAINER_CMD="podman"
+        print_status "Using Podman as container runtime"
+    elif command_exists docker; then
+        print_error "Docker is installed but not running. Please start Docker and try again."
+        exit 1
+    elif command_exists podman; then
+        print_error "Podman is installed but not running. Please check podman and try again."
+        exit 1
+    else
+        print_error "No container runtime found. Please install Docker or Podman:"
+        print_error "  Docker: https://docs.docker.com/engine/install/"
+        print_error "  Podman: https://podman.io/getting-started/installation"
         exit 1
     fi
+}
+
+# Function to check if container runtime is available (legacy compatibility)
+check_docker_running() {
+    detect_container_runtime
 }
 
 # Function to cleanup all generated files and directories
@@ -170,65 +192,70 @@ cleanup_all() {
     print_status "Removing srv directory..."
     rm -rf srv
     
-    # Remove Docker images
-    print_status "Removing Docker images..."
+    # Remove container images (docker or podman)
+    print_status "Removing container images..."
+
+    # Detect available container runtime for cleanup
+    local cleanup_cmd=""
     if command_exists docker && docker info >/dev/null 2>&1; then
+        cleanup_cmd="docker"
+    elif command_exists podman && podman info >/dev/null 2>&1; then
+        cleanup_cmd="podman"
+    fi
+
+    if [ -n "$cleanup_cmd" ]; then
         # Handle bsoe-build image and containers
-        if docker images | grep -q "bsoe-build"; then
-            print_status "Removing bsoe-build Docker image..."
-            
+        if $cleanup_cmd images | grep -q "bsoe-build"; then
+            print_status "Removing bsoe-build image..."
+
             # Check for containers using this image
-            containers=$(docker ps -a --filter ancestor=bsoe-build --format "{{.ID}}" 2>/dev/null)
+            containers=$($cleanup_cmd ps -a --filter ancestor=bsoe-build --format "{{.ID}}" 2>/dev/null)
             if [ -n "$containers" ]; then
                 print_status "Found containers using bsoe-build image, removing them first..."
                 echo "$containers" | while read -r container_id; do
                     if [ -n "$container_id" ]; then
                         print_status "Stopping container: $container_id"
-                        docker stop "$container_id" 2>/dev/null || print_warning "Failed to stop container $container_id"
+                        $cleanup_cmd stop "$container_id" 2>/dev/null || print_warning "Failed to stop container $container_id"
                         print_status "Removing container: $container_id"
-                        docker rm "$container_id" 2>/dev/null || print_warning "Failed to remove container $container_id"
+                        $cleanup_cmd rm "$container_id" 2>/dev/null || print_warning "Failed to remove container $container_id"
                     fi
                 done
             fi
-            
+
             # Now try to remove the image
-            if ! docker rmi bsoe-build 2>/dev/null; then
+            if ! $cleanup_cmd rmi bsoe-build 2>/dev/null; then
                 print_warning "Failed to remove bsoe-build image after container cleanup"
-                print_warning "Try manually: docker images | grep bsoe-build"
+                print_warning "Try manually: $cleanup_cmd images | grep bsoe-build"
             fi
         fi
-        
-        # Handle rknn_tk2 image and containers  
-        if docker images | grep -q "rknn_tk2"; then
-            print_status "Removing rknn_tk2 Docker image..."
-            
+
+        # Handle rknn_tk2 image and containers
+        if $cleanup_cmd images | grep -q "rknn_tk2"; then
+            print_status "Removing rknn_tk2 image..."
+
             # Check for containers using this image
-            containers=$(docker ps -a --filter ancestor=rknn_tk2 --format "{{.ID}}" 2>/dev/null)
+            containers=$($cleanup_cmd ps -a --filter ancestor=rknn_tk2 --format "{{.ID}}" 2>/dev/null)
             if [ -n "$containers" ]; then
                 print_status "Found containers using rknn_tk2 image, removing them first..."
                 echo "$containers" | while read -r container_id; do
                     if [ -n "$container_id" ]; then
                         print_status "Stopping container: $container_id"
-                        docker stop "$container_id" 2>/dev/null || print_warning "Failed to stop container $container_id"
+                        $cleanup_cmd stop "$container_id" 2>/dev/null || print_warning "Failed to stop container $container_id"
                         print_status "Removing container: $container_id"
-                        docker rm "$container_id" 2>/dev/null || print_warning "Failed to remove container $container_id"
+                        $cleanup_cmd rm "$container_id" 2>/dev/null || print_warning "Failed to remove container $container_id"
                     fi
                 done
             fi
-            
+
             # Now try to remove the image
-            if ! docker rmi rknn_tk2 2>/dev/null; then
+            if ! $cleanup_cmd rmi rknn_tk2 2>/dev/null; then
                 print_warning "Failed to remove rknn_tk2 image after container cleanup"
-                print_warning "Try manually: docker images | grep rknn_tk2"
+                print_warning "Try manually: $cleanup_cmd images | grep rknn_tk2"
             fi
         fi
     else
-        print_warning "Docker not available - skipping Docker image cleanup"
-        if ! command_exists docker; then
-            print_warning "Docker command not found"
-        else
-            print_warning "Docker daemon not running - try: sudo systemctl start docker"
-        fi
+        print_warning "No container runtime available - skipping image cleanup"
+        print_warning "Install Docker or Podman to manage container images"
     fi
     
     print_status "Cleanup completed successfully!"
@@ -270,19 +297,13 @@ step0_setup() {
     print_header "STEP 0: Setup"
     
     prompt_continue "This will:
-- Check Docker installation
+- Check container runtime (Docker or Podman)
 - Clone Rockchip repositories (rknn-toolkit2, rknn_model_zoo)
 - Download and build BrightSign OS SDK
 - Provide instructions for unsecuring the player"
 
-    # Check Docker
-    if ! command_exists docker; then
-        print_error "Docker is not installed. Please install Docker first:"
-        print_error "https://docs.docker.com/engine/install/"
-        exit 1
-    fi
-    check_docker_running
-    print_status "Docker is installed and running"
+    # Check container runtime (docker or podman)
+    detect_container_runtime
 
     # Check other required tools
     if ! command_exists git; then
@@ -352,17 +373,17 @@ step0_setup() {
         print_status "BrightSign OS source already downloaded"
     fi
 
-    # Build SDK in Docker
+    # Build SDK in container
     if [ ! -f "Dockerfile" ]; then
         print_status "Downloading Dockerfile..."
         wget https://raw.githubusercontent.com/brightsign/extension-template/refs/heads/main/Dockerfile
     fi
 
-    if ! docker images | grep -q "bsoe-build"; then
-        print_status "Building BSOS Docker image..."
-        docker build --rm --build-arg USER_ID=$(id -u) --build-arg GROUP_ID=$(id -g) --ulimit memlock=-1:-1 -t bsoe-build .
+    if ! $CONTAINER_CMD images | grep -q "bsoe-build"; then
+        print_status "Building BSOS container image..."
+        $CONTAINER_CMD build --rm --build-arg USER_ID=$(id -u) --build-arg GROUP_ID=$(id -g) --ulimit memlock=-1:-1 -t bsoe-build .
     else
-        print_status "BSOS Docker image already exists"
+        print_status "BSOS container image already exists"
     fi
 
     mkdir -p srv
@@ -370,7 +391,7 @@ step0_setup() {
     # Check if SDK already exists
     if [ ! -f "brightsign-x86_64-cobra-toolchain-${BRIGHTSIGN_OS_VERSION}.sh" ]; then
         print_status "Building BrightSign SDK (this may take several hours)..."
-        docker run -it --rm \
+        $CONTAINER_CMD run -it --rm \
             -v $(pwd)/brightsign-oe:/home/builder/bsoe \
             -v $(pwd)/srv:/srv \
             bsoe-build \
