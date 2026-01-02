@@ -196,7 +196,7 @@ run_stream_server() {
 run_argus_exporter() {
     echo "run_argus_exporter called with background=$1"
     local background=$1
-    local port=${2:-19100}  # Default Prometheus metrics port
+    local port=${2:-9101}  # Default Prometheus metrics port
     echo "run_argus_exporter called with port=${port}"
 
     SOC_NAME=$(get_soc_name)
@@ -348,7 +348,7 @@ do_start() {
     fi
 
     # Start argus-exporter (Prometheus metrics exporter)
-    ARGUS_EXPORTER_PORT=19100  # default Prometheus metrics port
+    ARGUS_EXPORTER_PORT=9101  # default Prometheus metrics port
     reg_exporter_port=$(registry networking bs-argus-exporter-port)
     if [ -n "${reg_exporter_port}" ]; then
         ARGUS_EXPORTER_PORT=${reg_exporter_port}
