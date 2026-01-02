@@ -1,10 +1,18 @@
-.PHONY: all build clean clean-all pdf
+.PHONY: all build build-update clean clean-all pdf
+
+# Pass FORCE_UPDATE to child processes (for Go dependency updates)
+export FORCE_UPDATE
 
 all:
-	@echo "Targets: build, clean, clean-all, pdf"
+	@echo "Targets: build, build-update, clean, clean-all, pdf"
 
+# Standard build - skips Go rebuilds if unchanged
 build:
 	./scripts/runall.sh --auto
+
+# Build with forced Go dependency updates (pulls latest from repos)
+build-update:
+	FORCE_UPDATE=1 ./scripts/runall.sh --auto
 
 clean:
 	rm -rf build_xt5 build_ls5 build_rk3576 build_rk3568 staging
