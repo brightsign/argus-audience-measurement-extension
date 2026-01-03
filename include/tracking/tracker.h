@@ -69,7 +69,7 @@ struct TrackerConfig {
   // Association & lifecycle
   float iou_match_thresh{0.45f};  // V6.2.3: Raised from 0.35 to reduce wrong matches
   int   confirm_hits{2};          // LOWERED: 3→2 for faster track confirmation (weak faces, 320×320 model limitation)
-  int   max_missed{12};           // Misses before deletion (~0.4s @30fps)
+  int   max_missed{30};           // Misses before deletion (~1.0s @30fps)
 
   // Detection quality
   float min_det_score{0.50f};
@@ -93,7 +93,7 @@ struct TrackerConfig {
   float min_speed_px_s{8.0f};       // V7.1e: absolute floor for tiny scenes (good for 480p)
   float min_speed_frac{0.012f};     // V7.1e: additional floor as fraction of min(frame_w,frame_h)
   float max_speed_px_s{90.0f};      // V7.0: hard clamp (120→90 to avoid plateau ceiling)
-  int   publish_grace_missed{6};    // increased from 4 for better gap bridging
+  int   publish_grace_missed{15};   // 500ms grace period for occlusion bridging
   float enter_exit_border_frac{0.10f}; // ROI border fraction (0.10 => 10% inset)
   
   // V7.1d: direction stability with faster ramp-up and gentler decay
