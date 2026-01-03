@@ -91,14 +91,15 @@ done
 info "Plugins to build: ${PLUGINS_TO_BUILD[*]}"
 info "Packages required: ${PACKAGES_TO_BUILD[*]}"
 
-# Build packages in container
+# Build packages in container using bsbb (the BrightSign build wrapper)
+# bsbb sets oeroot and sources oe-init-build-env correctly
 for pkg in "${PACKAGES_TO_BUILD[@]}"; do
     info "Building $pkg in container (this may take a while)..."
     $CONTAINER_CMD run --rm \
         -v "$PROJECT_ROOT/brightsign-oe:/home/builder/bsoe" \
         -v "$PROJECT_ROOT/srv:/srv" \
         bsoe-build \
-        bash -c "cd /home/builder/bsoe && source oe-core/oe-init-build-env build && MACHINE=cobra bitbake $pkg"
+        bash -c "cd /home/builder/bsoe/build && MACHINE=cobra ./bsbb $pkg"
 done
 
 # Copy function
