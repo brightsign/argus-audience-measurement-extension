@@ -548,20 +548,38 @@ install(CODE "
   # CRITICAL: Add essential plugins missing from ext-bundle-payload
   # 1. libgstcoreelements.so (contains queue plugin)
   # 2. libgstlibav.so (contains avdec_h264 decoder)
+  # 3. libgstisomp4.so (contains qtdemux for MP4/MOV demuxing)
+  # 4. libgstplayback.so (contains decodebin/uridecodebin)
   set(_coreelements_path \"${OECORE_TARGET_SYSROOT_ABS}/usr/lib/gstreamer-1.0/libgstcoreelements.so\")
   set(_libav_path \"${OECORE_TARGET_SYSROOT_ABS}/usr/lib/gstreamer-1.0/libgstlibav.so\")
-  
+  set(_isomp4_path \"${OECORE_TARGET_SYSROOT_ABS}/usr/lib/gstreamer-1.0/libgstisomp4.so\")
+  set(_playback_path \"${OECORE_TARGET_SYSROOT_ABS}/usr/lib/gstreamer-1.0/libgstplayback.so\")
+
   if(EXISTS \${_coreelements_path})
     execute_process(COMMAND cp -L \${_coreelements_path} \${CMAKE_INSTALL_PREFIX}/lib/gstreamer-1.0/)
     message(STATUS \"Added libgstcoreelements.so (queue plugin) to GStreamer bundle\")
   else()
     message(WARNING \"libgstcoreelements.so not found in SDK - queue plugin will be missing!\")
   endif()
-  
+
   if(EXISTS \${_libav_path})
     execute_process(COMMAND cp -L \${_libav_path} \${CMAKE_INSTALL_PREFIX}/lib/gstreamer-1.0/)
     message(STATUS \"Added libgstlibav.so (avdec_h264 decoder) to GStreamer bundle\")
   else()
     message(WARNING \"libgstlibav.so not found in SDK - H.264 software decoder will be missing!\")
+  endif()
+
+  if(EXISTS \${_isomp4_path})
+    execute_process(COMMAND cp -L \${_isomp4_path} \${CMAKE_INSTALL_PREFIX}/lib/gstreamer-1.0/)
+    message(STATUS \"Added libgstisomp4.so (qtdemux for MP4/MOV) to GStreamer bundle\")
+  else()
+    message(WARNING \"libgstisomp4.so not found in SDK - MP4/MOV demuxing will be missing!\")
+  endif()
+
+  if(EXISTS \${_playback_path})
+    execute_process(COMMAND cp -L \${_playback_path} \${CMAKE_INSTALL_PREFIX}/lib/gstreamer-1.0/)
+    message(STATUS \"Added libgstplayback.so (decodebin/uridecodebin) to GStreamer bundle\")
+  else()
+    message(WARNING \"libgstplayback.so not found in SDK - decodebin will be missing!\")
   endif()
 ")
