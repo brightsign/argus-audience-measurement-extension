@@ -71,6 +71,7 @@
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "expr": "sum(argus_occupancy_current{device=~\"$device\", stream=~\"$stream\"})",
+          "instant": true,
           "legendFormat": "People",
           "refId": "A"
         }
@@ -153,6 +154,7 @@
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "expr": "sum(rate(argus_visitors_total{device=~\"$device\", stream=~\"$stream\"}[5m])) * 3600",
+          "instant": true,
           "legendFormat": "per hour",
           "refId": "A"
         }
@@ -195,6 +197,7 @@
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "expr": "(sum(rate(argus_attention_events_total{device=~\"$device\", stream=~\"$stream\"}[1h])) / clamp_min(sum(rate(argus_visitors_total{device=~\"$device\", stream=~\"$stream\"}[1h])), 0.001)) * 100",
+          "instant": true,
           "legendFormat": "Attention %",
           "refId": "A"
         }
@@ -237,6 +240,7 @@
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "expr": "avg(argus_dwell_average_seconds{device=~\"$device\", stream=~\"$stream\"})",
+          "instant": true,
           "legendFormat": "seconds",
           "refId": "A"
         }
@@ -279,6 +283,7 @@
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
           "expr": "(sum(argus_gaze_current{device=~\"$device\", stream=~\"$stream\"}) / clamp_min(sum(argus_occupancy_current{device=~\"$device\", stream=~\"$stream\"}), 1)) * 100",
+          "instant": true,
           "legendFormat": "Gazing %",
           "refId": "A"
         }
