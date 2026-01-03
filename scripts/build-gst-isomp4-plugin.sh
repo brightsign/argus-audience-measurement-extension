@@ -98,7 +98,7 @@ for pkg in "${PACKAGES_TO_BUILD[@]}"; do
         -v "$PROJECT_ROOT/brightsign-oe:/home/builder/bsoe" \
         -v "$PROJECT_ROOT/srv:/srv" \
         bsoe-build \
-        bash -c "cd /home/builder/bsoe/build && source oe-init-build-env && MACHINE=cobra bitbake $pkg"
+        bash -c "cd /home/builder/bsoe && source oe-core/oe-init-build-env build && MACHINE=cobra bitbake $pkg"
 done
 
 # Copy function
