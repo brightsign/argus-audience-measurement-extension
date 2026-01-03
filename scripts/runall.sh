@@ -504,14 +504,38 @@ step3_build_xt5() {
     make install
 
     cd "$project_root"
-    
+
     print_status "Step 3 completed successfully!"
+}
+
+# STEP 3b: Build GStreamer plugins for MP4 support (optional)
+step3b_build_gstreamer_plugins() {
+    print_header "STEP 3b: Build GStreamer Plugins (MP4 Support)"
+
+    prompt_continue "This will:
+- Build libgstisomp4.so (qtdemux for MP4/MOV demuxing)
+- Build libgstplayback.so (decodebin for auto-detection)
+- Copy plugins to install directories
+Note: This step is optional - only needed for MP4 file input support"
+
+    cd "$project_root"
+
+    if [ -f "./scripts/build-gst-isomp4-plugin.sh" ]; then
+        chmod +x ./scripts/build-gst-isomp4-plugin.sh
+        print_status "Building GStreamer plugins for MP4 support..."
+        ./scripts/build-gst-isomp4-plugin.sh
+    else
+        print_warning "build-gst-isomp4-plugin.sh not found - skipping"
+        print_warning "MP4 file input will not be supported"
+    fi
+
+    print_status "Step 3b completed!"
 }
 
 # STEP 4: Package the Extension
 step4_package() {
     print_header "STEP 4: Package the Extension"
-    
+
     prompt_continue "This will:
 - Use package script to create packages
 - Create development package (argus-dev)
@@ -560,6 +584,7 @@ main() {
     step0_setup
     step1_compile_models
     step3_build_xt5
+    step3b_build_gstreamer_plugins
     step4_package
     
     print_header "BUILD COMPLETE"

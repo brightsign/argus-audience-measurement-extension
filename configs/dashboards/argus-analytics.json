@@ -70,7 +70,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "argus_occupancy_current{device=~\"$device\", stream=~\"$stream\"}",
+          "expr": "sum(argus_occupancy_current{device=~\"$device\", stream=~\"$stream\"})",
           "legendFormat": "People",
           "refId": "A"
         }
@@ -110,7 +110,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "increase(argus_visitors_total{device=~\"$device\", stream=~\"$stream\"}[$__range])",
+          "expr": "sum(increase(argus_visitors_total{device=~\"$device\", stream=~\"$stream\"}[$__range]))",
           "instant": true,
           "legendFormat": "Visitors",
           "refId": "A"
@@ -152,7 +152,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "rate(argus_visitors_total{device=~\"$device\", stream=~\"$stream\"}[5m]) * 3600",
+          "expr": "sum(rate(argus_visitors_total{device=~\"$device\", stream=~\"$stream\"}[5m])) * 3600",
           "legendFormat": "per hour",
           "refId": "A"
         }
@@ -194,7 +194,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "(rate(argus_attention_events_total{device=~\"$device\", stream=~\"$stream\"}[1h]) / clamp_min(rate(argus_visitors_total{device=~\"$device\", stream=~\"$stream\"}[1h]), 0.001)) * 100",
+          "expr": "(sum(rate(argus_attention_events_total{device=~\"$device\", stream=~\"$stream\"}[1h])) / clamp_min(sum(rate(argus_visitors_total{device=~\"$device\", stream=~\"$stream\"}[1h])), 0.001)) * 100",
           "legendFormat": "Attention %",
           "refId": "A"
         }
@@ -236,7 +236,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "argus_dwell_average_seconds{device=~\"$device\", stream=~\"$stream\"}",
+          "expr": "avg(argus_dwell_average_seconds{device=~\"$device\", stream=~\"$stream\"})",
           "legendFormat": "seconds",
           "refId": "A"
         }
@@ -278,7 +278,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "${datasource}" },
-          "expr": "(argus_gaze_current{device=~\"$device\", stream=~\"$stream\"} / clamp_min(argus_occupancy_current{device=~\"$device\", stream=~\"$stream\"}, 1)) * 100",
+          "expr": "(sum(argus_gaze_current{device=~\"$device\", stream=~\"$stream\"}) / clamp_min(sum(argus_occupancy_current{device=~\"$device\", stream=~\"$stream\"}), 1)) * 100",
           "legendFormat": "Gazing %",
           "refId": "A"
         }
