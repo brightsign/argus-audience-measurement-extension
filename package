@@ -702,11 +702,13 @@ create_extension_package() {
 
     echo ""
     echo "Extension Package Usage:"
-    echo "1. Transfer $EXTENSION_PACKAGE to player via DWS"
-    echo "2. On player: mkdir -p /usr/local && cd /usr/local"
-    echo "3. On player: unzip /storage/sd/$EXTENSION_PACKAGE"
-    echo "4. On player: bash ./ext_npu_argus_install-lvm.sh"
-    echo "5. On player: reboot"
+    echo "1. scp $EXTENSION_PACKAGE root@<player-ip>:/storage/sd/"
+    echo "2. On player: cd /usr/local"
+    echo "3. On player: mv /storage/sd/$EXTENSION_PACKAGE /usr/local/"
+    echo "4. On player: unzip $EXTENSION_PACKAGE"
+    echo "5. On player: /var/volatile/bsext/ext_npu_argus/bsext_init stop"
+    echo "6. On player: bash ./ext_npu_argus_install-lvm.sh"
+    echo "7. On player: reboot"
     echo "Note: Extension installation is permanent (persists across reboots)"
 }
 
