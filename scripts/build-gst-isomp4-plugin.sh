@@ -152,7 +152,7 @@ installed_count=0
 for entry in "${PLUGINS_TO_BUILD[@]}"; do
     plugin_name="${entry%%:*}"
     if copy_plugin "$plugin_name"; then
-        ((installed_count++))
+        ((++installed_count)) || true  # Avoid set -e exit when count is 0
     fi
 done
 

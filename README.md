@@ -439,6 +439,97 @@ rm -rf /storage/flash/prometheus/data/*
 reboot
 ```
 
+## GStreamer Plugins (MP4/File Support)
+
+The extension supports video file input (MP4, MOV, MPEG-TS) which requires additional GStreamer plugins not included in the base BrightSign OS build.
+
+### Required Plugins
+
+| Plugin | Package | Purpose |
+|--------|---------|---------|
+| `libgstisomp4.so` | gstreamer1.0-plugins-good | MP4/MOV demuxing (qtdemux) |
+| `libgstplayback.so` | gstreamer1.0-plugins-base | Auto-detection (decodebin, uridecodebin) |
+
+### Building the Plugins
+
+The plugins are built automatically during `make build` or `./scripts/runall.sh`. The build system uses bbappend files to enable the required features:
+
+**brightsign-oe/meta-bs/recipes-open/gstreamer/gstreamer1.0-plugins-good_1.22.10.bbappend:**
+```bitbake
+EXTRA_OEMESON = " \
+    -Dmultifile=enabled \
+    -Dudp=enabled \
+    -Drtp=enabled \
+    -Drtpmanager=enabled \
+    -Disomp4=enabled \
+    -Dauto_features=disabled \
+"
+```
+
+**brightsign-oe/meta-bs/recipes-open/gstreamer/gstreamer1.0-plugins-base_1.22.10.bbappend:**
+```bitbake
+EXTRA_OEMESON = " \
+    -Daudioconvert=enabled \
+    -Dplayback=enabled \
+    -Dapp=enabled \
+    -Dvideoconvertscale=enabled \
+    -Dauto_features=disabled \
+"
+```
+
+### Troubleshooting: Sstate Cache Issues
+
+BitBake uses an sstate cache to speed up builds. If you modify the bbappend files but the plugins aren't being rebuilt, the cache may be serving stale artifacts.
+
+**Symptoms:**
+- Build log shows `100% sstate reuse` for GStreamer packages
+- `libgstplayback.so` not found after build
+- MP4 files fail to play with "no element qtdemux" errors
+
+**Solution - Force Clean Rebuild:**
+
+```bash
+# Use the helper script to clear cache and rebuild
+./scripts/rebuild-gstreamer-clean.sh
+
+# Or manually in the container:
+docker run --rm \
+    -v $(pwd)/brightsign-oe:/home/builder/bsoe \
+    -v $(pwd)/srv:/srv \
+    bsoe-build \
+    bash -c "cd /home/builder/bsoe/build && \
+             MACHINE=cobra ./bsbb -c cleansstate gstreamer1.0-plugins-base && \
+             MACHINE=cobra ./bsbb -c cleansstate gstreamer1.0-plugins-good && \
+             MACHINE=cobra ./bsbb gstreamer1.0-plugins-good gstreamer1.0-plugins-base"
+```
+
+After clearing sstate, the build log should show `0% sstate reuse` for the GStreamer packages, confirming they're being rebuilt with your bbappend changes.
+
+### Copying Plugins to Install Directory
+
+After building, copy the plugins to the install directories:
+
+```bash
+./scripts/build-gst-isomp4-plugin.sh
+```
+
+This searches for the built plugins and copies them to `install/RK*/lib/gstreamer-1.0/`.
+
+### Verifying on Device
+
+After deploying, verify the plugins are installed:
+
+```bash
+# Check qtdemux (MP4 demuxing)
+gst-inspect-1.0 qtdemux
+
+# Check decodebin (auto-detection)
+gst-inspect-1.0 decodebin
+
+# Test MP4 playback pipeline
+gst-launch-1.0 filesrc location=/storage/sd/test.mp4 ! qtdemux ! h264parse ! mppvideodec ! fakesink
+```
+
 ## Build Requirements
 
 - **Container Runtime**: Docker or Podman (auto-detected)
