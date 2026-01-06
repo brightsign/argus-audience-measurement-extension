@@ -1,4 +1,5 @@
 #include "output/frame_writer.h"
+#include "output/face_blur.h"
 #include "pipeline/pipeline_types.h"
 #include "metrics/log_global.h"
 #include <opencv2/imgcodecs.hpp>
@@ -22,12 +23,19 @@ public:
 
 class DiskFrameWriter final : public IFrameWriter {
 public:
-  DiskFrameWriter(const std::string& output_dir, int max_frames, int quality) noexcept
-    : output_dir_(output_dir), max_frames_(max_frames), quality_(quality), frame_count_(0),
+  DiskFrameWriter(const std::string& output_dir, int max_frames, int quality,
+                  const output::BlurConfig& blur_config) noexcept
+    : output_dir_(output_dir), max_frames_(max_frames), quality_(quality),
+      blur_config_(blur_config), frame_count_(0),
       writes_count_(0), last_log_time_(std::chrono::steady_clock::now()) {
     try {
       fs::create_directories(output_dir_);
       LG_INFO("frame_writer: created output directory %s", output_dir_.c_str());
+      if (blur_config_.enabled) {
+        LG_INFO("frame_writer: face blur enabled (method=%s, intensity=%d)",
+                blur_config_.method == output::BlurMethod::PIXELATE ? "pixelate" : "gaussian",
+                blur_config_.intensity);
+      }
     } catch (const std::exception& e) {
       LG_ERROR("frame_writer: failed to create output directory: %s", e.what());
     }
@@ -60,13 +68,49 @@ public:
         filepath = (fs::path(output_dir_) / oss.str()).string();
       }
       
+      // Apply face blur if enabled (make a copy to avoid modifying original)
+      cv::Mat output_img;
+      if (blur_config_.enabled && !result.tracks.empty()) {
+        output_img = img.clone();
+        std::vector<cv::Rect> face_bboxes;
+        face_bboxes.reserve(result.tracks.size());
+        for (const auto& track : result.tracks) {
+          face_bboxes.push_back(output::detection_to_rect(
+              track.box.x0, track.box.y0, track.box.x1, track.box.y1));
+        }
+        output::blur_faces(output_img, face_bboxes, blur_config_);
+      } else {
+        output_img = img;  // No copy needed if not blurring
+      }
+
+      // Crop letterbox (remove black bars) if original dimensions are available
+      if (result.frame_width > 0 && result.frame_height > 0 &&
+          output_img.cols > 0 && output_img.rows > 0) {
+        // Calculate letterbox region (same logic as resize_frame_rga)
+        const float scale = std::min((float)output_img.cols / result.frame_width,
+                                     (float)output_img.rows / result.frame_height);
+        const int letterbox_w = (int)(result.frame_width * scale);
+        const int letterbox_h = (int)(result.frame_height * scale);
+        const int offset_x = (output_img.cols - letterbox_w) / 2;
+        const int offset_y = (output_img.rows - letterbox_h) / 2;
+
+        // Crop to letterbox region (removes black bars)
+        if (letterbox_w > 0 && letterbox_h > 0 &&
+            offset_x >= 0 && offset_y >= 0 &&
+            offset_x + letterbox_w <= output_img.cols &&
+            offset_y + letterbox_h <= output_img.rows) {
+          cv::Rect crop_region(offset_x, offset_y, letterbox_w, letterbox_h);
+          output_img = output_img(crop_region).clone();
+        }
+      }
+
       // Write frame as JPEG (data is already in correct format)
       // The RGA pipeline actually outputs BGR despite the misleading variable names
       std::vector<int> compression_params;
       compression_params.push_back(cv::IMWRITE_JPEG_QUALITY);
       compression_params.push_back(quality_);
 
-      if (!cv::imwrite(filepath, img, compression_params)) {
+      if (!cv::imwrite(filepath, output_img, compression_params)) {
         LG_WARN("frame_writer: failed to write frame to %s", filepath.c_str());
         return false;
       }
@@ -137,6 +181,7 @@ private:
   std::string output_dir_;
   int max_frames_;
   int quality_;
+  output::BlurConfig blur_config_;
   int frame_count_;
   int writes_count_;
   std::chrono::steady_clock::time_point last_log_time_;
@@ -151,6 +196,7 @@ std::unique_ptr<IFrameWriter> make_frame_writer_null() noexcept {
 std::unique_ptr<IFrameWriter> make_frame_writer_disk(
     const std::string& output_dir,
     int max_frames,
-    int quality) noexcept {
-  return std::make_unique<DiskFrameWriter>(output_dir, max_frames, quality);
+    int quality,
+    const output::BlurConfig& blur_config) noexcept {
+  return std::make_unique<DiskFrameWriter>(output_dir, max_frames, quality, blur_config);
 }

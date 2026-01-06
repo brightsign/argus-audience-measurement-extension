@@ -20,7 +20,7 @@ struct AppConfig {
   // This allows users to configure all sources but choose which one to use
   std::string     input_source{"rtsp"};  // Default to RTSP
   
-  // Input source priority: "config" (use config.json) or "registry" (use BrightSign registry)
+  // Input source priority: "config" (use argus-config.json) or "registry" (use BrightSign registry)
   // Priority is always: CLI args > [config or registry based on this setting] > [other] > auto-detect
   std::string     input_source_priority{"config"};  // "config" or "registry"
 
@@ -47,6 +47,11 @@ struct AppConfig {
   std::string output_dir{};         // Directory for decorated frames
   int max_frames{0};                // Max frames to keep (0 = no limit)
   int frame_quality{85};            // JPEG quality (1-100)
+
+  // Face blur options (for privacy in output frames)
+  bool blur_faces{false};              // Enable face blurring in output frames
+  std::string blur_method{"pixelate"}; // "pixelate" or "gaussian"
+  int blur_intensity{12};              // Block size (4-32) for pixelate, kernel size (31-99) for gaussian
   
   // Optional: diagnostic logging
   std::string log_level{"info"};        // "debug", "info", "warn", "error"

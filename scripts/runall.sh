@@ -58,12 +58,34 @@ command_exists() {
     command -v "$1" >/dev/null 2>&1
 }
 
-# Function to check if docker is running
-check_docker_running() {
-    if ! docker info >/dev/null 2>&1; then
-        print_error "Docker is not running. Please start Docker and try again."
+# Container runtime (docker or podman)
+CONTAINER_CMD=""
+
+# Function to detect container runtime (docker or podman)
+detect_container_runtime() {
+    if command_exists docker && docker info >/dev/null 2>&1; then
+        CONTAINER_CMD="docker"
+        print_status "Using Docker as container runtime"
+    elif command_exists podman && podman info >/dev/null 2>&1; then
+        CONTAINER_CMD="podman"
+        print_status "Using Podman as container runtime"
+    elif command_exists docker; then
+        print_error "Docker is installed but not running. Please start Docker and try again."
+        exit 1
+    elif command_exists podman; then
+        print_error "Podman is installed but not running. Please check podman and try again."
+        exit 1
+    else
+        print_error "No container runtime found. Please install Docker or Podman:"
+        print_error "  Docker: https://docs.docker.com/engine/install/"
+        print_error "  Podman: https://podman.io/getting-started/installation"
         exit 1
     fi
+}
+
+# Function to check if container runtime is available (legacy compatibility)
+check_docker_running() {
+    detect_container_runtime
 }
 
 # Function to cleanup all generated files and directories
@@ -170,65 +192,70 @@ cleanup_all() {
     print_status "Removing srv directory..."
     rm -rf srv
     
-    # Remove Docker images
-    print_status "Removing Docker images..."
+    # Remove container images (docker or podman)
+    print_status "Removing container images..."
+
+    # Detect available container runtime for cleanup
+    local cleanup_cmd=""
     if command_exists docker && docker info >/dev/null 2>&1; then
+        cleanup_cmd="docker"
+    elif command_exists podman && podman info >/dev/null 2>&1; then
+        cleanup_cmd="podman"
+    fi
+
+    if [ -n "$cleanup_cmd" ]; then
         # Handle bsoe-build image and containers
-        if docker images | grep -q "bsoe-build"; then
-            print_status "Removing bsoe-build Docker image..."
-            
+        if $cleanup_cmd images | grep -q "bsoe-build"; then
+            print_status "Removing bsoe-build image..."
+
             # Check for containers using this image
-            containers=$(docker ps -a --filter ancestor=bsoe-build --format "{{.ID}}" 2>/dev/null)
+            containers=$($cleanup_cmd ps -a --filter ancestor=bsoe-build --format "{{.ID}}" 2>/dev/null)
             if [ -n "$containers" ]; then
                 print_status "Found containers using bsoe-build image, removing them first..."
                 echo "$containers" | while read -r container_id; do
                     if [ -n "$container_id" ]; then
                         print_status "Stopping container: $container_id"
-                        docker stop "$container_id" 2>/dev/null || print_warning "Failed to stop container $container_id"
+                        $cleanup_cmd stop "$container_id" 2>/dev/null || print_warning "Failed to stop container $container_id"
                         print_status "Removing container: $container_id"
-                        docker rm "$container_id" 2>/dev/null || print_warning "Failed to remove container $container_id"
+                        $cleanup_cmd rm "$container_id" 2>/dev/null || print_warning "Failed to remove container $container_id"
                     fi
                 done
             fi
-            
+
             # Now try to remove the image
-            if ! docker rmi bsoe-build 2>/dev/null; then
+            if ! $cleanup_cmd rmi bsoe-build 2>/dev/null; then
                 print_warning "Failed to remove bsoe-build image after container cleanup"
-                print_warning "Try manually: docker images | grep bsoe-build"
+                print_warning "Try manually: $cleanup_cmd images | grep bsoe-build"
             fi
         fi
-        
-        # Handle rknn_tk2 image and containers  
-        if docker images | grep -q "rknn_tk2"; then
-            print_status "Removing rknn_tk2 Docker image..."
-            
+
+        # Handle rknn_tk2 image and containers
+        if $cleanup_cmd images | grep -q "rknn_tk2"; then
+            print_status "Removing rknn_tk2 image..."
+
             # Check for containers using this image
-            containers=$(docker ps -a --filter ancestor=rknn_tk2 --format "{{.ID}}" 2>/dev/null)
+            containers=$($cleanup_cmd ps -a --filter ancestor=rknn_tk2 --format "{{.ID}}" 2>/dev/null)
             if [ -n "$containers" ]; then
                 print_status "Found containers using rknn_tk2 image, removing them first..."
                 echo "$containers" | while read -r container_id; do
                     if [ -n "$container_id" ]; then
                         print_status "Stopping container: $container_id"
-                        docker stop "$container_id" 2>/dev/null || print_warning "Failed to stop container $container_id"
+                        $cleanup_cmd stop "$container_id" 2>/dev/null || print_warning "Failed to stop container $container_id"
                         print_status "Removing container: $container_id"
-                        docker rm "$container_id" 2>/dev/null || print_warning "Failed to remove container $container_id"
+                        $cleanup_cmd rm "$container_id" 2>/dev/null || print_warning "Failed to remove container $container_id"
                     fi
                 done
             fi
-            
+
             # Now try to remove the image
-            if ! docker rmi rknn_tk2 2>/dev/null; then
+            if ! $cleanup_cmd rmi rknn_tk2 2>/dev/null; then
                 print_warning "Failed to remove rknn_tk2 image after container cleanup"
-                print_warning "Try manually: docker images | grep rknn_tk2"
+                print_warning "Try manually: $cleanup_cmd images | grep rknn_tk2"
             fi
         fi
     else
-        print_warning "Docker not available - skipping Docker image cleanup"
-        if ! command_exists docker; then
-            print_warning "Docker command not found"
-        else
-            print_warning "Docker daemon not running - try: sudo systemctl start docker"
-        fi
+        print_warning "No container runtime available - skipping image cleanup"
+        print_warning "Install Docker or Podman to manage container images"
     fi
     
     print_status "Cleanup completed successfully!"
@@ -268,21 +295,17 @@ done
 # STEP 0: Setup
 step0_setup() {
     print_header "STEP 0: Setup"
+    print_status "DEBUG: Entering step0_setup"
     
     prompt_continue "This will:
-- Check Docker installation
+- Check container runtime (Docker or Podman)
 - Clone Rockchip repositories (rknn-toolkit2, rknn_model_zoo)
 - Download and build BrightSign OS SDK
 - Provide instructions for unsecuring the player"
 
-    # Check Docker
-    if ! command_exists docker; then
-        print_error "Docker is not installed. Please install Docker first:"
-        print_error "https://docs.docker.com/engine/install/"
-        exit 1
-    fi
-    check_docker_running
-    print_status "Docker is installed and running"
+    # Check container runtime (docker or podman)
+    print_status "DEBUG: Detecting container runtime..."
+    detect_container_runtime
 
     # Check other required tools
     if ! command_exists git; then
@@ -352,17 +375,17 @@ step0_setup() {
         print_status "BrightSign OS source already downloaded"
     fi
 
-    # Build SDK in Docker
+    # Build SDK in container
     if [ ! -f "Dockerfile" ]; then
         print_status "Downloading Dockerfile..."
         wget https://raw.githubusercontent.com/brightsign/extension-template/refs/heads/main/Dockerfile
     fi
 
-    if ! docker images | grep -q "bsoe-build"; then
-        print_status "Building BSOS Docker image..."
-        docker build --rm --build-arg USER_ID=$(id -u) --build-arg GROUP_ID=$(id -g) --ulimit memlock=-1:-1 -t bsoe-build .
+    if ! $CONTAINER_CMD images | grep -q "bsoe-build"; then
+        print_status "Building BSOS container image..."
+        $CONTAINER_CMD build --rm --build-arg USER_ID=$(id -u) --build-arg GROUP_ID=$(id -g) --ulimit memlock=-1:-1 -t bsoe-build .
     else
-        print_status "BSOS Docker image already exists"
+        print_status "BSOS container image already exists"
     fi
 
     mkdir -p srv
@@ -370,7 +393,7 @@ step0_setup() {
     # Check if SDK already exists
     if [ ! -f "brightsign-x86_64-cobra-toolchain-${BRIGHTSIGN_OS_VERSION}.sh" ]; then
         print_status "Building BrightSign SDK (this may take several hours)..."
-        docker run -it --rm \
+        $CONTAINER_CMD run -it --rm \
             -v $(pwd)/brightsign-oe:/home/builder/bsoe \
             -v $(pwd)/srv:/srv \
             bsoe-build \
@@ -398,6 +421,7 @@ step0_setup() {
     fi
 
     print_status "Step 0 completed successfully!"
+    print_status "DEBUG: Exiting step0_setup successfully"
     
     print_warning "MANUAL STEP REQUIRED: You need to unsecure your BrightSign player"
     print_warning "Follow the instructions in the README.md under 'Unsecure the Player'"
@@ -407,6 +431,7 @@ step0_setup() {
 # STEP 1: Compile ONNX Models
 step1_compile_models() {
     print_header "STEP 1: Compile ONNX Models for Rockchip NPU"
+    print_status "DEBUG: Entering step1_compile_models"
     
     prompt_continue "This will:
 - Build Docker container for model compilation
@@ -414,6 +439,7 @@ step1_compile_models() {
 - Download and compile YOLOX models (all platforms)"
 
     cd "$project_root"
+    print_status "DEBUG: Changed to project root: $project_root"
     
     # Use the compile-models script for all model compilation
     if [ -f "./compile-models" ]; then
@@ -434,11 +460,13 @@ step1_compile_models() {
     fi
 
     print_status "Step 1 completed successfully!"
+    print_status "DEBUG: Exiting step1_compile_models successfully"
 }
 
 # STEP 3: Build and Test on XT5
 step3_build_xt5() {
     print_header "STEP 3: Build and Test"
+    print_status "DEBUG: Entering step3_build_xt5"
     
     prompt_continue "This will:
 - Build application for XT5 (RK3588)
@@ -447,8 +475,10 @@ step3_build_xt5() {
 - Install binaries and libraries to install directory"
 
     cd "$project_root"
+    print_status "DEBUG: Changed to project root: $project_root"
     
     # Source the SDK environment
+    print_status "DEBUG: Sourcing SDK environment..."
     source ./sdk/environment-setup-aarch64-oe-linux
 
     # Build for XT5 (RK3588)
@@ -483,39 +513,90 @@ step3_build_xt5() {
     make install
 
     cd "$project_root"
-    
+
     print_status "Step 3 completed successfully!"
+    print_status "DEBUG: Exiting step3_build_xt5 successfully"
+}
+
+# STEP 3b: Build GStreamer plugins for MP4 support (optional)
+step3b_build_gstreamer_plugins() {
+    print_header "STEP 3b: Build GStreamer Plugins (MP4 Support)"
+    print_status "DEBUG: Entering step3b_build_gstreamer_plugins"
+
+    prompt_continue "This will:
+- Build libgstisomp4.so (qtdemux for MP4/MOV demuxing)
+- Build libgstplayback.so (decodebin for auto-detection)
+- Copy plugins to install directories
+Note: This step is optional - only needed for MP4 file input support"
+
+    cd "$project_root"
+    print_status "DEBUG: Changed to project root: $project_root"
+
+    if [ -f "./scripts/build-gst-isomp4-plugin.sh" ]; then
+        chmod +x ./scripts/build-gst-isomp4-plugin.sh
+        print_status "Building GStreamer plugins for MP4 support..."
+        print_status "DEBUG: Executing ./scripts/build-gst-isomp4-plugin.sh"
+        # Run with || true to prevent set -e from stopping on errors (this step is optional)
+        ./scripts/build-gst-isomp4-plugin.sh || true
+        local exit_code=$?
+        print_status "DEBUG: build-gst-isomp4-plugin.sh exit code: $exit_code"
+        if [ $exit_code -ne 0 ]; then
+            print_warning "GStreamer plugin build returned non-zero exit code: $exit_code"
+            print_warning "This is optional - continuing anyway"
+        fi
+    else
+        print_warning "build-gst-isomp4-plugin.sh not found - skipping"
+        print_warning "MP4 file input will not be supported"
+    fi
+
+    print_status "Step 3b completed!"
+    print_status "DEBUG: Exiting step3b_build_gstreamer_plugins successfully"
 }
 
 # STEP 4: Package the Extension
 step4_package() {
     print_header "STEP 4: Package the Extension"
-    
+    print_status "DEBUG: Entering step4_package"
+
     prompt_continue "This will:
 - Use package script to create packages
 - Create development package (argus-dev)
 - Create production extension package (argus-ext)"
 
     cd "$project_root"
+    print_status "DEBUG: Changed to project root: $project_root"
     
     # Use the package script which handles everything correctly
     if [ -f "./package" ]; then
         chmod +x ./package
         print_status "Running package script..."
+        print_status "DEBUG: Executing ./package"
         ./package
+        local exit_code=$?
+        print_status "DEBUG: package script exit code: $exit_code"
+        if [ $exit_code -ne 0 ]; then
+            print_error "Package script failed with exit code: $exit_code"
+            return 1
+        fi
     else
         print_error "package script not found!"
         return 1
     fi
     
     print_status "Step 4 completed successfully!"
+    print_status "DEBUG: Exiting step4_package successfully"
     print_status "Development package: argus-dev-*.zip"
     print_status "Production extension: argus-ext-*.zip"
+    
+    # List the created packages for verification
+    print_status "DEBUG: Listing created packages:"
+    ls -lh argus-*.zip 2>/dev/null || print_warning "No argus-*.zip files found!"
 }
 
 # Main execution
 main() {
     print_header "BrightSign NPU Argus Extension - Complete Build"
+    print_status "DEBUG: Script started with arguments: $@"
     
     if [ "$AUTO_MODE" = true ]; then
         print_status "Running in automatic mode - no prompts"
@@ -524,6 +605,7 @@ main() {
     fi
     
     print_status "Project root: $PROJECT_ROOT"
+    print_status "DEBUG: Starting main build sequence"
     
     # Check architecture
     if [ "$(uname -m)" != "x86_64" ] && [ "$SKIP_ARCH_CHECK" != true ]; then
@@ -536,16 +618,31 @@ main() {
     fi
     
     # Execute steps
+    print_status "DEBUG: About to execute step0_setup"
     step0_setup
+    print_status "DEBUG: step0_setup completed, moving to step1_compile_models"
+    
     step1_compile_models
+    print_status "DEBUG: step1_compile_models completed, moving to step3_build_xt5"
+    
     step3_build_xt5
+    print_status "DEBUG: step3_build_xt5 completed, moving to step3b_build_gstreamer_plugins"
+    
+    step3b_build_gstreamer_plugins
+    print_status "DEBUG: step3b_build_gstreamer_plugins completed, moving to step4_package"
+    
     step4_package
+    print_status "DEBUG: step4_package completed"
     
     print_header "BUILD COMPLETE"
     print_status "All steps completed successfully!"
     print_status "Check the install directory for the built files"
     print_status "Development package: argus-dev-*.zip"
     print_status "Production extension: argus-ext-*.zip"
+    
+    # Final verification
+    print_status "DEBUG: Final package verification:"
+    ls -lh argus-*.zip 2>/dev/null || print_warning "WARNING: No argus-*.zip files found in project root!"
     
     print_warning "Don't forget to unsecure your BrightSign player as described in the README!"
 }

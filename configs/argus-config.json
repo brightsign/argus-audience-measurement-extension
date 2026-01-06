@@ -84,6 +84,10 @@
   "enable_frame_output": true,
   "output_dir": "/tmp",
 
+  "blur_faces": false,
+  "blur_method": "pixelate",
+  "blur_intensity": 12,
+
   "test_face_only": false,
   "test_yolo_only": false,
 
@@ -126,6 +130,22 @@
     },
     "note": "Change log_level without recompiling. Logs are written to log_dir location.",
     "default": "info"
+  },
+
+  "_blur_faces_notes": {
+    "description": "Face blurring for privacy protection in output frames",
+    "defaults": "All blur settings are optional. Defaults: blur_faces=false, blur_method=pixelate, blur_intensity=12",
+    "blur_faces": "Set to true to enable face blurring (default: false)",
+    "blur_method": {
+      "pixelate": "Fast mosaic/pixelation effect (default, recommended) - irreversible anonymization",
+      "gaussian": "Smooth blur effect - use kernel size >= 71 for effective anonymization"
+    },
+    "blur_intensity": {
+      "pixelate": "Block size in pixels (4-32). Smaller = more detail visible. Default: 12",
+      "gaussian": "Kernel size (31-99, must be odd). Larger = more blur. Recommended: 71"
+    },
+    "note": "Blur is applied AFTER gaze detection, only affecting output images written to output_dir",
+    "minimal_config": "To enable with defaults, just add: \"blur_faces\": true"
   }
 }
 

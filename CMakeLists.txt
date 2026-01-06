@@ -10,8 +10,13 @@ if(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
 # OrangePi or other for development
     find_package(Boost REQUIRED COMPONENTS filesystem system)
     find_package(OpenCV REQUIRED)
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(GST REQUIRED gstreamer-1.0 gstreamer-app-1.0 gstreamer-video-1.0 gstreamer-pbutils-1.0)
 
-    set(MY_LIBS ${Boost_LIBRARIES} ${OpenCV_LIBS})
+    include_directories(${GST_INCLUDE_DIRS})
+    link_directories(${GST_LIBRARY_DIRS})
+
+    set(MY_LIBS ${Boost_LIBRARIES} ${OpenCV_LIBS} ${GST_LIBRARIES})
 else()
 # cross-compile from x86 for rk3588/XT5, rk3568/LS5
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-poison-system-directories")
@@ -88,7 +93,22 @@ set(RKNN_RT_LIB ${CMAKE_SOURCE_DIR}/include/librknnrt.so)
 #rga -- the 3588 rga lib is okay 3576
 # set(RGA_PATH ${CMAKE_SOURCE_DIR}/include/3rdparty/rga/RK3588)
 # set(RGA_LIB ${RGA_PATH}/lib/Linux//${LIB_ARCH}/librga.so)
-set(RGA_LIB ${OECORE_TARGET_SYSROOT}/usr/lib/librga.so)
+if(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
+  # Native build - try to find RGA, make optional for non-Rockchip boards
+  find_library(RGA_LIB NAMES rga rga2 PATHS /usr/lib /usr/local/lib /usr/lib/aarch64-linux-gnu)
+  if(RGA_LIB)
+    message(STATUS "Found RGA: ${RGA_LIB}")
+    set(HAVE_RGA TRUE)
+  else()
+    message(WARNING "RGA library not found - RGA acceleration disabled for native build")
+    set(HAVE_RGA FALSE)
+    set(RGA_LIB "")
+  endif()
+else()
+  # Cross-compile - use SDK sysroot
+  set(RGA_LIB ${OECORE_TARGET_SYSROOT}/usr/lib/librga.so)
+  set(HAVE_RGA TRUE)
+endif()
 
 # turbojpeg
 # set(TURBOJPEG_PATH ${CMAKE_SOURCE_DIR}/include/3rdparty/turbojpeg/lib/Linux/aarch64)
@@ -102,7 +122,15 @@ include_directories(${RGA_PATH}/include)
 # opencv
 if(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
   find_package(OpenCV REQUIRED)
-  find_package(TurboJPEG REQUIRED)
+
+  # TurboJPEG - Ubuntu doesn't provide CMake config, find manually
+  find_path(TURBOJPEG_INCLUDE_DIR turbojpeg.h)
+  find_library(TURBOJPEG_LIB turbojpeg)
+  if(NOT TURBOJPEG_INCLUDE_DIR OR NOT TURBOJPEG_LIB)
+    message(FATAL_ERROR "TurboJPEG not found. Install with: sudo apt install libturbojpeg0-dev")
+  endif()
+  include_directories(${TURBOJPEG_INCLUDE_DIR})
+  message(STATUS "Found TurboJPEG: ${TURBOJPEG_LIB}")
 else()
   message(STATUS "OECORE_TARGET_SYSROOT: ${OECORE_TARGET_SYSROOT}")
   include_directories(${OECORE_TARGET_SYSROOT}/usr/include)
@@ -206,6 +234,7 @@ add_executable(attention_demo
         src/output/annotator.cpp
         src/output/async_publisher.cpp
         src/output/brightsign_v3_publisher.cpp
+        src/output/face_blur.cpp
         src/output/file_sinks.cpp
         src/output/frame_writer.cpp
         src/output/mqtt_broker.cpp
@@ -333,20 +362,44 @@ add_custom_target(image_stream_server ALL
   VERBATIM
 )
 
-# Copy shared libs and models. Copy the Go binary only if it exists.
-add_custom_command(TARGET attention_demo POST_BUILD
-  COMMAND ${CMAKE_COMMAND} -E copy ${RKNN_RT_LIB} $<TARGET_FILE_DIR:attention_demo>
-  COMMAND ${CMAKE_COMMAND} -E copy ${RGA_LIB} $<TARGET_FILE_DIR:attention_demo>
-  COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/install/${SOC_DIR}/model $<TARGET_FILE_DIR:attention_demo>/model
-  COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_BINARY_DIR}/image-stream-server $<TARGET_FILE_DIR:attention_demo>/image-stream-server || ${CMAKE_COMMAND} -E true
-  COMMENT "Copying libraries and binaries to build directory"
+# Clone and build the argus-exporter (Prometheus metrics exporter)
+set(ARGUS_EXPORTER_DIR "${CMAKE_BINARY_DIR}/argus-exporter-repo")
+set(ARGUS_EXPORTER_BINARY "${ARGUS_EXPORTER_DIR}/argus-exporter-arm64")
+
+add_custom_target(argus_exporter ALL
+  COMMAND ${CMAKE_COMMAND} -E echo "Cloning and building argus-exporter (auto toolchain if needed)..."
+  COMMAND bash ${CMAKE_SOURCE_DIR}/scripts/build_argus_exporter.sh ${ARGUS_EXPORTER_DIR} ${ARGUS_EXPORTER_BINARY} ${CMAKE_BINARY_DIR}
+  WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+  COMMENT "Cloning and building argus-exporter"
+  VERBATIM
 )
+
+# Copy shared libs and models. Copy the Go binary only if it exists.
+if(HAVE_RGA)
+  add_custom_command(TARGET attention_demo POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy ${RKNN_RT_LIB} $<TARGET_FILE_DIR:attention_demo>
+    COMMAND ${CMAKE_COMMAND} -E copy ${RGA_LIB} $<TARGET_FILE_DIR:attention_demo>
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/install/${SOC_DIR}/model $<TARGET_FILE_DIR:attention_demo>/model
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_BINARY_DIR}/image-stream-server $<TARGET_FILE_DIR:attention_demo>/image-stream-server || ${CMAKE_COMMAND} -E true
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_BINARY_DIR}/argus-exporter $<TARGET_FILE_DIR:attention_demo>/argus-exporter || ${CMAKE_COMMAND} -E true
+  COMMENT "Copying libraries and binaries to build directory"
+  )
+else()
+  add_custom_command(TARGET attention_demo POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy ${RKNN_RT_LIB} $<TARGET_FILE_DIR:attention_demo>
+    COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/install/${SOC_DIR}/model $<TARGET_FILE_DIR:attention_demo>/model
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_BINARY_DIR}/image-stream-server $<TARGET_FILE_DIR:attention_demo>/image-stream-server || ${CMAKE_COMMAND} -E true
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_BINARY_DIR}/argus-exporter $<TARGET_FILE_DIR:attention_demo>/argus-exporter || ${CMAKE_COMMAND} -E true
+  COMMENT "Copying libraries and binaries to build directory (no RGA)"
+  )
+endif()
 
 # Ensure order only if those targets exist
 if(TARGET mosquitto_broker)
   add_dependencies(attention_demo mosquitto_broker)
 endif()
 add_dependencies(attention_demo image_stream_server)
+add_dependencies(attention_demo argus_exporter)
 
 # install target and libraries
 set(CMAKE_INSTALL_PREFIX ${CMAKE_SOURCE_DIR}/install/${SOC_DIR})
@@ -360,8 +413,16 @@ install(FILES ${CMAKE_BINARY_DIR}/image-stream-server
                    WORLD_READ WORLD_EXECUTE
         OPTIONAL)
 
-# Install config.json to the install directory
-install(FILES ${CMAKE_SOURCE_DIR}/configs/config.json
+# Install the argus-exporter binary
+install(FILES ${CMAKE_BINARY_DIR}/argus-exporter
+        DESTINATION ./
+        PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE
+                   GROUP_READ GROUP_EXECUTE
+                   WORLD_READ WORLD_EXECUTE
+        OPTIONAL)
+
+# Install argus-config.json to the install directory
+install(FILES ${CMAKE_SOURCE_DIR}/configs/argus-config.json
         DESTINATION ./configs
         PERMISSIONS OWNER_READ OWNER_WRITE
                    GROUP_READ
@@ -418,10 +479,14 @@ install(CODE "
     # Copy RKNN runtime library
     execute_process(COMMAND cp -L ${RKNN_RT_LIB} \${CMAKE_INSTALL_PREFIX}/lib/)
     
-    # Copy RGA library and its versioned counterparts
-    execute_process(
-        COMMAND bash -c \"find $(dirname ${RGA_LIB}) -name 'librga.so*' -type f -o -type l | xargs -I{} cp -L {} \${CMAKE_INSTALL_PREFIX}/lib/\"
-    )
+    # Copy RGA library and its versioned counterparts (only if available)
+    if(\"${RGA_LIB}\" STREQUAL \"\")
+      message(STATUS \"Skipping RGA library copy - not available\")
+    else()
+      execute_process(
+          COMMAND bash -c \"find $(dirname ${RGA_LIB}) -name 'librga.so*' -type f -o -type l | xargs -I{} cp -L {} \${CMAKE_INSTALL_PREFIX}/lib/\"
+      )
+    endif()
     
     # Copy TurboJPEG library and its versioned counterparts
     execute_process(
@@ -483,20 +548,38 @@ install(CODE "
   # CRITICAL: Add essential plugins missing from ext-bundle-payload
   # 1. libgstcoreelements.so (contains queue plugin)
   # 2. libgstlibav.so (contains avdec_h264 decoder)
+  # 3. libgstisomp4.so (contains qtdemux for MP4/MOV demuxing)
+  # 4. libgstplayback.so (contains decodebin/uridecodebin)
   set(_coreelements_path \"${OECORE_TARGET_SYSROOT_ABS}/usr/lib/gstreamer-1.0/libgstcoreelements.so\")
   set(_libav_path \"${OECORE_TARGET_SYSROOT_ABS}/usr/lib/gstreamer-1.0/libgstlibav.so\")
-  
+  set(_isomp4_path \"${OECORE_TARGET_SYSROOT_ABS}/usr/lib/gstreamer-1.0/libgstisomp4.so\")
+  set(_playback_path \"${OECORE_TARGET_SYSROOT_ABS}/usr/lib/gstreamer-1.0/libgstplayback.so\")
+
   if(EXISTS \${_coreelements_path})
     execute_process(COMMAND cp -L \${_coreelements_path} \${CMAKE_INSTALL_PREFIX}/lib/gstreamer-1.0/)
     message(STATUS \"Added libgstcoreelements.so (queue plugin) to GStreamer bundle\")
   else()
     message(WARNING \"libgstcoreelements.so not found in SDK - queue plugin will be missing!\")
   endif()
-  
+
   if(EXISTS \${_libav_path})
     execute_process(COMMAND cp -L \${_libav_path} \${CMAKE_INSTALL_PREFIX}/lib/gstreamer-1.0/)
     message(STATUS \"Added libgstlibav.so (avdec_h264 decoder) to GStreamer bundle\")
   else()
     message(WARNING \"libgstlibav.so not found in SDK - H.264 software decoder will be missing!\")
+  endif()
+
+  if(EXISTS \${_isomp4_path})
+    execute_process(COMMAND cp -L \${_isomp4_path} \${CMAKE_INSTALL_PREFIX}/lib/gstreamer-1.0/)
+    message(STATUS \"Added libgstisomp4.so (qtdemux for MP4/MOV) to GStreamer bundle\")
+  else()
+    message(WARNING \"libgstisomp4.so not found in SDK - MP4/MOV demuxing will be missing!\")
+  endif()
+
+  if(EXISTS \${_playback_path})
+    execute_process(COMMAND cp -L \${_playback_path} \${CMAKE_INSTALL_PREFIX}/lib/gstreamer-1.0/)
+    message(STATUS \"Added libgstplayback.so (decodebin/uridecodebin) to GStreamer bundle\")
+  else()
+    message(WARNING \"libgstplayback.so not found in SDK - decodebin will be missing!\")
   endif()
 ")

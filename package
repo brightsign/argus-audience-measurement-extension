@@ -262,6 +262,14 @@ copy_binaries() {
             warn "image-stream-server not found in $source_dir"
         fi
 
+        # Copy argus-exporter binary (Prometheus metrics exporter)
+        if [[ -f "$source_dir/argus-exporter" ]]; then
+            cp "$source_dir/argus-exporter" "$package_soc_dir/"
+            chmod +x "$package_soc_dir/argus-exporter"
+        else
+            warn "argus-exporter not found in $source_dir"
+        fi
+
         # Copy mosquitto broker binary and utilities
         mkdir -p "$package_soc_dir/bin"
         if [[ -f "$install_dir/bin/mosquitto" ]]; then
@@ -368,26 +376,40 @@ copy_configs() {
         if [[ -n "$SPECIFIC_SOC" && "$SPECIFIC_SOC" != "$soc" ]]; then
             continue
         fi
-        
+
         local platform="${SOC_PLATFORMS[$soc]}"
         local install_dir="install/$soc"
         local package_soc_dir="staging/$soc"
-        
+
         log "Copying $soc ($platform) configs from $install_dir..."
-        
+
         if [[ ! -d "$install_dir/configs" ]]; then
             warn "Config directory $install_dir/configs not found, skipping $soc configs"
             continue
         fi
 
         mkdir -p "$package_soc_dir/configs"
-        
+
         # Copy all config files
         cp -r "$install_dir/configs"/* "$package_soc_dir/configs/"
         log "Copied configs for $soc"
 
         success "$soc configs copied"
     done
+}
+
+# Copy shared configs (dashboards, etc.) to extension root
+copy_shared_configs() {
+    log "Copying shared configuration files..."
+
+    # Copy dashboards directory for Grafana auto-provisioning
+    if [[ -d "configs/dashboards" ]]; then
+        mkdir -p "staging/configs/dashboards"
+        cp -r configs/dashboards/* "staging/configs/dashboards/"
+        success "Dashboards copied to staging/configs/dashboards/"
+    else
+        warn "No dashboards directory found at configs/dashboards"
+    fi
 }
 
 # Generate manifest.json from manifest-config.json
@@ -680,11 +702,13 @@ create_extension_package() {
 
     echo ""
     echo "Extension Package Usage:"
-    echo "1. Transfer $EXTENSION_PACKAGE to player via DWS"
-    echo "2. On player: mkdir -p /usr/local && cd /usr/local"
-    echo "3. On player: unzip /storage/sd/$EXTENSION_PACKAGE"
-    echo "4. On player: bash ./ext_npu_argus_install-lvm.sh"
-    echo "5. On player: reboot"
+    echo "1. scp $EXTENSION_PACKAGE root@<player-ip>:/storage/sd/"
+    echo "2. On player: cd /usr/local"
+    echo "3. On player: mv /storage/sd/$EXTENSION_PACKAGE /usr/local/"
+    echo "4. On player: unzip $EXTENSION_PACKAGE"
+    echo "5. On player: /var/volatile/bsext/ext_npu_argus/bsext_init stop"
+    echo "6. On player: bash ./ext_npu_argus_install-lvm.sh"
+    echo "7. On player: reboot"
     echo "Note: Extension installation is permanent (persists across reboots)"
 }
 
@@ -745,6 +769,7 @@ main() {
     copy_binaries
     copy_models
     copy_configs
+    copy_shared_configs
     generate_manifest
     copy_extension_scripts
     echo ""

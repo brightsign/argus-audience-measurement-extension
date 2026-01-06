@@ -22,6 +22,7 @@ DAEMON_NAME="bsext-argus"
 PIDFILE="/var/run/${DAEMON_NAME}.pid"
 STREAM_SERVER_PIDFILE="/var/run/bsext-image-stream-server.pid"
 MQTT_BROKER_PIDFILE="/var/run/bsext-mosquitto.pid"
+ARGUS_EXPORTER_PIDFILE="/var/run/bsext-argus-exporter.pid"
 
 # defaults -- these can be overridden by environment variables
 DISABLE_AUTO_START=false
@@ -177,10 +178,10 @@ run_stream_server() {
     local background=$1
     local port=$2
     echo "run_stream_server called with port=${port}"
-    
+
     SOC_NAME=$(get_soc_name)
     SOC_HOME=${SCRIPT_PATH}/${SOC_NAME}
-    
+
     if [ "$background" = "true" ]; then
         # Run as a daemon in the background
         echo "start-stop daemon =${SOC_HOME}/image-stream-server"
@@ -189,6 +190,24 @@ run_stream_server() {
     else
         # Run directly in foreground
         ${SOC_HOME}/image-stream-server -port ${port}
+    fi
+}
+
+run_argus_exporter() {
+    echo "run_argus_exporter called with background=$1"
+    local background=$1
+
+    SOC_NAME=$(get_soc_name)
+    SOC_HOME=${SCRIPT_PATH}/${SOC_NAME}
+
+    if [ "$background" = "true" ]; then
+        # Run as a daemon in the background
+        echo "Starting argus-exporter (will use default config search paths)"
+        start-stop-daemon --start --background --make-pidfile --pidfile ${ARGUS_EXPORTER_PIDFILE} \
+                          --exec ${SOC_HOME}/argus-exporter
+    else
+        # Run directly in foreground
+        ${SOC_HOME}/argus-exporter
     fi
 }
 
@@ -253,6 +272,39 @@ setup_gstreamer_env() {
     echo "  MQTT utilities available in: /var/volatile/bsext/ext_npu_argus/$SOC_NAME/bin/"
 }
 
+# Setup Argus dashboard for Grafana auto-provisioning
+# This ensures the Argus People Analytics dashboard is automatically installed
+# when the prometheus-grafana-extension is also present
+setup_argus_dashboard() {
+    echo "Setting up Argus Grafana dashboard..."
+
+    # Source dashboard location in this extension
+    local SRC_DASHBOARD="${SCRIPT_PATH}/configs/dashboards/argus-analytics.json"
+
+    # Check if source file exists
+    if [ ! -f "${SRC_DASHBOARD}" ]; then
+        echo "  WARNING: Dashboard file not found: ${SRC_DASHBOARD}"
+        return 1
+    fi
+
+    # Target: prometheus-grafana-extension's dashboard directory
+    # This directory is watched by the existing 'BrightSign' provisioner with updateIntervalSeconds: 30
+    # Grafana will automatically pick up new JSON files without needing a restart
+    local PROMGRAF_DASHBOARDS="/var/volatile/bsext/ext_promgraf/configs/dashboards"
+
+    # Check if prometheus-grafana-extension is installed
+    if [ -d "${PROMGRAF_DASHBOARDS}" ]; then
+        cp "${SRC_DASHBOARD}" "${PROMGRAF_DASHBOARDS}/" 2>/dev/null && \
+            echo "  Installed: ${PROMGRAF_DASHBOARDS}/argus-analytics.json" && \
+            echo "  Dashboard will appear in Grafana within 30 seconds" || \
+            echo "  WARNING: Could not copy dashboard file"
+    else
+        echo "  prometheus-grafana-extension not found at ${PROMGRAF_DASHBOARDS}"
+        echo "  Argus dashboard will not be auto-installed"
+        echo "  Install prometheus-grafana-extension first, then restart this extension"
+    fi
+}
+
 do_start() {
     # check registry for auto-start
     reg_disable_auto_start=$(registry extension ${DAEMON_NAME}-disable-auto-start)
@@ -283,12 +335,20 @@ do_start() {
         pkill -9 -f "mosquitto.*bsext" 2>/dev/null || true
         sleep 1
     fi
-    
+    if pgrep -f "argus-exporter" >/dev/null 2>&1; then
+        echo "  Found existing argus-exporter process, killing it..."
+        pkill -9 -f "argus-exporter" 2>/dev/null || true
+        sleep 1
+    fi
+
     # Clean up stale PID files
-    rm -f ${PIDFILE} ${STREAM_SERVER_PIDFILE} ${MQTT_BROKER_PIDFILE} 2>/dev/null || true
+    rm -f ${PIDFILE} ${STREAM_SERVER_PIDFILE} ${MQTT_BROKER_PIDFILE} ${ARGUS_EXPORTER_PIDFILE} 2>/dev/null || true
 
     SOC_NAME=$(get_soc_name)
     setup_gstreamer_env
+
+    # Setup Argus dashboard for Grafana (if prometheus-grafana-extension is present)
+    setup_argus_dashboard
 
     # Start MQTT broker first (so it's ready when attention_demo starts)
     MQTT_PORT=1883  # default MQTT port
@@ -316,57 +376,83 @@ do_start() {
 
     if [ "${STREAM_SERVER_PORT}" = "0" ]; then
         echo "Image stream server is disabled (port set to 0)"
-        return
+    else
+        # Start the image stream server process as a daemon
+        run_stream_server true ${STREAM_SERVER_PORT}
     fi
 
-    # Start the image stream server process as a daemon
-    run_stream_server true ${STREAM_SERVER_PORT}
+    # Start argus-exporter (Prometheus metrics exporter)
+    # Check if disabled via registry (set port to 0 to disable)
+    reg_exporter_disabled=$(registry networking bs-argus-exporter-port)
+    if [ "${reg_exporter_disabled}" = "0" ]; then
+        echo "Argus exporter is disabled (registry bs-argus-exporter-port=0)"
+    else
+        echo "Starting argus-exporter..."
+        run_argus_exporter true
+    fi
 }
 
 do_stop() {
     echo "Stopping ${DAEMON_NAME} services..."
     
-    # Stop attention_demo (try current name, then legacy name)
-    local stopped_demo=false
+    # Stop attention_demo - use multiple methods to ensure it's killed
+    echo "Stopping attention_demo..."
+    
+    # Method 1: Try PID file first (current name)
     if [ -f "${PIDFILE}" ]; then
-        echo "Stopping attention_demo (PID file: ${PIDFILE})"
+        echo "  Killing by PID file: ${PIDFILE}"
         local pid=$(cat ${PIDFILE} 2>/dev/null)
         if [ -n "$pid" ]; then
-            echo "Killing process $pid with SIGKILL..."
+            echo "  Killing process $pid (from PID file)..."
             kill -9 $pid 2>/dev/null || true
             # Also kill any child processes
             pkill -9 -P $pid 2>/dev/null || true
         fi
         rm -f ${PIDFILE}
-        stopped_demo=true
     fi
     
-    # Also check for legacy bsext-gaze.pid
+    # Method 2: Check for legacy PID file
     if [ -f "/var/run/bsext-gaze.pid" ]; then
-        echo "Stopping attention_demo (legacy PID file: /var/run/bsext-gaze.pid)"
+        echo "  Killing by legacy PID file: /var/run/bsext-gaze.pid"
         local pid=$(cat /var/run/bsext-gaze.pid 2>/dev/null)
         if [ -n "$pid" ]; then
-            echo "Killing process $pid with SIGKILL..."
+            echo "  Killing process $pid (from legacy PID file)..."
             kill -9 $pid 2>/dev/null || true
-            # Also kill any child processes
             pkill -9 -P $pid 2>/dev/null || true
         fi
         rm -f /var/run/bsext-gaze.pid
-        stopped_demo=true
     fi
     
-    if [ "$stopped_demo" = "false" ]; then
-        echo "No PID file found for attention_demo, trying to kill by name..."
-        pkill -9 -f "attention_demo" || true
-    fi
+    # Method 3: Kill ALL attention_demo processes by name (handles multiple instances)
+    echo "  Killing all attention_demo processes by name..."
+    pkill -9 -f "attention_demo" 2>/dev/null || true
+    killall -9 attention_demo 2>/dev/null || true
     
-    # Give it a moment and verify it's actually stopped
-    sleep 1
-    if pgrep -f "attention_demo" >/dev/null 2>&1; then
-        echo "WARNING: attention_demo still running, forcing kill by name..."
-        pkill -9 -f "attention_demo" || true
+    # Method 4: Extra thorough - find and kill by exact path
+    ps | grep "attention_demo" | grep -v grep | awk '{print $1}' | xargs -r kill -9 2>/dev/null || true
+    
+    # Wait and verify it's stopped (with retry loop)
+    local retry_count=0
+    local max_retries=3
+    while [ $retry_count -lt $max_retries ]; do
         sleep 1
-    fi
+        if ! pgrep -f "attention_demo" >/dev/null 2>&1; then
+            echo "  attention_demo stopped successfully"
+            break
+        fi
+        
+        retry_count=$((retry_count + 1))
+        if [ $retry_count -lt $max_retries ]; then
+            echo "  WARNING: attention_demo still running (attempt $retry_count/$max_retries), retrying..."
+            pkill -9 -f "attention_demo" 2>/dev/null || true
+            killall -9 attention_demo 2>/dev/null || true
+            ps | grep "attention_demo" | grep -v grep | awk '{print $1}' | xargs -r kill -9 2>/dev/null || true
+        else
+            echo "  ERROR: Failed to stop attention_demo after $max_retries attempts!"
+            echo "  Showing remaining processes:"
+            ps | grep "attention_demo" | grep -v grep || true
+        fi
+    done
 
     # Stop image-stream-server (ALWAYS kill by name to handle all instances)
     echo "Stopping image-stream-server..."
@@ -407,6 +493,22 @@ do_stop() {
     else
         echo "  image-stream-server stopped successfully"
     fi
+
+    # Stop argus-exporter
+    echo "Stopping argus-exporter..."
+    pkill -9 -f "argus-exporter" 2>/dev/null || true
+    killall -9 argus-exporter 2>/dev/null || true
+
+    if [ -f "${ARGUS_EXPORTER_PIDFILE}" ]; then
+        local pid=$(cat ${ARGUS_EXPORTER_PIDFILE} 2>/dev/null)
+        if [ -n "$pid" ]; then
+            echo "  Also killing PID $pid from PID file..."
+            kill -9 $pid 2>/dev/null || true
+            pkill -9 -P $pid 2>/dev/null || true
+        fi
+        rm -f ${ARGUS_EXPORTER_PIDFILE}
+    fi
+    echo "  argus-exporter stopped"
 
     # Stop mosquitto broker
     if [ -f "${MQTT_BROKER_PIDFILE}" ]; then

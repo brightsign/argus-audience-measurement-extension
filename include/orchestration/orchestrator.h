@@ -39,7 +39,10 @@ struct PipelineConfig {
   std::string output_dir;           // Directory for decorated frames
   int max_frames = 0;               // Max frames to keep (0 = no limit)
   int frame_quality = 85;           // JPEG quality (1-100)
-  
+
+  // Face blur options (for privacy in output frames)
+  output::BlurConfig blur_config;   // Blur configuration
+
   // Publishers configuration
   std::vector<PublisherConfig> publishers; // MQTT, UDP, File publishers
 };

@@ -1,20 +1,20 @@
 #!/bin/bash
 set -euo pipefail
 
-IMAGE_STREAM_SERVER_DIR="$1"
-IMAGE_STREAM_SERVER_BINARY="$2"
+ARGUS_EXPORTER_DIR="$1"
+ARGUS_EXPORTER_BINARY="$2"
 CMAKE_BINARY_DIR="$3"
 
 # Commit tracking file for incremental builds
-COMMIT_FILE="$CMAKE_BINARY_DIR/.image-stream-server-commit"
+COMMIT_FILE="$CMAKE_BINARY_DIR/.argus-exporter-commit"
 
 clone_or_update() {
-  if [ ! -d "$IMAGE_STREAM_SERVER_DIR" ]; then
-    echo 'Cloning bs-image-stream-server...'
-    git clone --depth=1 https://github.com/brightsign/bs-image-stream-server.git "$IMAGE_STREAM_SERVER_DIR"
+  if [ ! -d "$ARGUS_EXPORTER_DIR" ]; then
+    echo 'Cloning argus-exporter...'
+    git clone git@github.com:BrightSign-Playground/argus-exporter.git "$ARGUS_EXPORTER_DIR"
   elif [ "${FORCE_UPDATE:-0}" = "1" ]; then
     echo 'FORCE_UPDATE set, pulling latest...'
-    git -C "$IMAGE_STREAM_SERVER_DIR" pull --rebase --autostash origin main || true
+    git -C "$ARGUS_EXPORTER_DIR" pull --rebase --autostash origin main || true
   else
     echo 'Repository exists, skipping git pull (set FORCE_UPDATE=1 to update)'
   fi
@@ -23,17 +23,17 @@ clone_or_update() {
 # Check if build can be skipped (binary exists and commit unchanged)
 skip_if_unchanged() {
   local current_commit
-  current_commit=$(git -C "$IMAGE_STREAM_SERVER_DIR" rev-parse HEAD 2>/dev/null || echo "")
+  current_commit=$(git -C "$ARGUS_EXPORTER_DIR" rev-parse HEAD 2>/dev/null || echo "")
 
   if [ -z "$current_commit" ]; then
     return 1  # Can't determine commit, rebuild
   fi
 
-  if [ -f "$COMMIT_FILE" ] && [ -f "$CMAKE_BINARY_DIR/image-stream-server" ]; then
+  if [ -f "$COMMIT_FILE" ] && [ -f "$CMAKE_BINARY_DIR/argus-exporter" ]; then
     local last_commit
     last_commit=$(cat "$COMMIT_FILE")
     if [ "$last_commit" = "$current_commit" ]; then
-      echo "[image-stream-server] No changes since last build (commit ${current_commit:0:8}), skipping..."
+      echo "[argus-exporter] No changes since last build (commit ${current_commit:0:8}), skipping..."
       return 0  # Skip build
     fi
   fi
@@ -43,10 +43,10 @@ skip_if_unchanged() {
 # Save commit hash after successful build
 save_commit() {
   local current_commit
-  current_commit=$(git -C "$IMAGE_STREAM_SERVER_DIR" rev-parse HEAD 2>/dev/null || echo "")
+  current_commit=$(git -C "$ARGUS_EXPORTER_DIR" rev-parse HEAD 2>/dev/null || echo "")
   if [ -n "$current_commit" ]; then
     echo "$current_commit" > "$COMMIT_FILE"
-    echo "[image-stream-server] Saved build commit: ${current_commit:0:8}"
+    echo "[argus-exporter] Saved build commit: ${current_commit:0:8}"
   fi
 }
 
@@ -67,7 +67,7 @@ main() {
     exit 0
   fi
 
-  cd "$IMAGE_STREAM_SERVER_DIR"
+  cd "$ARGUS_EXPORTER_DIR"
 
   # Local go version (full & X.Y)
   GO_BIN="$(command -v go)"
@@ -116,17 +116,20 @@ main() {
   echo "Running go mod tidy..."
   "$GO_BIN" mod tidy
 
-  echo 'Building image stream server for arm64...'
+  echo 'Building argus-exporter for arm64...'
   echo "PWD: $(pwd)"
-  make build-arm64
 
-  if [ -f "$IMAGE_STREAM_SERVER_BINARY" ]; then
+  # Build from cmd/argus-exporter (standard Go project layout)
+  # Output to repo root as argus-exporter-arm64
+  GOOS=linux GOARCH=arm64 CGO_ENABLED=0 "$GO_BIN" build -o argus-exporter-arm64 ./cmd/argus-exporter
+
+  if [ -f "$ARGUS_EXPORTER_BINARY" ]; then
     echo 'Build completed; copying binary...'
-    cp "$IMAGE_STREAM_SERVER_BINARY" "$CMAKE_BINARY_DIR/image-stream-server"
+    cp "$ARGUS_EXPORTER_BINARY" "$CMAKE_BINARY_DIR/argus-exporter"
     # Save commit hash for future incremental build checks
     save_commit
   else
-    echo "Build failed - binary not found at $IMAGE_STREAM_SERVER_BINARY"
+    echo "Build failed - binary not found at $ARGUS_EXPORTER_BINARY"
     exit 1
   fi
 }

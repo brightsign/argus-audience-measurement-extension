@@ -281,6 +281,8 @@ static void draw_yolo_detections(
 
     int person_count = 0;
     static int debug_draw_count = 0;
+    const float min_confidence = 0.5f;  // Match orchestrator threshold
+
     for (int i = 0; i < det_count; ++i) {
         const auto& det = dets[i];
 
@@ -289,6 +291,14 @@ static void draw_yolo_detections(
         if (det.class_id != 0) {
             if (debug_draw_count < 3 && i < 3) {
                 LG_INFO("[VIS] Skipping Det#%d: class=%d (not person)", i, det.class_id);
+            }
+            continue;
+        }
+
+        // Skip low-confidence detections (shadows, false positives)
+        if (det.score < min_confidence) {
+            if (debug_draw_count < 3) {
+                LG_INFO("[VIS] Skipping Det#%d: score=%.2f below threshold %.2f", i, det.score, min_confidence);
             }
             continue;
         }

@@ -299,9 +299,10 @@ bool Orchestrator::build_pipeline() noexcept {
       LG_INFO("[orch] Face frame writer DISABLED (YOLOX worker draws combined output)\n");
       
       // V6.2.3.5.7: YOLOX writer enabled - draws both face + person detections
-      frame_writer_yolo_ = make_frame_writer_disk(cfg_.output_dir, cfg_.max_frames, cfg_.frame_quality);
-      LG_INFO("[orch] YOLO frame writer enabled: output_dir=%s max_frames=%d quality=%d\n",
-              cfg_.output_dir.c_str(), cfg_.max_frames, cfg_.frame_quality);
+      frame_writer_yolo_ = make_frame_writer_disk(cfg_.output_dir, cfg_.max_frames, cfg_.frame_quality, cfg_.blur_config);
+      LG_INFO("[orch] YOLO frame writer enabled: output_dir=%s max_frames=%d quality=%d blur=%s\n",
+              cfg_.output_dir.c_str(), cfg_.max_frames, cfg_.frame_quality,
+              cfg_.blur_config.enabled ? "enabled" : "disabled");
     } catch (const std::exception& e) {
       LG_WARN("[orch] Failed to create frame writers: %s (will continue without output)\n", e.what());
       frame_writer_face_.reset();

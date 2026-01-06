@@ -220,9 +220,13 @@ bool FileInputSource::open() noexcept {
     
     if (demuxer_hint == "mpegts" && tsdemux_avail && filesrc_avail && videoconvert_avail && appsink_avail) {
       LG_INFO("FileInputSource: detected MPEG-TS, trying tsdemux");
-      
+
       // Try codec-specific pipelines for MPEG-TS
-      if (preferred_codec == "h264" && h264parse_avail) {
+      // If codec detected, try that first; otherwise try all supported codecs
+      bool try_h264 = (preferred_codec == "h264" || preferred_codec.empty());
+      bool try_h265 = (preferred_codec == "h265" || preferred_codec.empty());
+
+      if (try_h264 && h264parse_avail) {
         if (mppvideodec_avail) {
           std::string pipe = "filesrc location=\"" + file + "\" ! tsdemux ! "
                             "h264parse ! mppvideodec" + bgr_tail();
@@ -234,7 +238,7 @@ bool FileInputSource::open() noexcept {
           if (try_gst_pipeline(pipe, "MPEG-TS H.264 SW")) goto opened_ok;
         }
       }
-      if (preferred_codec == "h265" && h265parse_avail) {
+      if (try_h265 && h265parse_avail) {
         if (mppvideodec_avail) {
           std::string pipe = "filesrc location=\"" + file + "\" ! tsdemux ! "
                             "h265parse ! mppvideodec" + bgr_tail();
