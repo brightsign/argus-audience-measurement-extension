@@ -295,6 +295,7 @@ done
 # STEP 0: Setup
 step0_setup() {
     print_header "STEP 0: Setup"
+    print_status "DEBUG: Entering step0_setup"
     
     prompt_continue "This will:
 - Check container runtime (Docker or Podman)
@@ -303,6 +304,7 @@ step0_setup() {
 - Provide instructions for unsecuring the player"
 
     # Check container runtime (docker or podman)
+    print_status "DEBUG: Detecting container runtime..."
     detect_container_runtime
 
     # Check other required tools
@@ -419,6 +421,7 @@ step0_setup() {
     fi
 
     print_status "Step 0 completed successfully!"
+    print_status "DEBUG: Exiting step0_setup successfully"
     
     print_warning "MANUAL STEP REQUIRED: You need to unsecure your BrightSign player"
     print_warning "Follow the instructions in the README.md under 'Unsecure the Player'"
@@ -428,6 +431,7 @@ step0_setup() {
 # STEP 1: Compile ONNX Models
 step1_compile_models() {
     print_header "STEP 1: Compile ONNX Models for Rockchip NPU"
+    print_status "DEBUG: Entering step1_compile_models"
     
     prompt_continue "This will:
 - Build Docker container for model compilation
@@ -435,6 +439,7 @@ step1_compile_models() {
 - Download and compile YOLOX models (all platforms)"
 
     cd "$project_root"
+    print_status "DEBUG: Changed to project root: $project_root"
     
     # Use the compile-models script for all model compilation
     if [ -f "./compile-models" ]; then
@@ -455,11 +460,13 @@ step1_compile_models() {
     fi
 
     print_status "Step 1 completed successfully!"
+    print_status "DEBUG: Exiting step1_compile_models successfully"
 }
 
 # STEP 3: Build and Test on XT5
 step3_build_xt5() {
     print_header "STEP 3: Build and Test"
+    print_status "DEBUG: Entering step3_build_xt5"
     
     prompt_continue "This will:
 - Build application for XT5 (RK3588)
@@ -468,8 +475,10 @@ step3_build_xt5() {
 - Install binaries and libraries to install directory"
 
     cd "$project_root"
+    print_status "DEBUG: Changed to project root: $project_root"
     
     # Source the SDK environment
+    print_status "DEBUG: Sourcing SDK environment..."
     source ./sdk/environment-setup-aarch64-oe-linux
 
     # Build for XT5 (RK3588)
@@ -506,11 +515,13 @@ step3_build_xt5() {
     cd "$project_root"
 
     print_status "Step 3 completed successfully!"
+    print_status "DEBUG: Exiting step3_build_xt5 successfully"
 }
 
 # STEP 3b: Build GStreamer plugins for MP4 support (optional)
 step3b_build_gstreamer_plugins() {
     print_header "STEP 3b: Build GStreamer Plugins (MP4 Support)"
+    print_status "DEBUG: Entering step3b_build_gstreamer_plugins"
 
     prompt_continue "This will:
 - Build libgstisomp4.so (qtdemux for MP4/MOV demuxing)
@@ -519,22 +530,33 @@ step3b_build_gstreamer_plugins() {
 Note: This step is optional - only needed for MP4 file input support"
 
     cd "$project_root"
+    print_status "DEBUG: Changed to project root: $project_root"
 
     if [ -f "./scripts/build-gst-isomp4-plugin.sh" ]; then
         chmod +x ./scripts/build-gst-isomp4-plugin.sh
         print_status "Building GStreamer plugins for MP4 support..."
-        ./scripts/build-gst-isomp4-plugin.sh
+        print_status "DEBUG: Executing ./scripts/build-gst-isomp4-plugin.sh"
+        # Run with || true to prevent set -e from stopping on errors (this step is optional)
+        ./scripts/build-gst-isomp4-plugin.sh || true
+        local exit_code=$?
+        print_status "DEBUG: build-gst-isomp4-plugin.sh exit code: $exit_code"
+        if [ $exit_code -ne 0 ]; then
+            print_warning "GStreamer plugin build returned non-zero exit code: $exit_code"
+            print_warning "This is optional - continuing anyway"
+        fi
     else
         print_warning "build-gst-isomp4-plugin.sh not found - skipping"
         print_warning "MP4 file input will not be supported"
     fi
 
     print_status "Step 3b completed!"
+    print_status "DEBUG: Exiting step3b_build_gstreamer_plugins successfully"
 }
 
 # STEP 4: Package the Extension
 step4_package() {
     print_header "STEP 4: Package the Extension"
+    print_status "DEBUG: Entering step4_package"
 
     prompt_continue "This will:
 - Use package script to create packages
@@ -542,25 +564,39 @@ step4_package() {
 - Create production extension package (argus-ext)"
 
     cd "$project_root"
+    print_status "DEBUG: Changed to project root: $project_root"
     
     # Use the package script which handles everything correctly
     if [ -f "./package" ]; then
         chmod +x ./package
         print_status "Running package script..."
+        print_status "DEBUG: Executing ./package"
         ./package
+        local exit_code=$?
+        print_status "DEBUG: package script exit code: $exit_code"
+        if [ $exit_code -ne 0 ]; then
+            print_error "Package script failed with exit code: $exit_code"
+            return 1
+        fi
     else
         print_error "package script not found!"
         return 1
     fi
     
     print_status "Step 4 completed successfully!"
+    print_status "DEBUG: Exiting step4_package successfully"
     print_status "Development package: argus-dev-*.zip"
     print_status "Production extension: argus-ext-*.zip"
+    
+    # List the created packages for verification
+    print_status "DEBUG: Listing created packages:"
+    ls -lh argus-*.zip 2>/dev/null || print_warning "No argus-*.zip files found!"
 }
 
 # Main execution
 main() {
     print_header "BrightSign NPU Argus Extension - Complete Build"
+    print_status "DEBUG: Script started with arguments: $@"
     
     if [ "$AUTO_MODE" = true ]; then
         print_status "Running in automatic mode - no prompts"
@@ -569,6 +605,7 @@ main() {
     fi
     
     print_status "Project root: $PROJECT_ROOT"
+    print_status "DEBUG: Starting main build sequence"
     
     # Check architecture
     if [ "$(uname -m)" != "x86_64" ] && [ "$SKIP_ARCH_CHECK" != true ]; then
@@ -581,17 +618,31 @@ main() {
     fi
     
     # Execute steps
+    print_status "DEBUG: About to execute step0_setup"
     step0_setup
+    print_status "DEBUG: step0_setup completed, moving to step1_compile_models"
+    
     step1_compile_models
+    print_status "DEBUG: step1_compile_models completed, moving to step3_build_xt5"
+    
     step3_build_xt5
+    print_status "DEBUG: step3_build_xt5 completed, moving to step3b_build_gstreamer_plugins"
+    
     step3b_build_gstreamer_plugins
+    print_status "DEBUG: step3b_build_gstreamer_plugins completed, moving to step4_package"
+    
     step4_package
+    print_status "DEBUG: step4_package completed"
     
     print_header "BUILD COMPLETE"
     print_status "All steps completed successfully!"
     print_status "Check the install directory for the built files"
     print_status "Development package: argus-dev-*.zip"
     print_status "Production extension: argus-ext-*.zip"
+    
+    # Final verification
+    print_status "DEBUG: Final package verification:"
+    ls -lh argus-*.zip 2>/dev/null || print_warning "WARNING: No argus-*.zip files found in project root!"
     
     print_warning "Don't forget to unsecure your BrightSign player as described in the README!"
 }

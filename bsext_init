@@ -395,47 +395,64 @@ do_start() {
 do_stop() {
     echo "Stopping ${DAEMON_NAME} services..."
     
-    # Stop attention_demo (try current name, then legacy name)
-    local stopped_demo=false
+    # Stop attention_demo - use multiple methods to ensure it's killed
+    echo "Stopping attention_demo..."
+    
+    # Method 1: Try PID file first (current name)
     if [ -f "${PIDFILE}" ]; then
-        echo "Stopping attention_demo (PID file: ${PIDFILE})"
+        echo "  Killing by PID file: ${PIDFILE}"
         local pid=$(cat ${PIDFILE} 2>/dev/null)
         if [ -n "$pid" ]; then
-            echo "Killing process $pid with SIGKILL..."
+            echo "  Killing process $pid (from PID file)..."
             kill -9 $pid 2>/dev/null || true
             # Also kill any child processes
             pkill -9 -P $pid 2>/dev/null || true
         fi
         rm -f ${PIDFILE}
-        stopped_demo=true
     fi
     
-    # Also check for legacy bsext-gaze.pid
+    # Method 2: Check for legacy PID file
     if [ -f "/var/run/bsext-gaze.pid" ]; then
-        echo "Stopping attention_demo (legacy PID file: /var/run/bsext-gaze.pid)"
+        echo "  Killing by legacy PID file: /var/run/bsext-gaze.pid"
         local pid=$(cat /var/run/bsext-gaze.pid 2>/dev/null)
         if [ -n "$pid" ]; then
-            echo "Killing process $pid with SIGKILL..."
+            echo "  Killing process $pid (from legacy PID file)..."
             kill -9 $pid 2>/dev/null || true
-            # Also kill any child processes
             pkill -9 -P $pid 2>/dev/null || true
         fi
         rm -f /var/run/bsext-gaze.pid
-        stopped_demo=true
     fi
     
-    if [ "$stopped_demo" = "false" ]; then
-        echo "No PID file found for attention_demo, trying to kill by name..."
-        pkill -9 -f "attention_demo" || true
-    fi
+    # Method 3: Kill ALL attention_demo processes by name (handles multiple instances)
+    echo "  Killing all attention_demo processes by name..."
+    pkill -9 -f "attention_demo" 2>/dev/null || true
+    killall -9 attention_demo 2>/dev/null || true
     
-    # Give it a moment and verify it's actually stopped
-    sleep 1
-    if pgrep -f "attention_demo" >/dev/null 2>&1; then
-        echo "WARNING: attention_demo still running, forcing kill by name..."
-        pkill -9 -f "attention_demo" || true
+    # Method 4: Extra thorough - find and kill by exact path
+    ps | grep "attention_demo" | grep -v grep | awk '{print $1}' | xargs -r kill -9 2>/dev/null || true
+    
+    # Wait and verify it's stopped (with retry loop)
+    local retry_count=0
+    local max_retries=3
+    while [ $retry_count -lt $max_retries ]; do
         sleep 1
-    fi
+        if ! pgrep -f "attention_demo" >/dev/null 2>&1; then
+            echo "  attention_demo stopped successfully"
+            break
+        fi
+        
+        retry_count=$((retry_count + 1))
+        if [ $retry_count -lt $max_retries ]; then
+            echo "  WARNING: attention_demo still running (attempt $retry_count/$max_retries), retrying..."
+            pkill -9 -f "attention_demo" 2>/dev/null || true
+            killall -9 attention_demo 2>/dev/null || true
+            ps | grep "attention_demo" | grep -v grep | awk '{print $1}' | xargs -r kill -9 2>/dev/null || true
+        else
+            echo "  ERROR: Failed to stop attention_demo after $max_retries attempts!"
+            echo "  Showing remaining processes:"
+            ps | grep "attention_demo" | grep -v grep || true
+        fi
+    done
 
     # Stop image-stream-server (ALWAYS kill by name to handle all instances)
     echo "Stopping image-stream-server..."
