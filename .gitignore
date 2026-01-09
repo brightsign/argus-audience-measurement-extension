@@ -11,3 +11,5 @@ brightsign-x86_64*.sh
 argus-ext*.zip
 argus-dev*.zip
 brightsign-*-src-*.tar.gz
+.aider*
+.envrc
