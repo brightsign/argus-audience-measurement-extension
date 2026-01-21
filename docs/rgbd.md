@@ -5,7 +5,7 @@
 
 ---
 
-This document describes how to integrate an RGBD camera with the BrightSign NPU Gaze Extension system.
+This document describes how to integrate an RGBD camera with the Argus Audience Measurement Extension system.
 
 ## Overview
 

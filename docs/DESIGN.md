@@ -1,8 +1,8 @@
-# BrightSign NPU Gaze Detection Extension - Design Document
+# Argus Audience Measurement Extension - Design Document
 
 ## Overview
 
-The BrightSign NPU Gaze Detection Extension is a multi-threaded C++ application that performs real-time person detection, face detection, and gaze estimation using Rockchip NPU platforms. The application captures video from RTSP streams, USB cameras, or video files, processes frames through multiple neural network models in parallel, tracks individuals across frames, determines if detected faces are looking at the camera, and publishes analytics results via MQTT.
+The Argus Audience Measurement Extension is a multi-threaded C++ application that performs real-time person detection, face detection, and gaze estimation using Rockchip NPU platforms. The application captures video from RTSP streams, USB cameras, or video files, processes frames through multiple neural network models in parallel, tracks individuals across frames, determines if detected faces are looking at the camera, and publishes analytics results via MQTT.
 
 **Platform Support:**
 - **RK3588 (XT5)**: 3-core NPU (6 TOPS) - runs 2+ models in parallel

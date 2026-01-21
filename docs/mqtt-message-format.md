@@ -2003,7 +2003,7 @@ Key parameters affecting published data (see `config.json`):
 
 For questions, issues, or feature requests:
 
-- **GitHub:** [brightsign-npu-gaze-extension-ng](https://github.com/BrightSign-Playground/brightsign-npu-gaze-extension-ng)
+- **GitHub:** [argus-audience-measurement-extension](https://github.com/BrightSign-Playground/argus-audience-measurement-extension)
 - **Documentation:** `/docs` folder in repository
 
 ---

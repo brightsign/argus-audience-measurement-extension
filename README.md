@@ -1,6 +1,6 @@
-# BrightSign NPU Gaze Detection Extension
+# Argus Audience Measurement Extension
 
-**Real-time edge AI for person tracking and gaze detection on Rockchip NPU platforms**
+**Real-time edge AI for audience measurement, person tracking, and gaze detection on Rockchip NPU platforms**
 
 This repository contains a high-performance C++ application that runs on BrightSign players with integrated NPU capabilities. It captures video from cameras or streams, runs multiple neural network models in parallel for person detection and face/gaze analysis, tracks individuals across frames, and publishes analytics via MQTT.
 
@@ -483,5 +483,5 @@ For iterative development with an existing SDK, use `./build-apps` directly (no 
 
 ## Support
 
-- **Issues**: [GitHub Issues](https://github.com/BrightSign-Playground/brightsign-npu-gaze-extension-ng/issues)
+- **Issues**: [GitHub Issues](https://github.com/BrightSign-Playground/argus-audience-measurement-extension/issues)
 - **Documentation**: See `/docs` folder

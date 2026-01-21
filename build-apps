@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# BrightSign NPU Gaze Extension - C++ Application Build Script
+# Argus Audience Measurement Extension - C++ Application Build Script
 # Builds the C++ application for all platforms using installed SDK
 
 set -e
@@ -22,7 +22,7 @@ declare -A PLATFORMS=(
 
 usage() {
     echo "Usage: $0 [OPTIONS] [PLATFORM]"
-    echo "Build BrightSign NPU Gaze Extension C++ application"
+    echo "Build Argus Audience Measurement Extension C++ application"
     echo ""
     echo "Arguments:"
     echo "  PLATFORM              Target platform: XT5, LS5, Firebird (default: all)"
@@ -257,7 +257,7 @@ build_platform() {
 
 # Main build function
 main() {
-    echo "BrightSign NPU Gaze Extension - C++ Application Build"
+    echo "Argus Audience Measurement Extension - C++ Application Build"
     echo "===================================================="
     
     start_time=$(date +%s)

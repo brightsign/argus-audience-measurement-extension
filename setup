@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# BrightSign NPU Gaze Extension - Setup Script
+# Argus Audience Measurement Extension - Setup Script
 # Creates bsoe-build Docker environment with BrightSign OS sources
 
 set -e
@@ -13,7 +13,7 @@ BRIGHTSIGN_OS_MINOR_VERSION=${BRIGHTSIGN_OS_MINOR_VERSION:-52}
 
 usage() {
     echo "Usage: $0 [OPTIONS]"
-    echo "Setup complete BrightSign NPU Gaze Extension build environment with RKNN toolkit, models, and containers"
+    echo "Setup complete Argus Audience Measurement Extension build environment with RKNN toolkit, models, and containers"
     echo ""
     echo "Options:"
     echo "  -y, --yes              Skip confirmation prompt"
@@ -263,7 +263,7 @@ clone_rknn_toolkit() {
 
 # Main setup function
 main() {
-    echo "BrightSign NPU Gaze Extension - Setup Script"
+    echo "Argus Audience Measurement Extension - Setup Script"
     echo "============================================="
     echo "This script will:"
     echo "1. Check prerequisites"

@@ -1,6 +1,6 @@
-# Orange Pi Development Guide - NPU Gaze Extension NG
+# Orange Pi Development Guide - Argus Audience Measurement Extension
 
-This guide covers development and testing using Orange Pi boards as an alternative development environment for the BrightSign NPU Gaze Extension Next Generation project.
+This guide covers development and testing using Orange Pi boards as an alternative development environment for the Argus Audience Measurement Extension project.
 
 ## Overview
 
@@ -95,8 +95,8 @@ sudo ldconfig
 ### 1. Clone the Repository
 
 ```bash
-git clone <repository-url> brightsign-npu-gaze-extension-ng
-cd brightsign-npu-gaze-extension-ng
+git clone <repository-url> argus-audience-measurement-extension
+cd argus-audience-measurement-extension
 ```
 
 ### 2. Install RKNN Runtime Libraries
@@ -131,7 +131,7 @@ Models must be compiled on an x86_64 machine first. Copy pre-compiled models to 
 
 ```bash
 # From your x86_64 development machine:
-scp -r install/RK3588/model/ user@orangepi:/path/to/brightsign-npu-gaze-extension-ng/install/RK3588/
+scp -r install/RK3588/model/ user@orangepi:/path/to/argus-audience-measurement-extension/install/RK3588/
 
 # Required models:
 # - model/retinaface.rknn (face detection)
@@ -403,13 +403,13 @@ Use rsync for efficient code synchronization:
 ```bash
 # From your main development machine to Orange Pi:
 rsync -avz --exclude='build*' --exclude='sdk' --exclude='.git' \
-    /path/to/brightsign-npu-gaze-extension-ng/ \
-    user@orangepi:/home/user/brightsign-npu-gaze-extension-ng/
+    /path/to/argus-audience-measurement-extension/ \
+    user@orangepi:/home/user/argus-audience-measurement-extension/
 
 # From Orange Pi back to dev machine:
 rsync -avz --exclude='build*' \
-    user@orangepi:/home/user/brightsign-npu-gaze-extension-ng/src/ \
-    /path/to/brightsign-npu-gaze-extension-ng/src/
+    user@orangepi:/home/user/argus-audience-measurement-extension/src/ \
+    /path/to/argus-audience-measurement-extension/src/
 ```
 
 ### VS Code Remote Development
@@ -523,7 +523,7 @@ htop & watch -n 1 cat /sys/kernel/debug/rknpu/load
 ### Directory Structure
 
 ```
-brightsign-npu-gaze-extension-ng/
+argus-audience-measurement-extension/
 ├── build_opi/           # Native Orange Pi build (create this)
 ├── configs/
 │   └── config.json      # Runtime configuration

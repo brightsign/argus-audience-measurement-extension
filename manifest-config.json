@@ -1,14 +1,14 @@
 {
   "extension": {
     "version": "0.1.5",
-    "description": "NPU-accelerated gaze detection using RetinaFace model for audience analytics",
+    "description": "Argus: NPU-accelerated audience measurement with person tracking and gaze detection",
     "author": {
       "name": "BrightSign LLC",
       "email": "support@brightsign.biz",
       "url": "https://www.brightsign.biz"
     },
     "license": "Apache-2.0",
-    "homepage": "https://github.com/brightsign/brightsign-npu-gaze-extension",
+    "homepage": "https://github.com/BrightSign-Playground/argus-audience-measurement-extension",
     "category": "ai-vision"
   },
   

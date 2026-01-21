@@ -498,7 +498,7 @@ generate_manifest() {
     local description=$(echo "$config_content" | jq -r '.extension.description // "NPU-accelerated person detection using RetinaFace and YOLOX"')
     local author=$(echo "$config_content" | jq -c '.extension.author // {"name": "BrightSign LLC"}')
     local license=$(echo "$config_content" | jq -r '.extension.license // "Apache-2.0"')
-    local homepage=$(echo "$config_content" | jq -r '.extension.homepage // "https://github.com/brightsign/brightsign-npu-gaze-extension"')
+    local homepage=$(echo "$config_content" | jq -r '.extension.homepage // "https://github.com/BrightSign-Playground/argus-audience-measurement-extension"')
     local category=$(echo "$config_content" | jq -r '.extension.category // "ai-vision"')
     
     # Extract compatibility info

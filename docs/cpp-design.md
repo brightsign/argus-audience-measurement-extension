@@ -1,6 +1,6 @@
 # C++ Software Architecture Design Document
 
-**Project:** BrightSign NPU Gaze Extension
+**Project:** Argus Audience Measurement Extension
 **Purpose:** Real-time face detection, gaze tracking, and person tracking on BrightSign players with Rockchip NPU
 **Target Audience:** Human developers and AI agents modifying the codebase
 **Last Updated:** 2026-01-06

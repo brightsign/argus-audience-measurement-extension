@@ -1,5 +1,5 @@
 {
-  "_comment": "BrightSign Extension Manifest Configuration Template",
+  "_comment": "Argus Audience Measurement Extension Manifest Configuration Template",
   "_instructions": [
     "1. Copy this file to 'manifest-config.json'",
     "2. Fill in your extension's information",
@@ -9,14 +9,14 @@
   
   "extension": {
     "version": "1.0.0",
-    "description": "NPU-accelerated gaze detection using RetinaFace model",
+    "description": "Argus: NPU-accelerated audience measurement with person tracking and gaze detection",
     "author": {
       "name": "Your Name or Organization",
       "email": "support@example.com",
       "url": "https://example.com"
     },
     "license": "Apache-2.0",
-    "homepage": "https://github.com/brightsign/brightsign-npu-gaze-extension",
+    "homepage": "https://github.com/BrightSign-Playground/argus-audience-measurement-extension",
     "category": "ai-vision"
   },
   
