@@ -2,7 +2,36 @@
 
 **Edge AI for real-time audience analytics on BrightSign players**
 
-Argus transforms your BrightSign digital signage player into an intelligent audience measurement system. Understand not just *who* is in front of your display, but *how* they're engaging with it.
+Argus is a **machine vision application** that analyzes live video from a camera to measure audience behavior. Connect a USB webcam or an IP camera via RTSP, and Argus uses neural network inference on the device's NPU to detect people, track their movement, and determine if they're looking at your display.
+
+Transform your BrightSign digital signage player into an intelligent audience measurement system. Understand not just *who* is in front of your display, but *how* they're engaging with it.
+
+## Camera Input
+
+Argus works with any camera that provides a video feed:
+
+```mermaid
+flowchart LR
+    subgraph CameraOptions["Camera Options"]
+        USB[USB Webcam<br/>/dev/video0]
+        RTSP[IP Camera<br/>rtsp://...]
+        FILE[Video File<br/>for testing]
+    end
+    subgraph Argus["Argus Processing"]
+        NPU[NPU Inference]
+    end
+    USB --> NPU
+    RTSP --> NPU
+    FILE --> NPU
+```
+
+| Input Type | Example | Use Case |
+|------------|---------|----------|
+| **USB Webcam** | `/dev/video0` | Simple setup, direct connection |
+| **RTSP Stream** | `rtsp://192.168.0.100:8554/live` | IP cameras, PoE cameras, existing infrastructure |
+| **Video File** | `/storage/sd/test.mp4` | Testing and development |
+
+**Typical setup:** Mount a camera facing the audience area in front of your digital sign, connect via USB or network, and Argus continuously analyzes the video stream.
 
 ## What Argus Measures
 
@@ -35,6 +64,7 @@ flowchart LR
 
 ## Key Features
 
+- **Flexible camera support** - USB webcams, RTSP/IP cameras, or video files
 - **Real-time analytics** - Sub-second latency from camera to data
 - **Per-person tracking** - Stable IDs track individuals across frames
 - **Dual output** - MQTT for real-time streaming, Prometheus for dashboards
@@ -46,15 +76,15 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    subgraph Input
-        CAM[Camera<br/>RTSP/USB]
+    subgraph Input["Video Input"]
+        CAM[USB Webcam<br/>or RTSP Stream]
     end
     subgraph Processing["NPU Processing"]
         RF[RetinaFace<br/>Face Detection]
         YX[YOLOX<br/>Person Detection]
         TRK[ByteTrack<br/>Person Tracker]
     end
-    subgraph Output
+    subgraph Output["Analytics Output"]
         MQTT[MQTT<br/>bs/argus/analytics]
         PROM[Prometheus<br/>:9101/metrics]
     end
@@ -66,6 +96,8 @@ flowchart LR
     TRK --> MQTT
     TRK --> PROM
 ```
+
+The system captures video frames, runs two neural networks in parallel on the NPU (face detection for gaze, person detection for tracking), fuses the results, and outputs analytics via MQTT and Prometheus.
 
 ## Getting Your Data
 
