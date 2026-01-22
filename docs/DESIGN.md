@@ -660,7 +660,13 @@ include/
 
 ## Related Documentation
 
-- **[MQTT Message Format](mqtt-message-format.md)** - Complete v7.0 schema reference
+- **[README](../README.md)** - Project overview and quick start
+- **[Configuration Reference](CONFIGURATION.md)** - All configuration options
+- **[MQTT Integration](INTEGRATION-MQTT.md)** - Consuming analytics via MQTT
+- **[Prometheus Integration](INTEGRATION-PROMETHEUS.md)** - Metrics and dashboards
+- **[Tracking Explained](TRACKING-EXPLAINED.md)** - Person tracking lifecycle
+- **[MQTT Schema Reference](mqtt-message-format.md)** - Complete v7.0 schema
+- **[C++ Architecture](cpp-design.md)** - Detailed implementation guide
 - **[Multi-Model Architecture](multiple-models.md)** - Parallel NPU execution design
 - **[RGB-D Camera Support](rgbd.md)** - Depth camera integration guide
 

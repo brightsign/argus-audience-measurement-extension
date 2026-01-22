@@ -1,6 +1,8 @@
 # Prometheus & Grafana Setup for BrightSign Players
 
-This document describes how to set up Prometheus and Grafana for monitoring the Argus analytics system on BrightSign players.
+> **Quick Start:** For PromQL queries and alerting examples, see **[Prometheus Integration Guide](INTEGRATION-PROMETHEUS.md)**.
+>
+> This document covers the **full setup process** for Prometheus and Grafana on BrightSign players.
 
 ## Overview
 

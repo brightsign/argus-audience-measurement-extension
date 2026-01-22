@@ -1,8 +1,12 @@
 # MQTT Message Format - Analytics Output
 
+> **Quick Start:** For a practical guide with code examples, see **[MQTT Integration Guide](INTEGRATION-MQTT.md)**.
+>
+> This document is the complete **schema reference** for MQTT messages.
+
 ## Overview
 
-The attention analytics system publishes real-time tracking data via MQTT to the topic `bs/argus/analytics`. This document explains the message structure and all parameters to help developers create dashboards, analytics tools, and monitoring applications.
+The Argus analytics system publishes real-time tracking data via MQTT to the topic `bs/argus/analytics`. This document explains the complete message structure and all parameters to help developers create dashboards, analytics tools, and monitoring applications.
 
 ---
 
@@ -1998,6 +2002,13 @@ Key parameters affecting published data (see `config.json`):
 - **Configuration:** See `configs/config.json`
 
 ---
+
+## Related Documentation
+
+- **[MQTT Integration Guide](INTEGRATION-MQTT.md)** - Quick start with code examples
+- **[Tracking Explained](TRACKING-EXPLAINED.md)** - Person tracking lifecycle
+- **[Configuration Reference](CONFIGURATION.md)** - All configuration options
+- **[README](../README.md)** - Project overview
 
 ## Support & Contact
 
