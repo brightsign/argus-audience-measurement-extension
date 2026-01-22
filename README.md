@@ -12,6 +12,18 @@ Transform your BrightSign digital signage player into an intelligent audience me
 
 ## What Argus Measures
 
+| Measurement | Description |
+|-------------|-------------|
+| **Person Count** | How many people are currently in view |
+| **Gaze Detection** | Is each person looking at the screen? |
+| **Gaze Time** | How long has each person been looking? |
+| **Dwell Time** | How long has each person been in the area? |
+| **Entry/Exit** | When people enter or leave the frame |
+| **Direction** | Which way are people moving? (8-way compass) |
+| **Speed** | How fast are people moving? |
+
+## What are the Parts of the Solution?
+
 ```mermaid
 flowchart LR
     subgraph Attention
@@ -29,15 +41,6 @@ flowchart LR
     NPU --> Movement
 ```
 
-| Measurement | Description |
-|-------------|-------------|
-| **Person Count** | How many people are currently in view |
-| **Gaze Detection** | Is each person looking at the screen? |
-| **Gaze Time** | How long has each person been looking? |
-| **Dwell Time** | How long has each person been in the area? |
-| **Entry/Exit** | When people enter or leave the frame |
-| **Direction** | Which way are people moving? (8-way compass) |
-| **Speed** | How fast are people moving? |
 
 ## Camera Input
 
