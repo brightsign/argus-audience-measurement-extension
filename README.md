@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="./images/the-hundred-eyes-of-Argus.jpg" alt="Argus - The Hundred Eyes" width="25%">
+</p>
+
 # Argus Audience Measurement Extension
 
 **Edge AI for real-time audience analytics on BrightSign players**
