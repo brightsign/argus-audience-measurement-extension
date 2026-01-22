@@ -6,33 +6,6 @@ Argus is a **machine vision application** that analyzes live video from a camera
 
 Transform your BrightSign digital signage player into an intelligent audience measurement system. Understand not just *who* is in front of your display, but *how* they're engaging with it.
 
-## Camera Input
-
-Argus works with any camera that provides a video feed:
-
-```mermaid
-flowchart LR
-    subgraph CameraOptions["Camera Options"]
-        USB[USB Webcam<br/>/dev/video0]
-        RTSP[IP Camera<br/>rtsp://...]
-        FILE[Video File<br/>for testing]
-    end
-    subgraph Argus["Argus Processing"]
-        NPU[NPU Inference]
-    end
-    USB --> NPU
-    RTSP --> NPU
-    FILE --> NPU
-```
-
-| Input Type | Example | Use Case |
-|------------|---------|----------|
-| **USB Webcam** | `/dev/video0` | Simple setup, direct connection |
-| **RTSP Stream** | `rtsp://192.168.0.100:8554/live` | IP cameras, PoE cameras, existing infrastructure |
-| **Video File** | `/storage/sd/test.mp4` | Testing and development |
-
-**Typical setup:** Mount a camera facing the audience area in front of your digital sign, connect via USB or network, and Argus continuously analyzes the video stream.
-
 ## What Argus Measures
 
 ```mermaid
@@ -61,6 +34,33 @@ flowchart LR
 | **Entry/Exit** | When people enter or leave the frame |
 | **Direction** | Which way are people moving? (8-way compass) |
 | **Speed** | How fast are people moving? |
+
+## Camera Input
+
+Argus works with any camera that provides a video feed:
+
+```mermaid
+flowchart LR
+    subgraph CameraOptions["Camera Options"]
+        USB[USB Webcam<br/>/dev/video0]
+        RTSP[IP Camera<br/>rtsp://...]
+        FILE[Video File<br/>for testing]
+    end
+    subgraph Argus["Argus Processing"]
+        NPU[NPU Inference]
+    end
+    USB --> NPU
+    RTSP --> NPU
+    FILE --> NPU
+```
+
+| Input Type | Example | Use Case |
+|------------|---------|----------|
+| **USB Webcam** | `/dev/video0` | Simple setup, direct connection |
+| **RTSP Stream** | `rtsp://192.168.0.100:8554/live` | IP cameras, PoE cameras, existing infrastructure |
+| **Video File** | `/storage/sd/test.mp4` | Testing and development |
+
+**Typical setup:** Mount a camera facing the audience area in front of your digital sign, connect via USB or network, and Argus continuously analyzes the video stream.
 
 ## Key Features
 
