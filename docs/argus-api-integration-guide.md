@@ -1,5 +1,9 @@
 # Argus API Integration Guide
 
+**Version 0.4.0** | February 4, 2026
+
+---
+
 This guide provides a deep technical reference for integrating with the Argus Audience Measurement Extension. It covers the full capabilities of the system, all configuration options, and detailed specifications for the MQTT and Prometheus output interfaces.
 
 ---
