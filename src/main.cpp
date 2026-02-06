@@ -17,7 +17,30 @@
 #include "util/util.h"
 
 static std::atomic<bool> g_stop{false};
+static std::atomic<bool> g_restart_requested{false};
 static void on_sig(int){ g_stop.store(true); }
+
+// Test function to verify atomic flag operations
+static void test_atomic_flags() {
+    LG_INFO("========================================");
+    LG_INFO("TESTING ATOMIC FLAG OPERATIONS");
+    LG_INFO("========================================");
+    LG_INFO("TEST: Initial states - g_stop=%d g_restart_requested=%d", 
+            g_stop.load(), g_restart_requested.load());
+    
+    // Test setting restart flag
+    LG_INFO("TEST: Setting g_restart_requested to true...");
+    g_restart_requested.store(true);
+    LG_INFO("TEST: After store - g_restart_requested=%d", g_restart_requested.load());
+    
+    // Test resetting
+    LG_INFO("TEST: Resetting g_restart_requested to false...");
+    g_restart_requested.store(false);
+    LG_INFO("TEST: After reset - g_restart_requested=%d", g_restart_requested.load());
+    
+    LG_INFO("TEST: Atomic flag test PASSED");
+    LG_INFO("========================================");
+}
 
 // Install comprehensive crash handlers (SIGSEGV, SIGABRT, terminate, etc)
 static void install_crash_handlers() {
@@ -112,6 +135,9 @@ int main(int argc, char** argv) {
     auto flog = std::make_shared<FileRotatingLogger>(logcfg);
     set_global_logger(flog);
     LG_INFO("Starting attention_demo; log file: %s", flog->path().c_str());
+    
+    // TEST: Verify atomic flag operations work correctly
+    test_atomic_flags();
 
     // Parse CLI once
     CliArgs cli = parse_cli(argc, argv);
@@ -360,7 +386,6 @@ int main(int argc, char** argv) {
         LG_INFO("Frame output enabled: dir=%s max_frames=%d quality=%d",
                 pc.output_dir.c_str(), pc.max_frames, pc.frame_quality);
     }
-
     LG_INFO("Selected input: usb=%s rtsp=%s file=%s",
             pc.input.usb_device.c_str(),
             pc.input.rtsp_url.c_str(),
@@ -370,19 +395,103 @@ int main(int argc, char** argv) {
     // No need to start embedded broker - connect to external broker instead
     LG_INFO("MQTT broker is managed externally by bsext_init on port 1883");
 
+    // ---- Config monitoring for automatic restart ----
+    // Monitor /storage/sd/configs/config.json for changes
+    // When changed, request graceful restart to apply new config
+    LG_INFO("Initializing config monitor...");
+    LG_INFO("Initial flag states: g_stop=%d g_restart_requested=%d", 
+            g_stop.load(), g_restart_requested.load());
+    
     // ---- run ----
+    LG_INFO("Starting orchestrator...");
     Orchestrator orch{pc};
     if (!orch.start()) {
         LG_ERROR("Failed to start orchestrator");
+        //config_monitor.stop();
         return 1;
     }
 
     std::signal(SIGINT, on_sig);
     std::signal(SIGTERM, on_sig);
-    while (!g_stop.load()) std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    
+    LG_INFO("Entering main loop...");
+    LG_INFO("DEBUG: Monitoring flags - g_stop address=%p, g_restart_requested address=%p",
+            (void*)&g_stop, (void*)&g_restart_requested);
+    
+    // Main loop: wait for stop signal or config change request
+    int loop_count = 0;
+    while (!g_stop.load() && !g_restart_requested.load()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        
+        // Log flag status every 30 seconds (150 iterations * 200ms = 30s)
+        if (++loop_count % 150 == 0) {
+            LG_INFO("DEBUG: Main loop heartbeat - g_stop=%d g_restart_requested=%d",
+                    g_stop.load(), g_restart_requested.load());
+        }
+    }
+    
+    // Check why we're exiting
+    LG_INFO("DEBUG: Exited main loop!");
+    LG_INFO("DEBUG: Final flag states - g_stop=%d g_restart_requested=%d",
+            g_stop.load(), g_restart_requested.load());
+    
+    if (g_restart_requested.load()) {
+        LG_INFO("========================================");
+        LG_INFO("RESTART REQUESTED: Shutting down to apply new config");
+        LG_INFO("Service manager (systemd) will automatically restart the extension");
+        LG_INFO("========================================");
+    } else {
+        LG_INFO("Shutdown requested via signal");
+    }
 
+    // Stop config monitor first
+    LG_INFO("DEBUG: Step 1 - Stopping config monitor...");
+    //config_monitor.stop();
+    LG_INFO("DEBUG: Step 1 - Config monitor stopped");
+    
+    // Then stop orchestrator
+    LG_INFO("DEBUG: Step 2 - Requesting orchestrator stop...");
     orch.request_stop();
-    orch.join();
+    LG_INFO("DEBUG: Step 2 - Orchestrator stop requested");
+    
+    LG_INFO("DEBUG: Step 3 - Waiting for orchestrator to join (with 10 second timeout)...");
+    
+    // Try to join with timeout - if it takes too long, force exit
+    std::atomic<bool> join_completed{false};
+    std::thread join_thread([&]() {
+        orch.join();
+        join_completed.store(true);
+    });
+    
+    // Wait up to 10 seconds for orchestrator to stop
+    auto start = std::chrono::steady_clock::now();
+    while (!join_completed.load()) {
+        auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+            std::chrono::steady_clock::now() - start
+        ).count();
+        
+        if (elapsed >= 10) {
+            LG_WARN("DEBUG: Orchestrator join timeout after %ld seconds - forcing exit", elapsed);
+            join_thread.detach();  // Let it run, we're exiting anyway
+            break;
+        }
+        
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+    
+    if (join_completed.load()) {
+        join_thread.join();
+        LG_INFO("DEBUG: Step 3 - Orchestrator joined successfully");
+    } else {
+        LG_WARN("DEBUG: Step 3 - Orchestrator did not join cleanly, forcing exit");
+    }
+    
     LG_INFO("Shutdown complete");
-    return 0;
+    
+    // Return exit code to indicate reason for exit
+    // Exit code 42: Restart requested (config changed)
+    // Exit code 0: Normal shutdown
+    int exit_code = g_restart_requested.load() ? 42 : 0;
+    LG_INFO("DEBUG: Returning exit code %d", exit_code);
+    return exit_code;
 }

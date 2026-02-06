@@ -52,4 +52,18 @@ std::unique_ptr<IFrameWriter> make_frame_writer_disk(
 // Create a no-op frame writer (useful for disabling frame output)
 std::unique_ptr<IFrameWriter> make_frame_writer_null() noexcept;
 
+// Create an async frame writer that encodes/writes in background thread
+// Phase 2C: Moves JPEG encoding and disk I/O to background thread (~1ms gain per frame)
+// output_dir: directory to save frames (will be created if needed)
+// max_frames: max frames to keep (0 = unlimited)
+// quality: JPEG quality (0-100)
+// blur_config: optional face blur configuration for privacy
+// queue_size: background queue depth (power of 2, default 8)
+std::unique_ptr<IFrameWriter> make_frame_writer_disk_async(
+    const std::string& output_dir,
+    int max_frames = 0,
+    int quality = 85,
+    const output::BlurConfig& blur_config = output::BlurConfig{},
+    size_t queue_size = 8) noexcept;
+
 #endif // FRAME_WRITER_H

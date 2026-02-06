@@ -9,8 +9,8 @@
 
 // Minimal generic outputs (non-owning where possible)
 struct Detection {
-  float x0, y0, x1, y1;
-  float score;
+  float x0{0.0f}, y0{0.0f}, x1{0.0f}, y1{0.0f};
+  float score{0.0f};
   int   class_id{-1};
 };
 

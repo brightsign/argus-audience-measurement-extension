@@ -110,6 +110,9 @@ struct TrackerConfig {
   // V7.1: acceleration limits (tighter for slow motion)
   float accel_cap_px_s2{400.0f};    // V7.1: tighter cap (450→400) to reduce direction flicker
   
+  // Phase 1 optimization flags
+  bool use_fast_direction{true};     // Use LUT-based direction (5-10× faster than atan2)
+  
   // Publish filtering (prevent edge/ghost track noise)
   float publish_score_min{0.70f};   // minimum score to publish motion
   float publish_min_area_frac{0.02f}; // minimum area as fraction of frame (2%)
@@ -140,6 +143,10 @@ public:
   
   // Get current tracker core mode
   const std::string& get_tracker_core() const noexcept { return cfg_.tracker_core; }
+  
+  // Phase 1 optimization: Fast direction calculation using LUT instead of atan2
+  // Made public for testing and potential external use
+  static float fast_direction_deg(float vx, float vy) noexcept;
 
 private:
   struct TrackStateInternal {

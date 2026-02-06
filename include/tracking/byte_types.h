@@ -8,10 +8,15 @@ namespace bytetrack {
 
 struct BBox {
   float x0, y0, x1, y1; // camera-space, inclusive-exclusive doesn't matter as long as consistent
+  float area{0.f};       // Pre-calculated area for IoU optimization (Phase 1)
+  
   float w() const { return std::max(0.f, x1 - x0); }
   float h() const { return std::max(0.f, y1 - y0); }
   float cx() const { return 0.5f * (x0 + x1); }
   float cy() const { return 0.5f * (y0 + y1); }
+  
+  // Calculate and cache area
+  void update_area() { area = w() * h(); }
 };
 
 inline float iou(const BBox& a, const BBox& b) {
@@ -22,7 +27,10 @@ inline float iou(const BBox& a, const BBox& b) {
   const float iw = std::max(0.f, xx1 - xx0);
   const float ih = std::max(0.f, yy1 - yy0);
   const float inter = iw * ih;
-  const float ua = a.w() * a.h() + b.w() * b.h() - inter + 1e-6f;
+  // Phase 1 optimization: Use pre-calculated area if available, otherwise compute
+  const float area_a = (a.area > 0.f) ? a.area : (a.w() * a.h());
+  const float area_b = (b.area > 0.f) ? b.area : (b.w() * b.h());
+  const float ua = area_a + area_b - inter + 1e-6f;
   return inter / ua;
 }
 

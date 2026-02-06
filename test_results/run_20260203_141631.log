@@ -1,0 +1,15 @@
+Running main() from ./googletest/src/gtest_main.cc
+[0;32m[==========] [mRunning 2 tests from 1 test suite.
+[0;32m[----------] [mGlobal test environment set-up.
+[0;32m[----------] [m2 tests from SimpleTest
+[0;32m[ RUN      ] [mSimpleTest.BasicAssertion
+[0;32m[       OK ] [mSimpleTest.BasicAssertion (0 ms)
+[0;32m[ RUN      ] [mSimpleTest.StringTest
+[0;32m[       OK ] [mSimpleTest.StringTest (0 ms)
+[0;32m[----------] [m2 tests from SimpleTest (0 ms total)
+
+[0;32m[----------] [mGlobal test environment tear-down
+[0;32m[==========] [m2 tests from 1 test suite ran. (0 ms total)
+[0;32m[  PASSED  ] [m2 tests.
+
+=== Test Summary ===

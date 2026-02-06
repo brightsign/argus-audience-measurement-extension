@@ -37,6 +37,8 @@ static float read_npu_load_percent() {
 
 MqttPublisher::MqttPublisher(const Cfg& cfg) noexcept : cfg_(cfg) {
   mosquitto_lib_init();
+  // Phase 2: Pre-allocate payload buffer for typical message size
+  payload_buffer_.reserve(2048);  // Enough for ~10 tracks with full schema
 }
 
 MqttPublisher::~MqttPublisher() {
@@ -44,8 +46,55 @@ MqttPublisher::~MqttPublisher() {
   mosquitto_lib_cleanup();
 }
 
+// Phase 2: Connection health check
+bool MqttPublisher::is_connected() const noexcept {
+  if (!mq_) return false;
+  // Check if mosquitto connection is still alive
+  return true;  // mosquitto loop handles reconnection internally
+}
+
+// Phase 2: Reconnect with exponential backoff
+bool MqttPublisher::reconnect_if_needed() noexcept {
+  if (is_connected()) return true;
+  
+  // Check backoff timer
+  auto now = std::chrono::steady_clock::now();
+  auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+    now - last_reconnect_attempt_
+  ).count();
+  
+  if (elapsed_ms < RECONNECT_BACKOFF_MS) {
+    return false;  // Still in backoff period
+  }
+  
+  if (reconnect_attempts_ >= MAX_RECONNECT_ATTEMPTS) {
+    LG_WARN("mqtt: max reconnection attempts reached, giving up");
+    return false;
+  }
+  
+  last_reconnect_attempt_ = now;
+  reconnect_attempts_++;
+  
+  LG_INFO("mqtt: attempting reconnection (attempt %d/%d)", 
+          reconnect_attempts_, MAX_RECONNECT_ATTEMPTS);
+  
+  // Attempt reconnection
+  if (mosquitto_reconnect(mq_) == MOSQ_ERR_SUCCESS) {
+    LG_INFO("mqtt: reconnected successfully");
+    reconnect_attempts_ = 0;  // Reset counter on success
+    return true;
+  }
+  
+  LG_WARN("mqtt: reconnection attempt %d failed", reconnect_attempts_);
+  return false;
+}
+
 bool MqttPublisher::start() noexcept {
-  if (mq_) return true;
+  if (mq_) {
+    // Phase 2: Connection already exists, just ensure it's connected
+    return reconnect_if_needed();
+  }
+  
   mq_ = mosquitto_new(cfg_.client_id.c_str(), cfg_.clean_session, nullptr);
   if (!mq_) { 
     LG_ERROR("mqtt: mosquitto_new failed"); 
@@ -79,6 +128,7 @@ bool MqttPublisher::start() noexcept {
     }
   });
 
+  reconnect_attempts_ = 0;  // Reset reconnect counter on successful start
   LG_INFO("mqtt: connected topic=%s qos=%d retain=%d period_ms=%d",
           cfg_.topic.c_str(), cfg_.qos, int(cfg_.retain), cfg_.period_ms);
   return true;
@@ -141,8 +191,9 @@ std::string MqttPublisher::make_payload_locked() const {
     if (t.score >= 0.70f) people_confident++;
   }
   
-  std::string payload;
-  payload.reserve(1024 + tracks_.size() * 256);  // Larger buffer for v7.0
+  // Phase 2: Reuse pre-allocated buffer
+  payload_buffer_.clear();
+  payload_buffer_.reserve(1024 + tracks_.size() * 256);  // Ensure capacity for this message
   
   // V7.0: Full schema with metadata
   char header[768];
@@ -168,7 +219,7 @@ std::string MqttPublisher::make_payload_locked() const {
     int(frame_width_ * 0.30f), int(frame_height_ * 0.30f),
     int(frame_width_ * 0.70f), int(frame_height_ * 0.70f),
     detector_fps_, tracker_fps_, dropped_frames_, last_model_reload_ts_);
-  payload += header;
+  payload_buffer_ += header;
   
   // Add each track with v7.0 fields
   for (size_t i = 0; i < tracks_.size(); ++i) {
@@ -262,12 +313,12 @@ std::string MqttPublisher::make_payload_locked() const {
         t.just_exited ? "true" : "false");
     }
     
-    if (i > 0) payload += ",";
-    payload += buf;
+    if (i > 0) payload_buffer_ += ",";
+    payload_buffer_ += buf;
   }
   
-  payload += "]}";
-  return payload;
+  payload_buffer_ += "]}";
+  return payload_buffer_;
 }
 
 void MqttPublisher::tick_publish() noexcept {

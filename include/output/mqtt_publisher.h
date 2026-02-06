@@ -39,6 +39,10 @@ public:
 private:
   void tick_publish() noexcept;
   std::string make_payload_locked() const;
+  
+  // Phase 2: Connection management
+  bool reconnect_if_needed() noexcept;
+  bool is_connected() const noexcept;
 
   Cfg cfg_;
   mosquitto* mq_{nullptr};
@@ -60,4 +64,11 @@ private:
   float    npu_load_{0.0f};
   int      dropped_frames_{0};
   double   last_model_reload_ts_{0.0};
+  
+  // Phase 2: Performance optimizations
+  mutable std::string payload_buffer_;  // Pre-allocated payload buffer (reused)
+  int reconnect_attempts_{0};
+  std::chrono::steady_clock::time_point last_reconnect_attempt_;
+  static constexpr int MAX_RECONNECT_ATTEMPTS = 3;
+  static constexpr int RECONNECT_BACKOFF_MS = 5000;  // 5 second backoff
 };
