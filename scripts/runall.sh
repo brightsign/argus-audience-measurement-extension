@@ -486,7 +486,7 @@ step3_build_xt5() {
     rm -rf build_xt5
     mkdir -p build_xt5 && cd build_xt5
     
-    cmake .. -DOECORE_TARGET_SYSROOT="${OECORE_TARGET_SYSROOT}" -DTARGET_SOC="rk3588"
+    cmake .. -DOECORE_TARGET_SYSROOT="${OECORE_TARGET_SYSROOT}" -DTARGET_SOC="rk3588" -DBUILD_TESTS=OFF
     make
     make install
     
@@ -497,7 +497,7 @@ step3_build_xt5() {
     rm -rf build_rk3576
     mkdir -p build_rk3576 && cd build_rk3576
     
-    cmake .. -DOECORE_TARGET_SYSROOT="${OECORE_TARGET_SYSROOT}" -DTARGET_SOC="rk3576"
+    cmake .. -DOECORE_TARGET_SYSROOT="${OECORE_TARGET_SYSROOT}" -DTARGET_SOC="rk3576" -DBUILD_TESTS=OFF
     make
     make install
     
@@ -508,7 +508,7 @@ step3_build_xt5() {
     rm -rf build_ls5
     mkdir -p build_ls5 && cd build_ls5
     
-    cmake .. -DOECORE_TARGET_SYSROOT="${OECORE_TARGET_SYSROOT}" -DTARGET_SOC="rk3568"
+    cmake .. -DOECORE_TARGET_SYSROOT="${OECORE_TARGET_SYSROOT}" -DTARGET_SOC="rk3568" -DBUILD_TESTS=OFF
     make
     make install
 

@@ -155,20 +155,60 @@ run_attention_demo() {
     # LD_LIBRARY_PATH is already set by setup_gstreamer_env, which includes bin/ directory
     # No need to override it here
     if [ "$background" = "true" ]; then
-        # Run as a daemon in the background
-        echo "DEBUG: Starting daemon with start-stop-daemon"
+        # Run as a daemon in the background with auto-restart on config change
+        echo "DEBUG: Starting daemon with auto-restart support"
         echo "DEBUG: Executable: ${SOC_HOME}/attention_demo"
         echo "DEBUG: Arguments: ${CMD_ARGS}"
-        echo "DEBUG: Full command: start-stop-daemon --start --background --make-pidfile --pidfile ${PIDFILE} --exec ${SOC_HOME}/attention_demo -- ${CMD_ARGS}"
-        start-stop-daemon --start --background --make-pidfile --pidfile ${PIDFILE} \
-                          --exec ${SOC_HOME}/attention_demo -- ${CMD_ARGS}
+        
+        # Create a wrapper script that handles exit code 42 (config change)
+        cat > /tmp/attention_demo_wrapper.sh << 'WRAPPER_EOF'
+#!/bin/bash
+# Auto-restart wrapper for attention_demo
+# Restarts on exit code 42 (config change detected)
+
+SOC_HOME="$1"
+shift
+CMD_ARGS="$@"
+
+while true; do
+    echo "[$(date)] Starting attention_demo..."
+    ${SOC_HOME}/attention_demo ${CMD_ARGS}
+    EXIT_CODE=$?
+    
+    if [ $EXIT_CODE -eq 42 ]; then
+        echo "[$(date)] Config change detected (exit code 42), restarting in 2 seconds..."
+        sleep 2
     else
-        # Run directly in foreground
-        echo "DEBUG: Running in foreground"
+        echo "[$(date)] attention_demo exited with code $EXIT_CODE, stopping."
+        break
+    fi
+done
+WRAPPER_EOF
+        chmod +x /tmp/attention_demo_wrapper.sh
+        
+        echo "DEBUG: Full command: start-stop-daemon --start --background --make-pidfile --pidfile ${PIDFILE} --exec /tmp/attention_demo_wrapper.sh -- ${SOC_HOME} ${CMD_ARGS}"
+        start-stop-daemon --start --background --make-pidfile --pidfile ${PIDFILE} \
+                          --exec /tmp/attention_demo_wrapper.sh -- ${SOC_HOME} ${CMD_ARGS}
+    else
+        # Run directly in foreground with auto-restart on config change
+        echo "DEBUG: Running in foreground with auto-restart support"
         echo "DEBUG: Executable: ${SOC_HOME}/attention_demo"
         echo "DEBUG: Arguments: ${CMD_ARGS}"
         echo "DEBUG: Full command: ${SOC_HOME}/attention_demo ${CMD_ARGS}"
-        ${SOC_HOME}/attention_demo ${CMD_ARGS}
+        
+        # Auto-restart loop for foreground mode
+        while true; do
+            ${SOC_HOME}/attention_demo ${CMD_ARGS}
+            EXIT_CODE=$?
+            
+            if [ $EXIT_CODE -eq 42 ]; then
+                echo "[$(date)] Config change detected (exit code 42), restarting in 2 seconds..."
+                sleep 2
+            else
+                echo "[$(date)] attention_demo exited with code $EXIT_CODE"
+                break
+            fi
+        done
     fi
 }
 

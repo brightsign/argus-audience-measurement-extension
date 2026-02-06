@@ -19,8 +19,11 @@ if(CMAKE_SYSTEM_PROCESSOR STREQUAL "aarch64")
     set(MY_LIBS ${Boost_LIBRARIES} ${OpenCV_LIBS} ${GST_LIBRARIES})
 else()
 # cross-compile from x86 for rk3588/XT5, rk3568/LS5
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-poison-system-directories")
-    set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wpoison-system-directories")
+    # Only apply cross-compile flags if we're actually cross-compiling (not building tests)
+    if(NOT BUILD_TESTS)
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-poison-system-directories")
+        set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wpoison-system-directories")
+    endif()
 
     set(BOOST_ROOT ${CMAKE_SOURCE_DIR}/sdk/sysroots/aarch64-oe-linux/usr)
 
@@ -204,6 +207,7 @@ add_executable(attention_demo
         src/queue.cpp
         # Config module
         src/config/configuration.cpp
+        src/config/config_monitor.cpp
         src/config/model_spec.cpp
         src/config/processing_params.cpp
         src/config/publisher_config.cpp
@@ -583,3 +587,10 @@ install(CODE "
     message(WARNING \"libgstplayback.so not found in SDK - decodebin will be missing!\")
   endif()
 ")
+
+# Unit tests
+option(BUILD_TESTS "Build unit tests" ON)
+if(BUILD_TESTS)
+    enable_testing()
+    add_subdirectory(tests)
+endif()

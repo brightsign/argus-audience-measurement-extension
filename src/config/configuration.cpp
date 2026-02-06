@@ -164,6 +164,20 @@ bool load_from_file(const std::string& path, AppConfig& out, bool /*strict*/, ch
       out.blur_intensity = j["blur_intensity"].get<int>();
     }
     
+    // Parse frame output options
+    if (j.contains("enable_frame_output") && j["enable_frame_output"].is_boolean()) {
+      out.enable_frame_output = j["enable_frame_output"].get<bool>();
+    }
+    if (j.contains("output_dir") && j["output_dir"].is_string()) {
+      out.output_dir = j["output_dir"].get<std::string>();
+    }
+    if (j.contains("max_frames") && j["max_frames"].is_number_integer()) {
+      out.max_frames = j["max_frames"].get<int>();
+    }
+    if (j.contains("frame_quality") && j["frame_quality"].is_number_integer()) {
+      out.frame_quality = j["frame_quality"].get<int>();
+    }
+    
     // Parse publishers array
     if (j.contains("publishers") && j["publishers"].is_array()) {
       out.publishers.clear();

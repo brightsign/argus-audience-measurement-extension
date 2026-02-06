@@ -143,9 +143,10 @@ bool FileInputSource::open() noexcept {
             mppvideodec_avail, avdec_h264_avail, avdec_h265_avail, avdec_vp9_avail, videoconvert_avail, appsink_avail, decodebin_avail);
     
     // Helper to build BGR output tail
+    // Phase 2B: Consistent appsink configuration with RTSP (max-buffers=2 for pipeline buffering)
     auto bgr_tail = []() -> std::string {
       return " ! videoconvert ! video/x-raw,format=BGR ! "
-             "appsink drop=1 max-buffers=1 sync=false";
+             "appsink drop=1 max-buffers=2 sync=false";
     };
     
     // Helper for VP9 with automatic downscaling for performance
@@ -157,10 +158,11 @@ bool FileInputSource::open() noexcept {
         return " ! videoscale ! video/x-raw,width=" + std::to_string(target_w) + 
                ",height=" + std::to_string(target_h) + 
                " ! videoconvert ! video/x-raw,format=BGR ! "
-               "appsink drop=1 max-buffers=1 sync=false";
+               // Phase 2B: max-buffers=2 for consistent pipeline buffering
+               "appsink drop=1 max-buffers=2 sync=false";
       }
       return " ! videoconvert ! video/x-raw,format=BGR ! "
-             "appsink drop=1 max-buffers=1 sync=false";
+             "appsink drop=1 max-buffers=2 sync=false";
     };
     
     // --- 3) Build codec-ordered pipeline attempts
@@ -257,7 +259,8 @@ bool FileInputSource::open() noexcept {
       LG_WARN("FileInputSource: qtdemux missing, trying decodebin for auto-demux/decode");
       std::string pipe = "filesrc location=\"" + file + "\" ! decodebin ! "
                         "videoconvert ! video/x-raw,format=BGR ! "
-                        "appsink drop=1 max-buffers=1 sync=false";
+                        // Phase 2B: max-buffers=2 for consistent pipeline buffering
+                        "appsink drop=1 max-buffers=2 sync=false";
       if (try_gst_pipeline(pipe, "Auto (decodebin - no qtdemux)")) goto opened_ok;
     }
     
@@ -337,7 +340,8 @@ bool FileInputSource::open() noexcept {
     if (filesrc_avail && decodebin_avail && videoconvert_avail && appsink_avail) {
       std::string pipe = "filesrc location=\"" + file + "\" ! decodebin ! "
                         "videoconvert ! video/x-raw,format=BGR ! "
-                        "appsink drop=1 max-buffers=1 sync=false";
+                        // Phase 2B: max-buffers=2 for consistent pipeline buffering
+                        "appsink drop=1 max-buffers=2 sync=false";
       if (try_gst_pipeline(pipe, "Generic (decodebin)")) goto opened_ok;
     }
     
