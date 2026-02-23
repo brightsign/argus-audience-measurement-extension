@@ -1,14 +1,19 @@
-.PHONY: all build build-update clean clean-all install-tools build-docs pdf
+.PHONY: all build build-prod build-update build-prod-update clean clean-all install-tools build-docs pdf
 
-# Pass FORCE_UPDATE to child processes (for Go dependency updates)
+# Pass FORCE_UPDATE and DEMO_MODE to child processes
 export FORCE_UPDATE
+export DEMO_MODE
 
 # Pandoc options for PDF generation with Mermaid support
+# Uses Helvetica (sans-serif) for clean, readable output
 PANDOC_OPTS := -F mermaid-filter --pdf-engine=xelatex \
 	-V geometry:margin=1in \
 	-V colorlinks=true \
 	-V linkcolor=blue \
-	-V urlcolor=blue
+	-V urlcolor=blue \
+	-V mainfont="Helvetica Neue" \
+	-V sansfont="Helvetica Neue" \
+	-V monofont="Menlo"
 
 # Documentation files to build
 DOCS_DIR := docs
@@ -22,15 +27,31 @@ DOCS_MD := $(DOCS_DIR)/argus-api-integration-guide.md \
 DOCS_PDF := $(DOCS_MD:.md=.pdf)
 
 all:
-	@echo "Targets: build, build-update, clean, clean-all, install-tools, build-docs"
+	@echo "Demo targets (default):"
+	@echo "  build             Build demo extension with expiration date enforcement"
+	@echo "  build-update      Build demo extension with forced Go dependency updates"
+	@echo ""
+	@echo "Production targets:"
+	@echo "  build-prod        Build production extension (no expiration enforcement)"
+	@echo "  build-prod-update Build production extension with forced Go dependency updates"
+	@echo ""
+	@echo "Other targets: clean, clean-all, install-tools, build-docs"
 
-# Standard build - skips Go rebuilds if unchanged
+# Default build: demo extension with expiration date enforcement (DEMO_MODE_ENABLED=ON)
 build:
-	./scripts/runall.sh --auto
+	DEMO_MODE=1 ./scripts/runall.sh --auto
 
-# Build with forced Go dependency updates (pulls latest from repos)
+# Production build: no expiration enforcement (DEMO_MODE_ENABLED=OFF)
+build-prod:
+	DEMO_MODE=0 ./scripts/runall.sh --auto
+
+# Demo build with forced Go dependency updates
 build-update:
-	FORCE_UPDATE=1 ./scripts/runall.sh --auto
+	DEMO_MODE=1 FORCE_UPDATE=1 ./scripts/runall.sh --auto
+
+# Production build with forced Go dependency updates
+build-prod-update:
+	DEMO_MODE=0 FORCE_UPDATE=1 ./scripts/runall.sh --auto
 
 clean:
 	rm -rf build_xt5 build_ls5 build_rk3576 build_rk3568 staging

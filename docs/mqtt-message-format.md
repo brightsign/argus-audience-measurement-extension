@@ -282,19 +282,19 @@ if (parseInt(major) > 7) {
 
 **v7.0 (Current) - ByteTrack Era**
 
-- ✅ **BREAKING:** Changed from IoU-based to ByteTrack tracking (IDs more stable)
-- ✅ **BREAKING:** `speed` now from Kalman Filter velocity (not bbox deltas)
-- ✅ **NEW:** Added `schema` field for versioning
-- ✅ **NEW:** Added `state` field to tracks (`Tentative`/`Confirmed`/`Lost`)
-- ✅ **NEW:** Added `zones` array to tracks
-- ✅ __NEW:__ Added `frame_w`, `frame_h`, `model`, `fw_version`, `npu_load`
-- ✅ __NEW:__ Added `people_confident` (score ≥ 0.70)
-- ✅ __NEW:__ Added `gaze_conf` (gaze detection confidence)
-- ✅ **NEW:** Added `roi` metadata object
-- ✅ **NEW:** Added `health` object (system metrics)
-- ✅ __NEW:__ Added `dir_conf` to tracks
-- ✅ __NEW:__ Added `speed_norm` to tracks
-- ✅ **CHANGED:** Publish filtering suppresses low-score/edge tracks (motion forced to 0)
+- [x] **BREAKING:** Changed from IoU-based to ByteTrack tracking (IDs more stable)
+- [x] **BREAKING:** `speed` now from Kalman Filter velocity (not bbox deltas)
+- [x] **NEW:** Added `schema` field for versioning
+- [x] **NEW:** Added `state` field to tracks (`Tentative`/`Confirmed`/`Lost`)
+- [x] **NEW:** Added `zones` array to tracks
+- [x] __NEW:__ Added `frame_w`, `frame_h`, `model`, `fw_version`, `npu_load`
+- [x] __NEW:__ Added `people_confident` (score ≥ 0.70)
+- [x] __NEW:__ Added `gaze_conf` (gaze detection confidence)
+- [x] **NEW:** Added `roi` metadata object
+- [x] **NEW:** Added `health` object (system metrics)
+- [x] __NEW:__ Added `dir_conf` to tracks
+- [x] __NEW:__ Added `speed_norm` to tracks
+- [x] **CHANGED:** Publish filtering suppresses low-score/edge tracks (motion forced to 0)
 
 **v6.2 - Direction Confidence**
 
@@ -1219,7 +1219,7 @@ A track will show `speed: 0.0, dir: "?"` (stationary) if **any** of these condit
 {
   "id": 2,
   "bbox": [21.2, 143.7, 421.3, 475.1],  // Center of frame
-  "score": 0.93,                          // High confidence ✅
+  "score": 0.93,                          // High confidence [x]
   "dir": "?",
   "speed": 0.0,                           // Stationary (below speed floor)
   "dwell": 280.16                         // Accumulating dwell time
@@ -1234,7 +1234,7 @@ A track will show `speed: 0.0, dir: "?"` (stationary) if **any** of these condit
 {
   "id": 4,
   "bbox": [583.5, 23.7, 638.2, 469.0],   // Near right edge (x=583/640)
-  "score": 0.61,                          // Low confidence ❌
+  "score": 0.61,                          // Low confidence [ ]
   "dir": "?",
   "speed": 0.0,                           // Motion suppressed
   "dwell": 0.00                           // Not accumulating (filtered)
@@ -1249,11 +1249,11 @@ A track will show `speed: 0.0, dir: "?"` (stationary) if **any** of these condit
 {
   "id": 5,
   "bbox": [200.0, 150.0, 300.0, 450.0],
-  "score": 0.88,                          // High confidence ✅
+  "score": 0.88,                          // High confidence [x]
   "dir": "L",
   "deg": 175.0,
   "dir_conf": 0.85,
-  "speed": 55.3,                          // Moving ✅
+  "speed": 55.3,                          // Moving [x]
   "speed_norm": 0.087,
   "dwell": 12.5
 }
@@ -1454,7 +1454,7 @@ A track will show `speed: 0.0, dir: "?"` (stationary) if **any** of these condit
       "id": 2,
       "state": "Confirmed",
       "bbox": [21.2, 143.7, 421.3, 475.1],
-      "score": 0.93,                    // High confidence ✅
+      "score": 0.93,                    // High confidence [x]
       "zones": ["main", "roi"],
       "dir": "?",                        // Stationary
       "deg": 0.0,
@@ -1469,7 +1469,7 @@ A track will show `speed: 0.0, dir: "?"` (stationary) if **any** of these condit
       "id": 4,
       "state": "Confirmed",
       "bbox": [583.5, 23.7, 638.2, 469.0],  // Near right edge
-      "score": 0.61,                         // Low confidence ❌
+      "score": 0.61,                         // Low confidence [ ]
       "zones": ["edge"],                     // In edge zone
       "dir": "?",                            // Motion suppressed
       "deg": 0.0,                            // Despite KF having velocity
@@ -1484,7 +1484,7 @@ A track will show `speed: 0.0, dir: "?"` (stationary) if **any** of these condit
       "id": 8,
       "state": "Confirmed",
       "bbox": [200.0, 150.0, 350.0, 450.0],
-      "score": 0.87,                         // High confidence ✅
+      "score": 0.87,                         // High confidence [x]
       "zones": ["main", "roi"],
       "dir": "UR",                           // Moving up-right
       "deg": 52.3,                           // Between up and up-right
@@ -2023,12 +2023,12 @@ For questions, issues, or feature requests:
 
 ### v7.0 (Current)
 
-- ✅ ByteTrack integration for stable IDs
-- ✅ KF velocity for clean motion detection
-- ✅ Publish filtering for edge/ghost track suppression
-- ✅ Motion streak debouncing
-- ✅ `dir_conf` field added
-- ✅ `speed_norm` field added
+- [x] ByteTrack integration for stable IDs
+- [x] KF velocity for clean motion detection
+- [x] Publish filtering for edge/ghost track suppression
+- [x] Motion streak debouncing
+- [x] `dir_conf` field added
+- [x] `speed_norm` field added
 
 ### v6.2
 

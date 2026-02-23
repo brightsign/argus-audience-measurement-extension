@@ -15,6 +15,9 @@
 #include "output/mqtt_broker.h"
 #include "output/face_blur.h"
 #include "util/util.h"
+#ifdef DEMO_MODE_ENABLED
+#include "demo/demo_license_checker.h"
+#endif
 
 static std::atomic<bool> g_stop{false};
 static std::atomic<bool> g_restart_requested{false};
@@ -90,7 +93,7 @@ struct CliArgs {
   const char* cfg{nullptr};
   const char* model{nullptr};
   const char* input{nullptr};
-
+  const char* license_file{nullptr};
 };
 
 static CliArgs parse_cli(int argc, char** argv) {
@@ -99,6 +102,7 @@ static CliArgs parse_cli(int argc, char** argv) {
   a.cfg   = get_opt("--config", argc, argv);
   a.model = get_opt("--model",  argc, argv);
   a.input = get_opt("--input",  argc, argv);
+  a.license_file = get_opt("--license-file", argc, argv);
 
   auto is_json  = [](const char* s){ return s && std::string(s).rfind(".json") != std::string::npos; };
   auto is_rknn  = [](const char* s){ return s && std::string(s).rfind(".rknn") != std::string::npos; };
@@ -395,6 +399,60 @@ int main(int argc, char** argv) {
     // No need to start embedded broker - connect to external broker instead
     LG_INFO("MQTT broker is managed externally by bsext_init on port 1883");
 
+#ifdef DEMO_MODE_ENABLED
+    // ---- Demo mode: enforce expiration date from expires.json ----
+    // Search order (first found wins):
+    //   1. --license-file argument (if provided)
+    //   2. /storage/sd/expires.json (SD card override)
+    //   3. /storage/flash/expires.json (flash override)
+    //   4. /var/volatile/bsext/ext_npu_argus/expires.json (bundled default)
+    std::string license_path;
+    if (cli.license_file && file_exists(cli.license_file)) {
+        license_path = cli.license_file;
+    } else if (file_exists("/storage/sd/expires.json")) {
+        license_path = "/storage/sd/expires.json";
+    } else if (file_exists("/storage/flash/expires.json")) {
+        license_path = "/storage/flash/expires.json";
+    } else {
+        license_path = "/var/volatile/bsext/ext_npu_argus/expires.json";
+    }
+    LG_INFO("Demo mode: using license file %s", license_path.c_str());
+    DemoLicenseChecker license_checker(license_path);
+    if (license_checker.check()) {
+        LG_ERROR("============================================================");
+        LG_ERROR("DEMO MODE EXPIRED: expiration was %s",
+                 license_checker.expires_utc().c_str());
+        LG_ERROR("This build is a DEMO VERSION. Obtain a new version to");
+        LG_ERROR("continue operation. Contact your BrightSign representative.");
+        LG_ERROR("============================================================");
+
+        // Loop without starting the orchestrator so the service manager does
+        // not immediately restart the process into a normal operation cycle.
+        auto last_warning = std::chrono::steady_clock::now();
+        while (!g_stop.load()) {
+            auto now = std::chrono::steady_clock::now();
+            auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+                now - last_warning).count();
+            if (elapsed >= 60) {
+                LG_ERROR("============================================================");
+                LG_ERROR("DEMO MODE EXPIRED: video processing is disabled");
+                LG_ERROR("Expiration: %s  |  Obtain a new version to continue.",
+                         license_checker.expires_utc().c_str());
+                LG_ERROR("============================================================");
+                last_warning = std::chrono::steady_clock::now();
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        }
+        return 0;
+    }
+
+    if (!license_checker.expires_utc().empty()) {
+        LG_INFO("Demo mode active — expires %s", license_checker.expires_utc().c_str());
+    }
+
+    auto last_license_check = std::chrono::steady_clock::now();
+#endif  // DEMO_MODE_ENABLED
+
     // ---- Config monitoring for automatic restart ----
     // Monitor /storage/sd/configs/config.json for changes
     // When changed, request graceful restart to apply new config
@@ -417,12 +475,34 @@ int main(int argc, char** argv) {
     LG_INFO("Entering main loop...");
     LG_INFO("DEBUG: Monitoring flags - g_stop address=%p, g_restart_requested address=%p",
             (void*)&g_stop, (void*)&g_restart_requested);
-    
+
+    // last_license_check is declared in the DEMO_MODE_ENABLED block above.
+
     // Main loop: wait for stop signal or config change request
     int loop_count = 0;
     while (!g_stop.load() && !g_restart_requested.load()) {
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
-        
+
+#ifdef DEMO_MODE_ENABLED
+        {
+            auto now = std::chrono::steady_clock::now();
+            auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+                now - last_license_check).count();
+            if (elapsed >= 60) {
+                last_license_check = std::chrono::steady_clock::now();
+                if (license_checker.check()) {
+                    LG_ERROR("============================================================");
+                    LG_ERROR("DEMO MODE EXPIRED: stopping video processing");
+                    LG_ERROR("Expiration: %s  |  Obtain a new version to continue.",
+                             license_checker.expires_utc().c_str());
+                    LG_ERROR("============================================================");
+                    g_stop.store(true);
+                    break;
+                }
+            }
+        }
+#endif
+
         // Log flag status every 30 seconds (150 iterations * 200ms = 30s)
         if (++loop_count % 150 == 0) {
             LG_INFO("DEBUG: Main loop heartbeat - g_stop=%d g_restart_requested=%d",
@@ -487,7 +567,30 @@ int main(int argc, char** argv) {
     }
     
     LG_INFO("Shutdown complete");
-    
+
+#ifdef DEMO_MODE_ENABLED
+    if (license_checker.is_expired()) {
+        // Reset g_stop so the warning loop runs until a real shutdown signal.
+        g_stop.store(false);
+        auto last_warning = std::chrono::steady_clock::now();
+        while (!g_stop.load()) {
+            auto now = std::chrono::steady_clock::now();
+            auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(
+                now - last_warning).count();
+            if (elapsed >= 60) {
+                LG_ERROR("============================================================");
+                LG_ERROR("DEMO MODE EXPIRED: video processing is disabled");
+                LG_ERROR("Expiration: %s  |  Obtain a new version to continue.",
+                         license_checker.expires_utc().c_str());
+                LG_ERROR("============================================================");
+                last_warning = std::chrono::steady_clock::now();
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        }
+        return 0;
+    }
+#endif
+
     // Return exit code to indicate reason for exit
     // Exit code 42: Restart requested (config changed)
     // Exit code 0: Normal shutdown
