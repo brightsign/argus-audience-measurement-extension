@@ -401,11 +401,22 @@ int main(int argc, char** argv) {
 
 #ifdef DEMO_MODE_ENABLED
     // ---- Demo mode: enforce expiration date from expires.json ----
-    // Default location: extension directory (/var/volatile/bsext/ext_npu_argus/expires.json)
-    // Can be overridden via --license-file argument
-    const char* license_path = cli.license_file
-        ? cli.license_file
-        : "/var/volatile/bsext/ext_npu_argus/expires.json";
+    // Search order (first found wins):
+    //   1. --license-file argument (if provided)
+    //   2. /storage/sd/expires.json (SD card override)
+    //   3. /storage/flash/expires.json (flash override)
+    //   4. /var/volatile/bsext/ext_npu_argus/expires.json (bundled default)
+    std::string license_path;
+    if (cli.license_file && file_exists(cli.license_file)) {
+        license_path = cli.license_file;
+    } else if (file_exists("/storage/sd/expires.json")) {
+        license_path = "/storage/sd/expires.json";
+    } else if (file_exists("/storage/flash/expires.json")) {
+        license_path = "/storage/flash/expires.json";
+    } else {
+        license_path = "/var/volatile/bsext/ext_npu_argus/expires.json";
+    }
+    LG_INFO("Demo mode: using license file %s", license_path.c_str());
     DemoLicenseChecker license_checker(license_path);
     if (license_checker.check()) {
         LG_ERROR("============================================================");

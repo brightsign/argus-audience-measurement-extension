@@ -5,14 +5,16 @@
 This document describes the design for a demo mode feature that enforces a hard
 expiration date on the Argus audience measurement extension. Every minute the
 running process compares the current wall-clock time against an expiration
-timestamp stored in the extension directory (`/var/volatile/bsext/ext_npu_argus/expires.json`).
-Once the current time passes that timestamp, all video frame processing stops
-and the logs emit persistent error messages instructing the operator to obtain a new version.
+timestamp stored in `expires.json`. The file is searched in multiple locations,
+allowing field overrides of the bundled expiration date. Once the current time
+passes the timestamp, all video frame processing stops and the logs emit
+persistent error messages instructing the operator to obtain a new version.
 
 ## Requirements
 
-1. Every 60 seconds, read the license file (default: `/var/volatile/bsext/ext_npu_argus/expires.json`)
-   and compare the expiration timestamp to the current UTC wall-clock time.
+1. Every 60 seconds, read the license file from the first location where it exists
+   (see Search Order below) and compare the expiration timestamp to the current
+   UTC wall-clock time.
 2. If the current time is past the expiration timestamp, stop all video frame
    processing immediately.
 3. After expiration, log an error every 60 seconds stating that demo mode has
@@ -27,14 +29,20 @@ and the logs emit persistent error messages instructing the operator to obtain a
 
 ## Expiration File
 
-### Path
+### Search Order
 
-```
-/var/volatile/bsext/ext_npu_argus/expires.json
-```
+The license file is searched in the following locations (first found wins):
 
-The license file is read directly from the extension installation directory.
-This can be overridden via the `--license-file` command-line argument.
+| Priority | Path | Purpose |
+|----------|------|---------|
+| 1 | `--license-file <path>` | Command-line override |
+| 2 | `/storage/sd/expires.json` | SD card override (field update) |
+| 3 | `/storage/flash/expires.json` | Flash storage override (persistent) |
+| 4 | `/var/volatile/bsext/ext_npu_argus/expires.json` | Bundled default |
+
+This allows extending the demo expiration in the field by placing an updated
+`expires.json` on the SD card or flash storage, without modifying the installed
+extension package.
 
 ### JSON Structure
 
@@ -170,10 +178,18 @@ int main(int argc, char** argv) {
     // ... existing initialization, config load, orchestrator setup ...
 
 #ifdef DEMO_MODE_ENABLED
-    // Default: extension directory; can be overridden via --license-file
-    const char* license_path = cli.license_file
-        ? cli.license_file
-        : "/var/volatile/bsext/ext_npu_argus/expires.json";
+    // Search order: --license-file > /storage/sd > /storage/flash > extension dir
+    std::string license_path;
+    if (cli.license_file && file_exists(cli.license_file)) {
+        license_path = cli.license_file;
+    } else if (file_exists("/storage/sd/expires.json")) {
+        license_path = "/storage/sd/expires.json";
+    } else if (file_exists("/storage/flash/expires.json")) {
+        license_path = "/storage/flash/expires.json";
+    } else {
+        license_path = "/var/volatile/bsext/ext_npu_argus/expires.json";
+    }
+    LG_INFO("Demo mode: using license file %s", license_path.c_str());
     DemoLicenseChecker license_checker(license_path);
 
     // Initial check before starting the orchestrator.
@@ -364,21 +380,35 @@ Edit it there when a new expiry date is needed, then rebuild and repackage.
 
 ### Installation on the player
 
-The `attention_demo` binary reads `expires.json` directly from the extension
-installation directory (`/var/volatile/bsext/ext_npu_argus/expires.json`).
-No copy step is required.
+The `attention_demo` binary searches for `expires.json` in multiple locations
+(see Search Order above). The bundled file in the extension directory serves
+as the default.
 
 ### Updating the expiry date in the field
 
-Replace `expires.json` in the installed extension directory
-(`/var/volatile/bsext/ext_npu_argus/expires.json`) with a file containing a
-later `expires_utc`. The running process re-reads the file on every 60-second
-check and will pick up the new date without a restart. A full repackage and
-reinstall is the preferred method for shipping an updated demo.
+To extend the demo expiration without reinstalling the extension, place an
+updated `expires.json` in one of the override locations:
+
+**Option 1: SD card (easiest, removable)**
+```bash
+# Copy to SD card root
+cp expires.json /storage/sd/expires.json
+```
+
+**Option 2: Flash storage (persistent across SD changes)**
+```bash
+# Copy to flash storage
+cp expires.json /storage/flash/expires.json
+```
+
+The running process re-reads the file on every 60-second check and will pick
+up the new date without a restart. The SD card location takes priority over
+flash, which takes priority over the bundled default.
 
 ### Command-line override
 
-The license file path can be overridden via command-line argument:
+The license file path can be explicitly specified via command-line argument,
+which takes highest priority:
 
 ```bash
 ./attention_demo --license-file /path/to/custom/expires.json
@@ -386,9 +416,10 @@ The license file path can be overridden via command-line argument:
 
 ## Security Considerations
 
-- **Bypass vector:** A user with root access can delete or replace
-  `expires.json` in the extension directory, or advance/change the system clock.
-  This is a soft enforcement intended for honest evaluation use; it is not a DRM system.
+- **Bypass vector:** A user with root access can place an `expires.json` with
+  a far-future date on the SD card or flash storage, or advance/change the
+  system clock. This is a soft enforcement intended for honest evaluation use;
+  it is not a DRM system.
 - **Fail-closed design:** Any file corruption or tampered `version` field
   triggers expiration rather than silently bypassing it.
 - **No network dependency:** The check is entirely local; no phone-home is
