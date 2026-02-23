@@ -93,7 +93,7 @@ struct CliArgs {
   const char* cfg{nullptr};
   const char* model{nullptr};
   const char* input{nullptr};
-
+  const char* license_file{nullptr};
 };
 
 static CliArgs parse_cli(int argc, char** argv) {
@@ -102,6 +102,7 @@ static CliArgs parse_cli(int argc, char** argv) {
   a.cfg   = get_opt("--config", argc, argv);
   a.model = get_opt("--model",  argc, argv);
   a.input = get_opt("--input",  argc, argv);
+  a.license_file = get_opt("--license-file", argc, argv);
 
   auto is_json  = [](const char* s){ return s && std::string(s).rfind(".json") != std::string::npos; };
   auto is_rknn  = [](const char* s){ return s && std::string(s).rfind(".rknn") != std::string::npos; };
@@ -399,8 +400,13 @@ int main(int argc, char** argv) {
     LG_INFO("MQTT broker is managed externally by bsext_init on port 1883");
 
 #ifdef DEMO_MODE_ENABLED
-    // ---- Demo mode: enforce expiration date from /storage/flash/.argus/expires.json ----
-    DemoLicenseChecker license_checker("/storage/flash/.argus/expires.json");
+    // ---- Demo mode: enforce expiration date from expires.json ----
+    // Default location: extension directory (/var/volatile/bsext/ext_npu_argus/expires.json)
+    // Can be overridden via --license-file argument
+    const char* license_path = cli.license_file
+        ? cli.license_file
+        : "/var/volatile/bsext/ext_npu_argus/expires.json";
+    DemoLicenseChecker license_checker(license_path);
     if (license_checker.check()) {
         LG_ERROR("============================================================");
         LG_ERROR("DEMO MODE EXPIRED: expiration was %s",

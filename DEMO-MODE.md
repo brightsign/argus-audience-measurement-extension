@@ -5,14 +5,14 @@
 This document describes the design for a demo mode feature that enforces a hard
 expiration date on the Argus audience measurement extension. Every minute the
 running process compares the current wall-clock time against an expiration
-timestamp stored in `/storage/flash/.argus/expires.json`. Once the current time
-passes that timestamp, all video frame processing stops and the logs emit
-persistent error messages instructing the operator to obtain a new version.
+timestamp stored in the extension directory (`/var/volatile/bsext/ext_npu_argus/expires.json`).
+Once the current time passes that timestamp, all video frame processing stops
+and the logs emit persistent error messages instructing the operator to obtain a new version.
 
 ## Requirements
 
-1. Every 60 seconds, read `/storage/flash/.argus/expires.json` and compare the
-   expiration timestamp to the current UTC wall-clock time.
+1. Every 60 seconds, read the license file (default: `/var/volatile/bsext/ext_npu_argus/expires.json`)
+   and compare the expiration timestamp to the current UTC wall-clock time.
 2. If the current time is past the expiration timestamp, stop all video frame
    processing immediately.
 3. After expiration, log an error every 60 seconds stating that demo mode has
@@ -30,11 +30,11 @@ persistent error messages instructing the operator to obtain a new version.
 ### Path
 
 ```
-/storage/flash/.argus/expires.json
+/var/volatile/bsext/ext_npu_argus/expires.json
 ```
 
-The directory `/storage/flash/.argus/` should be created during provisioning.
-Flash storage is used because it persists across SD card removal and reboots.
+The license file is read directly from the extension installation directory.
+This can be overridden via the `--license-file` command-line argument.
 
 ### JSON Structure
 
@@ -95,8 +95,8 @@ method is called in the main loop every 60 seconds.
 ```mermaid
 stateDiagram-v2
     [*] --> Startup
-    Startup --> NoFile     : expires.json absent
-    Startup --> ParseError : expires.json malformed
+    Startup --> NoFile     : license file absent
+    Startup --> ParseError : license file malformed
     Startup --> Active     : expires_utc in future
     Startup --> Expired    : expires_utc in past
 
@@ -170,7 +170,11 @@ int main(int argc, char** argv) {
     // ... existing initialization, config load, orchestrator setup ...
 
 #ifdef DEMO_MODE_ENABLED
-    DemoLicenseChecker license_checker("/storage/flash/.argus/expires.json");
+    // Default: extension directory; can be overridden via --license-file
+    const char* license_path = cli.license_file
+        ? cli.license_file
+        : "/var/volatile/bsext/ext_npu_argus/expires.json";
+    DemoLicenseChecker license_checker(license_path);
 
     // Initial check before starting the orchestrator.
     if (license_checker.check()) {
@@ -360,10 +364,9 @@ Edit it there when a new expiry date is needed, then rebuild and repackage.
 
 ### Installation on the player
 
-`bsext_init` runs on every start and copies `expires.json` from the extension
-directory into `/storage/flash/.argus/expires.json` before launching the
-`attention_demo` binary. Flash storage persists across reboots and SD card
-removal.
+The `attention_demo` binary reads `expires.json` directly from the extension
+installation directory (`/var/volatile/bsext/ext_npu_argus/expires.json`).
+No copy step is required.
 
 ### Updating the expiry date in the field
 
@@ -373,11 +376,19 @@ later `expires_utc`. The running process re-reads the file on every 60-second
 check and will pick up the new date without a restart. A full repackage and
 reinstall is the preferred method for shipping an updated demo.
 
+### Command-line override
+
+The license file path can be overridden via command-line argument:
+
+```bash
+./attention_demo --license-file /path/to/custom/expires.json
+```
+
 ## Security Considerations
 
 - **Bypass vector:** A user with root access can delete or replace
-  `expires.json`, or advance/change the system clock. This is a soft
-  enforcement intended for honest evaluation use; it is not a DRM system.
+  `expires.json` in the extension directory, or advance/change the system clock.
+  This is a soft enforcement intended for honest evaluation use; it is not a DRM system.
 - **Fail-closed design:** Any file corruption or tampered `version` field
   triggers expiration rather than silently bypassing it.
 - **No network dependency:** The check is entirely local; no phone-home is
