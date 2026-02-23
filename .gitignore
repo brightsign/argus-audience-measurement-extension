@@ -10,6 +10,11 @@ brightsign-oe/
 brightsign-x86_64*.sh
 argus-ext*.zip
 argus-dev*.zip
+argus-demo-ext*.zip
+argus-demo-dev*.zip
+.env
+*~
+bin/
 brightsign-*-src-*.tar.gz
 .aider*
 .envrc
