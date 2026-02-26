@@ -363,8 +363,6 @@ static void blur_persons(
     cv::Mat& drawMat,
     FusionResults* fusion_output,
     const output::BlurConfig& blur_config,
-    int orig_width,
-    int orig_height,
     float scale_x,
     float scale_y,
     int offset_x,
@@ -381,12 +379,6 @@ static void blur_persons(
         yolo_dets_copy = fusion_output->yolo_dets;
     }
 
-    // De-letterbox parameters for YOLOX (640x640 model)
-    const float yolo_model_size = 640.0f;
-    const float ys = std::min(yolo_model_size / orig_width, yolo_model_size / orig_height);
-    const float ypad_x = (yolo_model_size - orig_width * ys) / 2.0f;
-    const float ypad_y = (yolo_model_size - orig_height * ys) / 2.0f;
-
     std::vector<cv::Rect> person_bboxes;
     person_bboxes.reserve(yolo_dets_copy.size());
 
@@ -397,17 +389,12 @@ static void blur_persons(
         if (det.class_id != 0) continue;
         if (det.score < min_confidence) continue;
 
-        // De-letterbox: YOLOX model space (640x640) -> camera space
-        float cx0 = (det.x0 - ypad_x) / ys;
-        float cy0 = (det.y0 - ypad_y) / ys;
-        float cx1 = (det.x1 - ypad_x) / ys;
-        float cy1 = (det.y1 - ypad_y) / ys;
-
-        // Camera space -> canvas space
-        int x0 = (int)(cx0 * scale_x) + offset_x;
-        int y0 = (int)(cy0 * scale_y) + offset_y;
-        int x1 = (int)(cx1 * scale_x) + offset_x;
-        int y1 = (int)(cy1 * scale_y) + offset_y;
+        // Detections are already in camera space (de-letterboxed by YOLOX runner)
+        // Just apply scale and offset to map to canvas space (same as draw_yolo_detections)
+        int x0 = (int)(det.x0 * scale_x) + offset_x;
+        int y0 = (int)(det.y0 * scale_y) + offset_y;
+        int x1 = (int)(det.x1 * scale_x) + offset_x;
+        int y1 = (int)(det.y1 * scale_y) + offset_y;
 
         // Inset by box_thickness so bounding box lines remain unblurred
         x0 += box_thickness;
@@ -502,9 +489,8 @@ void process_inference_results(
 
     // V7.2: Apply person blur BEFORE drawing bounding boxes
     // Blur is applied inside the box area so box lines remain unblurred
-    if (blur_config.enabled && orig_width > 0 && orig_height > 0) {
+    if (blur_config.enabled) {
         blur_persons(drawMat, fusion_output, blur_config,
-                    orig_width, orig_height,
                     scale_x, scale_y, offset_x, offset_y,
                     2);  // box_thickness = 2px inset
     }
