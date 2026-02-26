@@ -261,7 +261,7 @@ void run_inference_loop(
             cv::Mat rgb_mat(dst_h, dst_w, CV_8UC3, rgb_resized_buf.data());
             visualization::process_inference_results(runner, rgb_mat, debug_frame_idx,
                                                      sf->orig_width, sf->orig_height, second_runner,
-                                                     fusion_output);
+                                                     fusion_output, config.blur_config);
 
             // Write frame to disk if writer is available
             if (frame_writer) {
@@ -332,7 +332,7 @@ void run_inference_loop(
                         for (const auto& det : fusion_output->yolo_dets) {
                             // Filter: only person class (class_id == 0 in COCO)
                             if (det.class_id != 0) continue;
-                            if (det.score < 0.5f) continue;  // Minimum confidence
+                            if (det.score < 0.25f) continue;  // Lower threshold to catch distant people
 
                             // De-letterbox: model space -> camera space
                             float cx0 = (det.x0 - ypad_x) / ys;

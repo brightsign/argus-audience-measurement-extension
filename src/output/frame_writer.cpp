@@ -71,20 +71,9 @@ public:
         filepath = (fs::path(output_dir_) / oss.str()).string();
       }
       
-      // Apply person blur if enabled (make a copy to avoid modifying original)
-      cv::Mat output_img;
-      if (blur_config_.enabled && !result.person_tracks.empty()) {
-        output_img = img.clone();
-        std::vector<cv::Rect> person_bboxes;
-        person_bboxes.reserve(result.person_tracks.size());
-        for (const auto& track : result.person_tracks) {
-          person_bboxes.push_back(output::detection_to_rect(
-              track.x0, track.y0, track.x1, track.y1));
-        }
-        output::blur_faces(output_img, person_bboxes, blur_config_);
-      } else {
-        output_img = img;  // No copy needed if not blurring
-      }
+      // V7.2: Blur is now applied in visualization.cpp before drawing bounding boxes
+      // This ensures blur stays inside box area and boxes are drawn on top
+      cv::Mat output_img = img;  // No copy needed - blur already applied if enabled
 
       // Crop letterbox (remove black bars) if original dimensions are available
       if (result.frame_width > 0 && result.frame_height > 0 &&
@@ -283,20 +272,9 @@ public:
         filepath = (fs::path(output_dir_) / oss.str()).string();
       }
       
-      // Apply person blur if enabled (make a copy to avoid modifying original)
-      cv::Mat output_img;
-      if (blur_config_.enabled && !result.person_tracks.empty()) {
-        output_img = img.clone();
-        std::vector<cv::Rect> person_bboxes;
-        person_bboxes.reserve(result.person_tracks.size());
-        for (const auto& track : result.person_tracks) {
-          person_bboxes.push_back(output::detection_to_rect(
-              track.x0, track.y0, track.x1, track.y1));
-        }
-        output::blur_faces(output_img, person_bboxes, blur_config_);
-      } else {
-        output_img = img.clone();  // Clone for async processing
-      }
+      // V7.2: Blur is now applied in visualization.cpp before drawing bounding boxes
+      // This ensures blur stays inside box area and boxes are drawn on top
+      cv::Mat output_img = img.clone();  // Clone for async processing
       
       // Crop letterbox (remove black bars) if original dimensions are available
       if (result.frame_width > 0 && result.frame_height > 0 &&
