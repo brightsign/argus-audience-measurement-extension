@@ -312,6 +312,45 @@ void run_inference_loop(
                             result.tracks.push_back(t);
                         }
                     }
+
+                    // Populate person tracks from YOLOX detections for person blur
+                    // Transform coordinates: YOLOX model space (640x640) -> canvas space (dst_w x dst_h)
+                    if (!fusion_output->yolo_dets.empty()) {
+                        // Step 1: De-letterbox parameters (YOLOX model is 640x640)
+                        const float yolo_model_size = 640.0f;
+                        const float ys = std::min(yolo_model_size / sf->orig_width, yolo_model_size / sf->orig_height);
+                        const float ypad_x = (yolo_model_size - sf->orig_width * ys) / 2.0f;
+                        const float ypad_y = (yolo_model_size - sf->orig_height * ys) / 2.0f;
+
+                        // Step 2: Canvas letterbox parameters (same as face)
+                        const float ycanvas_scale = std::min((float)dst_w / sf->orig_width,
+                                                             (float)dst_h / sf->orig_height);
+                        const int yoffset_x = (dst_w - (int)(sf->orig_width * ycanvas_scale)) / 2;
+                        const int yoffset_y = (dst_h - (int)(sf->orig_height * ycanvas_scale)) / 2;
+
+                        result.person_tracks.reserve(fusion_output->yolo_dets.size());
+                        for (const auto& det : fusion_output->yolo_dets) {
+                            // Filter: only person class (class_id == 0 in COCO)
+                            if (det.class_id != 0) continue;
+                            if (det.score < 0.5f) continue;  // Minimum confidence
+
+                            // De-letterbox: model space -> camera space
+                            float cx0 = (det.x0 - ypad_x) / ys;
+                            float cy0 = (det.y0 - ypad_y) / ys;
+                            float cx1 = (det.x1 - ypad_x) / ys;
+                            float cy1 = (det.y1 - ypad_y) / ys;
+
+                            // Scale: camera space -> canvas space
+                            TrackedBox tb{};
+                            tb.id = -1;  // No tracking ID in this context
+                            tb.x0 = cx0 * ycanvas_scale + yoffset_x;
+                            tb.y0 = cy0 * ycanvas_scale + yoffset_y;
+                            tb.x1 = cx1 * ycanvas_scale + yoffset_x;
+                            tb.y1 = cy1 * ycanvas_scale + yoffset_y;
+                            tb.score = det.score;
+                            result.person_tracks.push_back(tb);
+                        }
+                    }
                 }
 
                 frame_writer->writeFrame(rgb_mat, result);
