@@ -13,6 +13,7 @@
 #include "pipeline/frame_mailbox.h"
 #include "pipeline/pipeline_types.h"
 #include "output/frame_writer.h"
+#include "output/face_blur.h"
 
 // Type alias for the fusion output structure (defined in orchestrator.h)
 struct FusionResults {
@@ -32,6 +33,7 @@ struct WorkerConfig {
     int model_input_width;     // Model input size
     int model_input_height;
     std::string model_name;    // For logging
+    output::BlurConfig blur_config;  // Person blur configuration (applied before drawing boxes)
 };
 
 // Run inference loop for a single model
