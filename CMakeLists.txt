@@ -193,6 +193,16 @@ include_directories( ${CMAKE_SOURCE_DIR}/include)
 # Enable MQTT publisher support
 add_definitions(-DHAVE_MOSQUITTO=1)
 
+# Demo mode: enforces expiration date from /storage/flash/.argus/expires.json.
+# ON by default; production releases must explicitly pass -DENABLE_DEMO_MODE=OFF.
+option(ENABLE_DEMO_MODE "Enable demo expiration date enforcement" ON)
+if(ENABLE_DEMO_MODE)
+    add_definitions(-DDEMO_MODE_ENABLED=1)
+    message(STATUS "Demo mode ENABLED - expiration date enforcement active")
+else()
+    message(STATUS "Demo mode DISABLED - production build")
+endif()
+
 add_executable(attention_demo
         src/main.cpp
         src/attention.cpp
@@ -261,6 +271,8 @@ add_executable(attention_demo
         # Utility module
         src/util/util.cpp
         src/yolox.cc
+        # Demo mode license checker (always compiled; only active when DEMO_MODE_ENABLED defined)
+        src/demo/demo_license_checker.cpp
 )
 
 target_link_libraries(attention_demo

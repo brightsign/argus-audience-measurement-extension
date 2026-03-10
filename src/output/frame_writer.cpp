@@ -35,7 +35,7 @@ public:
       fs::create_directories(output_dir_);
       LG_INFO("frame_writer: created output directory %s", output_dir_.c_str());
       if (blur_config_.enabled) {
-        LG_INFO("frame_writer: face blur enabled (method=%s, intensity=%d)",
+        LG_INFO("frame_writer: person blur enabled (method=%s, intensity=%d)",
                 blur_config_.method == output::BlurMethod::PIXELATE ? "pixelate" : "gaussian",
                 blur_config_.intensity);
       }
@@ -71,20 +71,9 @@ public:
         filepath = (fs::path(output_dir_) / oss.str()).string();
       }
       
-      // Apply face blur if enabled (make a copy to avoid modifying original)
-      cv::Mat output_img;
-      if (blur_config_.enabled && !result.tracks.empty()) {
-        output_img = img.clone();
-        std::vector<cv::Rect> face_bboxes;
-        face_bboxes.reserve(result.tracks.size());
-        for (const auto& track : result.tracks) {
-          face_bboxes.push_back(output::detection_to_rect(
-              track.box.x0, track.box.y0, track.box.x1, track.box.y1));
-        }
-        output::blur_faces(output_img, face_bboxes, blur_config_);
-      } else {
-        output_img = img;  // No copy needed if not blurring
-      }
+      // V7.2: Blur is now applied in visualization.cpp before drawing bounding boxes
+      // This ensures blur stays inside box area and boxes are drawn on top
+      cv::Mat output_img = img;  // No copy needed - blur already applied if enabled
 
       // Crop letterbox (remove black bars) if original dimensions are available
       if (result.frame_width > 0 && result.frame_height > 0 &&
@@ -220,7 +209,7 @@ public:
       fs::create_directories(output_dir_);
       LG_INFO("frame_writer_async: created output directory %s", output_dir_.c_str());
       if (blur_config_.enabled) {
-        LG_INFO("frame_writer_async: face blur enabled (method=%s, intensity=%d)",
+        LG_INFO("frame_writer_async: person blur enabled (method=%s, intensity=%d)",
                 blur_config_.method == output::BlurMethod::PIXELATE ? "pixelate" : "gaussian",
                 blur_config_.intensity);
       }
@@ -283,20 +272,9 @@ public:
         filepath = (fs::path(output_dir_) / oss.str()).string();
       }
       
-      // Apply face blur if enabled (make a copy to avoid modifying original)
-      cv::Mat output_img;
-      if (blur_config_.enabled && !result.tracks.empty()) {
-        output_img = img.clone();
-        std::vector<cv::Rect> face_bboxes;
-        face_bboxes.reserve(result.tracks.size());
-        for (const auto& track : result.tracks) {
-          face_bboxes.push_back(output::detection_to_rect(
-              track.box.x0, track.box.y0, track.box.x1, track.box.y1));
-        }
-        output::blur_faces(output_img, face_bboxes, blur_config_);
-      } else {
-        output_img = img.clone();  // Clone for async processing
-      }
+      // V7.2: Blur is now applied in visualization.cpp before drawing bounding boxes
+      // This ensures blur stays inside box area and boxes are drawn on top
+      cv::Mat output_img = img.clone();  // Clone for async processing
       
       // Crop letterbox (remove black bars) if original dimensions are available
       if (result.frame_width > 0 && result.frame_height > 0 &&

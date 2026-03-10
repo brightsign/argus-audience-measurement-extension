@@ -2,6 +2,7 @@
 
 #include <opencv2/core.hpp>
 #include <cstdint>
+#include "output/face_blur.h"
 
 // Forward declarations
 class IModelRunner;
@@ -14,6 +15,7 @@ namespace visualization {
 // V6.2.3.2: Added orig_width/orig_height to scale coordinates for visualization
 // V6.2.3.5.7: Added second_runner to draw detections from multiple models on same frame
 // V7.0.2: Added fusion_output to read synchronized detection results instead of stale cache
+// V7.2: Added blur_config to apply person blur before drawing boxes
 void process_inference_results(
     IModelRunner* runner,
     cv::Mat& rgb_mat,
@@ -21,7 +23,8 @@ void process_inference_results(
     int orig_width = 0,
     int orig_height = 0,
     IModelRunner* second_runner = nullptr,
-    FusionResults* fusion_output = nullptr) noexcept;
+    FusionResults* fusion_output = nullptr,
+    const output::BlurConfig& blur_config = output::BlurConfig{}) noexcept;
 
 // Save frame as JPEG every Nth frame (controlled by frame_idx % 3)
 void save_debug_jpg(

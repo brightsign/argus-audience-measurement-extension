@@ -46,8 +46,14 @@ success() {
 
 # Configuration
 TIMESTAMP=$(date +%s)
-DEVELOPMENT_PACKAGE="argus-dev-${TIMESTAMP}.zip"
-EXTENSION_PACKAGE="argus-ext-${TIMESTAMP}.zip"
+if [[ "${DEMO_MODE:-0}" == "1" ]]; then
+    DEVELOPMENT_PACKAGE="argus-demo-dev-${TIMESTAMP}.zip"
+    EXTENSION_PACKAGE="argus-demo-ext-${TIMESTAMP}.zip"
+    log "Demo mode packaging: outputs will be named argus-demo-*"
+else
+    DEVELOPMENT_PACKAGE="argus-dev-${TIMESTAMP}.zip"
+    EXTENSION_PACKAGE="argus-ext-${TIMESTAMP}.zip"
+fi
 
 # Supported SOCs and their mappings
 declare -A SOC_PLATFORMS=(
@@ -398,6 +404,18 @@ copy_configs() {
     done
 }
 
+# Copy the demo license expiration file from the project root into the package.
+# bsext_init installs it to /storage/flash/.argus/ on first start.
+copy_expires_file() {
+    log "Copying demo license file..."
+    if [[ -f "${SCRIPT_DIR}/expires.json" ]]; then
+        cp "${SCRIPT_DIR}/expires.json" "staging/expires.json"
+        success "expires.json copied to staging root"
+    else
+        warn "expires.json not found in project root — demo expiration will not be enforced"
+    fi
+}
+
 # Copy shared configs (dashboards, etc.) to extension root
 copy_shared_configs() {
     log "Copying shared configuration files..."
@@ -725,17 +743,17 @@ cleanup_staging() {
 cleanup_old_packages() {
     log "Cleaning up old packages..."
     
-    local dev_count=$(ls -1 argus-dev-*.zip 2>/dev/null | wc -l)
-    local ext_count=$(ls -1 argus-ext-*.zip 2>/dev/null | wc -l)
-    
+    local dev_count=$(ls -1 argus-dev-*.zip argus-demo-dev-*.zip 2>/dev/null | wc -l)
+    local ext_count=$(ls -1 argus-ext-*.zip argus-demo-ext-*.zip 2>/dev/null | wc -l)
+
     if [[ $dev_count -gt 0 ]]; then
         log "Removing $dev_count old development package(s)..."
-        rm -f argus-dev-*.zip
+        rm -f argus-dev-*.zip argus-demo-dev-*.zip
     fi
-    
+
     if [[ $ext_count -gt 0 ]]; then
         log "Removing $ext_count old extension package(s)..."
-        rm -f argus-ext-*.zip
+        rm -f argus-ext-*.zip argus-demo-ext-*.zip
     fi
     
     if [[ $dev_count -gt 0 || $ext_count -gt 0 ]]; then
@@ -770,6 +788,7 @@ main() {
     copy_models
     copy_configs
     copy_shared_configs
+    copy_expires_file
     generate_manifest
     copy_extension_scripts
     echo ""

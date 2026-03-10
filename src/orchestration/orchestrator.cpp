@@ -1383,6 +1383,7 @@ void Orchestrator::yolo_loop_threadfn() noexcept {
         config.model_input_width = yolo_runner_->spec().input_size.w;
         config.model_input_height = yolo_runner_->spec().input_size.h;
         config.model_name = "YOLOX";
+        config.blur_config = cfg_.blur_config;  // V7.2: Pass blur config for person blur
 
         // Wrap the member mailbox in a shared_ptr wrapper that doesn't own it
         std::shared_ptr<FrameMailbox> mb_wrapper(

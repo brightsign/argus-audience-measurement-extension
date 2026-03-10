@@ -481,34 +481,44 @@ step3_build_xt5() {
     print_status "DEBUG: Sourcing SDK environment..."
     source ./sdk/environment-setup-aarch64-oe-linux
 
+    # Demo mode defaults to ON in CMakeLists.txt. Production builds must
+    # explicitly set DEMO_MODE=0 to compile out expiration enforcement.
+    local demo_cmake_flag=""
+    if [[ "${DEMO_MODE:-1}" != "1" ]]; then
+        demo_cmake_flag="-DENABLE_DEMO_MODE=OFF"
+        print_status "Demo mode DISABLED: building production binary without expiration enforcement"
+    else
+        print_status "Demo mode ENABLED: building with expiration date enforcement"
+    fi
+
     # Build for XT5 (RK3588)
     print_status "Building for XT5 (RK3588)..."
     rm -rf build_xt5
     mkdir -p build_xt5 && cd build_xt5
-    
-    cmake .. -DOECORE_TARGET_SYSROOT="${OECORE_TARGET_SYSROOT}" -DTARGET_SOC="rk3588" -DBUILD_TESTS=OFF
+
+    cmake .. -DOECORE_TARGET_SYSROOT="${OECORE_TARGET_SYSROOT}" -DTARGET_SOC="rk3588" -DBUILD_TESTS=OFF ${demo_cmake_flag}
     make
     make install
-    
+
     cd "$project_root"
 
     # Build for RK3576
     print_status "Building for RK3576..."
     rm -rf build_rk3576
     mkdir -p build_rk3576 && cd build_rk3576
-    
-    cmake .. -DOECORE_TARGET_SYSROOT="${OECORE_TARGET_SYSROOT}" -DTARGET_SOC="rk3576" -DBUILD_TESTS=OFF
+
+    cmake .. -DOECORE_TARGET_SYSROOT="${OECORE_TARGET_SYSROOT}" -DTARGET_SOC="rk3576" -DBUILD_TESTS=OFF ${demo_cmake_flag}
     make
     make install
-    
+
     cd "$project_root"
 
     # Build for LS5 (RK3568)
     print_status "Building for LS5 (RK3568)..."
     rm -rf build_ls5
     mkdir -p build_ls5 && cd build_ls5
-    
-    cmake .. -DOECORE_TARGET_SYSROOT="${OECORE_TARGET_SYSROOT}" -DTARGET_SOC="rk3568" -DBUILD_TESTS=OFF
+
+    cmake .. -DOECORE_TARGET_SYSROOT="${OECORE_TARGET_SYSROOT}" -DTARGET_SOC="rk3568" -DBUILD_TESTS=OFF ${demo_cmake_flag}
     make
     make install
 

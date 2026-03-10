@@ -25,6 +25,8 @@ file(GLOB TEST_SOURCES "test_*.cpp")
 
 # Exclude MQTT tests - requires HAVE_MOSQUITTO to be defined
 list(REMOVE_ITEM TEST_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/test_phase2_mqtt.cpp")
+# Exclude old runtime tracker tests - superseded by test_demo_license_checker.cpp
+list(REMOVE_ITEM TEST_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/test_runtime_tracker.cpp")
 
 # Add source files needed by tests
 set(TEST_DEPENDENCIES
@@ -41,6 +43,7 @@ set(TEST_DEPENDENCIES
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/output/mqtt_publisher.cpp  # Phase 2A: MQTT tests
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/output/frame_writer.cpp    # Phase 2C: Async frame writer tests
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/output/face_blur.cpp       # Required by frame_writer
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/demo/demo_license_checker.cpp  # Demo mode license checker
     # Note: Input sources (input_rtsp.cpp, input_usb.cpp, input_file.cpp) are NOT included
     # because they require GStreamer, V4L2, and hardware dependencies not available in x86_64 tests.
     # Input factory tests validate the classification logic (looks_like_rtsp, etc.) only.

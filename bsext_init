@@ -384,6 +384,9 @@ do_start() {
     # Clean up stale PID files
     rm -f ${PIDFILE} ${STREAM_SERVER_PIDFILE} ${MQTT_BROKER_PIDFILE} ${ARGUS_EXPORTER_PIDFILE} 2>/dev/null || true
 
+    # Demo license: The C++ binary reads expires.json directly from the extension
+    # directory (${SCRIPT_PATH}/expires.json) - no copy needed.
+
     SOC_NAME=$(get_soc_name)
     setup_gstreamer_env
 
