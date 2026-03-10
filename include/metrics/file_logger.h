@@ -7,7 +7,7 @@
 class FileRotatingLogger final : public ILogger {
 public:
   struct Config {
-    std::string path   = "/storage/sd/logs/gaze.log"; // fallback to /tmp if not writable
+    std::string path   = "/tmp/gaze.log"; // re-opened at configured log_dir after config load
     size_t      max_mb = 5;                           // 5 MB per file
     int         max_files = 5;                        // gaze.log.1 .. .5
     LogLevel    min_level = LogLevel::Info;           // default threshold
@@ -24,7 +24,9 @@ public:
   void vlog(LogLevel lvl, const char* fmt, va_list ap) noexcept override;
 
   // Returns the actual file path in use (after fallback)
-  std::string path() const noexcept { return path_; }
+  std::string path()    const noexcept { return path_; }
+  LogLevel    level()   const noexcept { return min_level_; }
+  bool        is_open() const noexcept { return fp_ != nullptr; }
 
 private:
   void vwrite(LogLevel lvl, const char* fmt, va_list ap) noexcept;

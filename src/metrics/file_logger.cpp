@@ -8,7 +8,12 @@
 namespace {
 bool ensure_dir(const char* dir) {
   struct stat st{};
-  if (::stat(dir, &st) == 0) return S_ISDIR(st.st_mode);
+  if (::stat(dir, &st) == 0) {
+    if (!S_ISDIR(st.st_mode)) return false;
+    // Fix permissions if not writable
+    ::chmod(dir, 0755);
+    return true;
+  }
   return ::mkdir(dir, 0755) == 0;
 }
 }

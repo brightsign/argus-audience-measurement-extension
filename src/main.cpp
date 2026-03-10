@@ -130,15 +130,15 @@ int main(int argc, char** argv) {
     cv::ocl::setUseOpenCL(false);
     #endif
     
-    // ---- logging (initial setup with Debug level) ----
+    // ---- logging (initial setup - use /tmp to avoid boot-time SD mount race) ----
     FileRotatingLogger::Config logcfg;
-    logcfg.path = "/storage/sd/logs/gaze.log";
+    logcfg.path = "/tmp/gaze.log";
     logcfg.max_mb = 5;
     logcfg.max_files = 5;
     logcfg.min_level = LogLevel::Info;  // Start with Info, will be updated from config
     auto flog = std::make_shared<FileRotatingLogger>(logcfg);
     set_global_logger(flog);
-    LG_INFO("Starting attention_demo; log file: %s", flog->path().c_str());
+    LG_INFO("Starting attention_demo; initial log file: %s", flog->path().c_str());
     
     // TEST: Verify atomic flag operations work correctly
     test_atomic_flags();
@@ -183,6 +183,24 @@ int main(int argc, char** argv) {
       LG_INFO("Log level set to: %s", level_names[static_cast<int>(level)]);
     }
 
+    // Re-initialize logger to configured log_dir if specified
+    if (!appcfg.log_dir.empty()) {
+      std::string log_path = appcfg.log_dir + "/gaze.log";
+      FileRotatingLogger::Config cfg2;
+      cfg2.path      = log_path;
+      cfg2.max_mb    = 5;
+      cfg2.max_files = 5;
+      cfg2.min_level = flog->level();
+      auto flog2 = std::make_shared<FileRotatingLogger>(cfg2);
+      if (flog2->is_open()) {
+        set_global_logger(flog2);
+        flog = flog2;
+        LG_INFO("Logger switched to: %s", log_path.c_str());
+      } else {
+        LG_WARN("Could not open log at %s, keeping /tmp/gaze.log", log_path.c_str());
+      }
+    }
+
     // Override model path if CLI provided
     if (cli.model && file_exists(cli.model)) {
         LG_INFO("CLI: overriding primary model -> %s", cli.model);
@@ -216,9 +234,11 @@ int main(int argc, char** argv) {
             // Clear other inputs to avoid conflicts
             effective_input.usb_device.clear();
             effective_input.file_path.clear();
-        } else if (input_src == "usb" && !appcfg.input.usb_device.empty()) {
-            LG_INFO("  - Selected USB device: %s", appcfg.input.usb_device.c_str());
-            effective_input.usb_device = appcfg.input.usb_device;
+        } else if (input_src == "usb") {
+            std::string detected_usb = autoDetectUsbDeviceV4L2();
+            if (detected_usb.empty()) detected_usb = "/dev/video0";
+            LG_INFO("  - Auto-detected USB device: %s", detected_usb.c_str());
+            effective_input.usb_device = detected_usb;
             effective_input.usb = appcfg.input.usb;
             // Clear other inputs to avoid conflicts
             effective_input.rtsp_url.clear();
@@ -237,9 +257,11 @@ int main(int argc, char** argv) {
                 LG_INFO("  - Fallback to RTSP URL: %s", appcfg.input.rtsp_url.c_str());
                 effective_input.rtsp_url = appcfg.input.rtsp_url;
                 effective_input.rtsp = appcfg.input.rtsp;
-            } else if (!appcfg.input.usb_device.empty()) {
-                LG_INFO("  - Fallback to USB device: %s", appcfg.input.usb_device.c_str());
-                effective_input.usb_device = appcfg.input.usb_device;
+            } else if (!appcfg.input.usb_device.empty() || input_src == "usb") {
+                std::string detected_usb = autoDetectUsbDeviceV4L2();
+                if (detected_usb.empty()) detected_usb = "/dev/video0";
+                LG_INFO("  - Fallback to auto-detected USB device: %s", detected_usb.c_str());
+                effective_input.usb_device = detected_usb;
                 effective_input.usb = appcfg.input.usb;
             } else if (!appcfg.input.file_path.empty()) {
                 LG_INFO("  - Fallback to File path: %s", appcfg.input.file_path.c_str());
@@ -266,16 +288,20 @@ int main(int argc, char** argv) {
             effective_input = reg_input;
         } else {
             // Registry returned nothing useful, fallback to config
-            if (!appcfg.input.rtsp_url.empty() || !appcfg.input.usb_device.empty() || !appcfg.input.file_path.empty()) {
+            if (!appcfg.input.rtsp_url.empty() || !appcfg.input.file_path.empty()) {
                 LG_INFO("Registry empty, using argus-config.json fallback");
                 if (!appcfg.input.rtsp_url.empty()) {
                     LG_INFO("  - RTSP URL: %s", appcfg.input.rtsp_url.c_str());
-                } else if (!appcfg.input.usb_device.empty()) {
-                    LG_INFO("  - USB device: %s", appcfg.input.usb_device.c_str());
                 } else if (!appcfg.input.file_path.empty()) {
                     LG_INFO("  - File path: %s", appcfg.input.file_path.c_str());
                 }
                 effective_input = appcfg.input;
+            } else if (appcfg.input_source == "usb") {
+                std::string detected_usb = autoDetectUsbDeviceV4L2();
+                if (detected_usb.empty()) detected_usb = "/dev/video0";
+                LG_INFO("Registry empty, auto-detected USB device: %s", detected_usb.c_str());
+                effective_input.usb_device = detected_usb;
+                effective_input.usb = appcfg.input.usb;
             } else {
                 LG_INFO("No input configured, using auto-detection");
             }
