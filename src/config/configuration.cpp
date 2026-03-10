@@ -109,7 +109,7 @@ bool load_from_file(const std::string& path, AppConfig& out, bool /*strict*/, ch
     if (j.contains("input")) {
       const auto& in = j["input"];
       if (in.contains("rtsp_url")) out.input.rtsp_url = in["rtsp_url"];
-      if (in.contains("usb_device")) out.input.usb_device = in["usb_device"];
+      // usb_device is intentionally not read from config; it is auto-detected at runtime
       if (in.contains("file_path")) out.input.file_path = in["file_path"];
     }
     

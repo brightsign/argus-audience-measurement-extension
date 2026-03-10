@@ -1,5 +1,6 @@
 #include "input/input_from_registry.h"
 #include "input/input_factory.h"
+#include "metrics/log_global.h"
 #include <cctype>
 #include <string>
 #include <dirent.h>
@@ -39,7 +40,7 @@ static bool xioctl(int fd, unsigned long req, void* arg) {
   return false;
 }
 
-static std::string autoDetectUsbDeviceV4L2() {
+std::string autoDetectUsbDeviceV4L2() {
   // collect /dev/video*
   std::vector<std::string> devs;
   if (DIR* d = ::opendir("/dev")) {
@@ -58,22 +59,28 @@ static std::string autoDetectUsbDeviceV4L2() {
 
     v4l2_capability cap{};
     if (!xioctl(fd, VIDIOC_QUERYCAP, &cap)) { ::close(fd); continue; }
-    if (!(cap.capabilities & V4L2_CAP_VIDEO_CAPTURE) ||
-        !(cap.capabilities & V4L2_CAP_STREAMING)) { ::close(fd); continue; }
 
-    // optional: attempt to set NV12 (skip if your pipeline handles other formats)
+    if (!(cap.capabilities & V4L2_CAP_VIDEO_CAPTURE) ||
+        !(cap.capabilities & V4L2_CAP_STREAMING)) {
+      ::close(fd); continue;
+    }
+
+    // attempt to set NV12 format (accept device regardless of result)
     v4l2_format fmt{};
     fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     fmt.fmt.pix.width = 640;
     fmt.fmt.pix.height = 480;
     fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_NV12;
     fmt.fmt.pix.field = V4L2_FIELD_NONE;
-    // If this fails, still accept the device (format may be set later in open())
-    (void)xioctl(fd, VIDIOC_S_FMT, &fmt);
+    xioctl(fd, VIDIOC_S_FMT, &fmt);
 
     ::close(fd);
-    return dev; // first working device
+    LG_INFO("USB auto-detect: selected %s (driver='%s' card='%s')",
+            dev.c_str(), cap.driver, cap.card);
+    return dev;
   }
+
+  LG_WARN("USB auto-detect: no suitable V4L2 device found");
   return std::string{};
 }
 
@@ -108,11 +115,11 @@ InputConfig make_input_from_registry_value(const std::string& raw) {
 
   // RTSP URL — only set what you actually have
   if (looks_like_rtsp(raw)) {
-    std::printf("DEBUG: make_input_from_registry_value: Detected RTSP URL: '%s'\n", raw.c_str());
+    LG_INFO("[make_input_from_registry_value]: Detected RTSP URL: '%s'", raw.c_str());
     ic.rtsp_url = raw;
     // If your RtspOptions has latency_ms or transport options, set them here.
     // Otherwise, leave ic.rtsp as defaults.
-    std::printf("DEBUG: make_input_from_registry_value: Set ic.rtsp_url='%s'\n", ic.rtsp_url.c_str());
+    LG_INFO("[make_input_from_registry_value]: Set ic.rtsp_url='%s'", ic.rtsp_url.c_str());
     return ic;
   }
 
