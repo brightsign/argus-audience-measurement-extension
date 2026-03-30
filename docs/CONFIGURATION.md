@@ -307,7 +307,7 @@ flowchart TD
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `blur_faces` | boolean | `false` | Enable face blurring in output frames |
+| `blur_faces` | boolean | `false` | Enable person blurring in output frames (blurs the full person bounding box, not just the face region) |
 | `blur_method` | string | `"pixelate"` | Blur method: `"pixelate"` or `"gaussian"` |
 | `blur_intensity` | integer | `12` | Blur strength (see below) |
 

@@ -118,22 +118,24 @@ Subscribe to the MQTT topic for real-time JSON messages:
 mosquitto_sub -h <PLAYER_IP> -t 'bs/argus/analytics' -v
 ```
 
-Example message:
+Example message (abbreviated; see **[MQTT Schema Reference](docs/mqtt-message-format.md)** for all fields):
 ```json
 {
   "schema": "analytics/v7.0",
   "ts": 164.68,
-  "device": "XT5-ABC123",
+  "device": "XS-156",
   "people": 3,
   "gaze": 1,
   "fps": 29,
   "tracks": [
     {
-      "id": 42,
-      "bbox": [100, 200, 300, 600],
-      "dwell": 12.5,
-      "dir": "L",
-      "gaze": { "detected": 1, "time": 8.0 }
+      "id": 63,
+      "state": "Confirmed",
+      "bbox": [52.9, 227.4, 286.6, 720.0],
+      "score": 0.93,
+      "dir": "UR",
+      "dwell": 31.03,
+      "gaze": { "detected": 1, "time": 8.0, "face_bbox": [231, 167, 240, 180] }
     }
   ]
 }
@@ -157,43 +159,57 @@ Key metrics:
 | `argus_visitors_total` | Total visitors (counter) |
 | `argus_dwell_seconds` | Dwell time histogram |
 
-**[Full Prometheus Integration Guide →](docs/INTEGRATION-PROMETHEUS.md)**
+**[Full Prometheus & Grafana Setup Guide →](docs/prometheus-grafana-setup.md)**
 
-## Quick Start
+## Build Packages
 
-### 1. Install the Extension
+The build produces two zip packages, each containing the same binaries, models, and configs for all supported SOCs. They differ in how they are deployed to a BrightSign player.
 
-See **[Build & Installation Guide](docs/BUILD-INSTRUCTIONS.md)** for:
-- Building from source
-- Deploying to your BrightSign player
-- Verifying the installation
+### Development Package (`argus-dev-<timestamp>.zip`)
 
-### 2. Configure Your Camera
+For testing and iterative development. Contents are extracted directly to the filesystem.
 
-Edit `/storage/sd/configs/argus-config.json`:
+- **Deployment path:** `/usr/local/argus` (volatile storage)
+- **Persistence:** Lost on reboot
+- **Install method:** Unzip and run manually
+- **Use case:** Rapid iteration, debugging, field testing
 
-```json
-{
-  "input_source": "rtsp",
-  "input": {
-    "rtsp_url": "rtsp://192.168.0.100:8554/live"
-  }
-}
-```
-
-See **[Configuration Reference](docs/CONFIGURATION.md)** for all options.
-
-### 3. Start Consuming Data
-
-**MQTT:**
 ```bash
-mosquitto_sub -h <PLAYER_IP> -t 'bs/argus/analytics'
+# On the player
+mkdir -p /usr/local/argus && cd /usr/local/argus
+unzip /storage/sd/argus-dev-*.zip
+./bsext_init run
 ```
 
-**Prometheus:**
+### Extension Package (`argus-ext-<timestamp>.zip`)
+
+For permanent production deployment. Contains an LVM image created by `sh/make-extension-lvm` that installs into the BrightSign extension system.
+
+- **Deployment path:** BrightSign extension partition (mounted at `/var/volatile/bsext/ext_npu_argus`)
+- **Persistence:** Survives reboots and SD card removal
+- **Install method:** Run the LVM install script, then reboot
+- **Use case:** Production deployments, long-running installations
+
 ```bash
-curl http://<PLAYER_IP>:9101/metrics | grep argus_
+# On the player
+cd /usr/local
+unzip /storage/sd/argus-ext-*.zip
+bash ./ext_npu_argus_install-lvm.sh
+reboot
 ```
+
+### Building Packages
+
+Building requires an **x86_64 Linux** machine (Ubuntu 20.04+ recommended) with Docker or Podman. The build uses a containerized cross-compilation SDK to produce ARM binaries for the BrightSign players — it cannot run on ARM, macOS, or Windows hosts.
+
+```bash
+make build          # Production build
+make build-demo     # Demo build (adds expiration date enforcement)
+```
+
+Both targets compile the application and run `./package`, which produces the two zip files in the project root. Demo builds include a `demo` prefix in the filenames (e.g., `argus-demo-dev-*.zip`).
+
+See **[Build & Installation Guide](docs/BUILD-INSTRUCTIONS.md)** for full details on prerequisites, SDK setup, and incremental builds.
 
 ## Supported Hardware
 
@@ -214,22 +230,7 @@ curl http://<PLAYER_IP>:9101/metrics | grep argus_
 
 ## How Person Tracking Works
 
-Argus uses ByteTrack to maintain stable person IDs across frames:
-
-```mermaid
-stateDiagram-v2
-    [*] --> Tentative: New detection
-    Tentative --> Confirmed: 3 hits
-    Confirmed --> Lost: No match
-    Lost --> Confirmed: Recovered
-    Lost --> [*]: 12 frames missed
-
-    note right of Confirmed: Reported in analytics
-```
-
-- **No re-identification**: If someone leaves and returns, they get a new ID
-- **No embeddings stored**: Privacy-preserving by design
-- **Gaze per person**: Each tracked person has individual gaze metrics
+Argus uses ByteTrack to maintain stable person IDs across frames. Each tracked person has individual gaze metrics, dwell time, and movement direction. No facial embeddings are stored — privacy-preserving by design.
 
 **[Full Tracking Explanation →](docs/TRACKING-EXPLAINED.md)**
 
@@ -240,11 +241,11 @@ stateDiagram-v2
 | **[Build & Installation](docs/BUILD-INSTRUCTIONS.md)** | Building, deploying, and installing |
 | **[Configuration Reference](docs/CONFIGURATION.md)** | All configuration options |
 | **[MQTT Integration](docs/INTEGRATION-MQTT.md)** | Real-time data via MQTT |
-| **[Prometheus Integration](docs/INTEGRATION-PROMETHEUS.md)** | Metrics for dashboards |
-| **[Tracking Explained](docs/TRACKING-EXPLAINED.md)** | How person tracking works |
 | **[MQTT Schema Reference](docs/mqtt-message-format.md)** | Complete v7.0 message format |
-| **[Prometheus Setup](docs/prometheus-grafana-setup.md)** | Grafana dashboard setup |
+| **[Prometheus & Grafana](docs/prometheus-grafana-setup.md)** | Metrics, dashboards, and alerting |
+| **[Tracking Explained](docs/TRACKING-EXPLAINED.md)** | How person tracking works |
 | **[Architecture Design](docs/DESIGN.md)** | System architecture deep-dive |
+| **[C++ Architecture](docs/cpp-design.md)** | Code structure and modification guide |
 
 ## Troubleshooting
 

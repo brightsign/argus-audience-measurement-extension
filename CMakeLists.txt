@@ -194,8 +194,8 @@ include_directories( ${CMAKE_SOURCE_DIR}/include)
 add_definitions(-DHAVE_MOSQUITTO=1)
 
 # Demo mode: enforces expiration date from /storage/flash/.argus/expires.json.
-# ON by default; production releases must explicitly pass -DENABLE_DEMO_MODE=OFF.
-option(ENABLE_DEMO_MODE "Enable demo expiration date enforcement" ON)
+# OFF by default; demo releases must explicitly pass -DENABLE_DEMO_MODE=ON.
+option(ENABLE_DEMO_MODE "Enable demo expiration date enforcement" OFF)
 if(ENABLE_DEMO_MODE)
     add_definitions(-DDEMO_MODE_ENABLED=1)
     message(STATUS "Demo mode ENABLED - expiration date enforcement active")

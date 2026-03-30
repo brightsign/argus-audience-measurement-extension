@@ -8,7 +8,7 @@ This guide covers building Argus from source and deploying it to BrightSign play
 
 | Requirement | Details |
 |-------------|---------|
-| **OS** | Linux (Ubuntu 20.04+ recommended) or macOS |
+| **OS** | x86_64 Linux (Ubuntu 20.04+ recommended) |
 | **Container Runtime** | Docker or Podman |
 | **Disk Space** | ~10GB for SDK and build artifacts |
 | **Memory** | 8GB+ recommended |
