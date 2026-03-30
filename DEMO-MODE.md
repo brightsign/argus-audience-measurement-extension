@@ -1,5 +1,11 @@
 # Demo Mode Design: Expiration Date Enforcement
 
+## Build Configuration
+
+Demo mode is **disabled by default**. To build with expiration enforcement,
+use `make build-demo` or pass `-DENABLE_DEMO_MODE=ON` to CMake. Standard
+`make build` produces a production binary with no expiration code.
+
 ## Overview
 
 This document describes the design for a demo mode feature that enforces a hard
@@ -295,14 +301,14 @@ Demo mode enforcement is compiled in only when `DEMO_MODE_ENABLED` is defined:
 
 ```cmake
 # CMakeLists.txt
-option(ENABLE_DEMO_MODE "Compile in demo expiration enforcement" ON)
+option(ENABLE_DEMO_MODE "Compile in demo expiration enforcement" OFF)
 if(ENABLE_DEMO_MODE)
     add_definitions(-DDEMO_MODE_ENABLED=1)
     target_sources(argus_extension PRIVATE src/demo/demo_license_checker.cpp)
 endif()
 ```
 
-A production build (`ENABLE_DEMO_MODE=OFF`) contains no demo-mode code paths
+The default build (`ENABLE_DEMO_MODE=OFF`) contains no demo-mode code paths
 and ignores the presence or absence of `expires.json`. Demo mode is ON by
 default; it must be explicitly disabled for production releases.
 
@@ -371,8 +377,8 @@ Edit it there when a new expiry date is needed, then rebuild and repackage.
 
 ### Build and package flow
 
-1. The `Makefile` `build` target compiles with `ENABLE_DEMO_MODE=ON` (the
-   CMake default). The `build-prod` target passes `DEMO_MODE=0` which sets
+1. The `Makefile` `build-demo` target compiles with `ENABLE_DEMO_MODE=ON`.
+   The default `build` target passes `DEMO_MODE=0` which sets
    `ENABLE_DEMO_MODE=OFF` to produce a binary with no expiration code.
 2. The `package` script copies `expires.json` from the project root into the
    staging bundle root (`staging/expires.json`).

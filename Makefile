@@ -1,4 +1,4 @@
-.PHONY: all build build-prod build-update build-prod-update clean clean-all install-tools build-docs pdf
+.PHONY: all build build-demo build-update build-demo-update clean clean-all install-tools build-docs pdf
 
 # Pass FORCE_UPDATE and DEMO_MODE to child processes
 export FORCE_UPDATE
@@ -22,36 +22,36 @@ DOCS_MD := $(DOCS_DIR)/argus-api-integration-guide.md \
 	$(DOCS_DIR)/CONFIGURATION.md \
 	$(DOCS_DIR)/TRACKING-EXPLAINED.md \
 	$(DOCS_DIR)/INTEGRATION-MQTT.md \
-	$(DOCS_DIR)/INTEGRATION-PROMETHEUS.md \
+	$(DOCS_DIR)/prometheus-grafana-setup.md \
 	$(DOCS_DIR)/BUILD-INSTRUCTIONS.md
 DOCS_PDF := $(DOCS_MD:.md=.pdf)
 
 all:
-	@echo "Demo targets (default):"
-	@echo "  build             Build demo extension with expiration date enforcement"
-	@echo "  build-update      Build demo extension with forced Go dependency updates"
+	@echo "Build targets:"
+	@echo "  build             Build extension"
+	@echo "  build-update      Build extension with forced Go dependency updates"
 	@echo ""
-	@echo "Production targets:"
-	@echo "  build-prod        Build production extension (no expiration enforcement)"
-	@echo "  build-prod-update Build production extension with forced Go dependency updates"
+	@echo "Demo targets (adds expiration date enforcement):"
+	@echo "  build-demo        Build demo extension with expiration date"
+	@echo "  build-demo-update Build demo extension with forced Go dependency updates"
 	@echo ""
 	@echo "Other targets: clean, clean-all, install-tools, build-docs"
 
-# Default build: demo extension with expiration date enforcement (DEMO_MODE_ENABLED=ON)
+# Default build: production extension (DEMO_MODE_ENABLED=OFF)
 build:
-	DEMO_MODE=1 ./scripts/runall.sh --auto
-
-# Production build: no expiration enforcement (DEMO_MODE_ENABLED=OFF)
-build-prod:
 	DEMO_MODE=0 ./scripts/runall.sh --auto
 
-# Demo build with forced Go dependency updates
-build-update:
-	DEMO_MODE=1 FORCE_UPDATE=1 ./scripts/runall.sh --auto
+# Demo build: adds expiration date enforcement (DEMO_MODE_ENABLED=ON)
+build-demo:
+	DEMO_MODE=1 ./scripts/runall.sh --auto
 
 # Production build with forced Go dependency updates
-build-prod-update:
+build-update:
 	DEMO_MODE=0 FORCE_UPDATE=1 ./scripts/runall.sh --auto
+
+# Demo build with forced Go dependency updates
+build-demo-update:
+	DEMO_MODE=1 FORCE_UPDATE=1 ./scripts/runall.sh --auto
 
 clean:
 	rm -rf build_xt5 build_ls5 build_rk3576 build_rk3568 staging
