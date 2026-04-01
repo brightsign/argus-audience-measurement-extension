@@ -10,6 +10,10 @@ Argus is a **machine vision application** that analyzes live video from a camera
 
 Transform your BrightSign digital signage player into an intelligent audience measurement system. Understand not just *who* is in front of your display, but *how* they're engaging with it.
 
+## The Name "Argus"
+
+In Greek mythology, Argus Panoptes ("all-seeing") was a giant with a hundred eyes who served as an ever-watchful guardian. The name fits an audience measurement system that uses computer vision to observe and understand how people engage with digital displays.
+
 ## What Argus Measures
 
 | Measurement | Description |
