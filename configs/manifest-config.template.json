@@ -1,7 +1,7 @@
 {
   "_comment": "Argus Audience Measurement Extension Manifest Configuration Template",
   "_instructions": [
-    "1. Copy this file to 'manifest-config.json'",
+    "1. Copy this file to 'configs/manifest-config.json'",
     "2. Fill in your extension's information",
     "3. The package script will automatically generate the full manifest.json",
     "4. Version should follow semantic versioning: MAJOR.MINOR.PATCH"

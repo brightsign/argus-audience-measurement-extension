@@ -824,7 +824,7 @@ Create a simple test log:
 
 ```bash
 # Create test log script
-cat > track_test_results.sh << 'EOF'
+cat > scripts/track_test_results.sh << 'EOF'
 #!/bin/bash
 DATE=$(date +%Y%m%d_%H%M%S)
 RESULTS_DIR="test_results"
@@ -845,10 +845,10 @@ grep -E "\[  PASSED  \]|\[  FAILED  \]" $RESULTS_DIR/run_$DATE.log
 echo "Results saved to: $RESULTS_DIR/run_$DATE.log"
 EOF
 
-chmod +x track_test_results.sh
+chmod +x scripts/track_test_results.sh
 
 # Use it
-./track_test_results.sh
+./scripts/track_test_results.sh
 ```
 
 #### Pre-Commit Testing Checklist

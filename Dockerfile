@@ -126,7 +126,7 @@ RUN cd /home/${USERNAME}/bsoe && \
     echo "BrightSign OS source v${BRIGHTSIGN_OS_VERSION} ready"
 
 # Copy patch script (will be called by build script when needed)
-COPY setup-patches.sh /usr/local/bin/setup-patches.sh
+COPY scripts/setup-patches.sh /usr/local/bin/setup-patches.sh
 RUN sudo chmod +x /usr/local/bin/setup-patches.sh
 
 # Default command - clean container with no automatic execution

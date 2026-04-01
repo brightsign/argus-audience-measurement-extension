@@ -430,23 +430,23 @@ copy_shared_configs() {
     fi
 }
 
-# Generate manifest.json from manifest-config.json
+# Generate manifest.json from configs/manifest-config.json
 generate_manifest() {
     log "Generating manifest.json..."
-    
+
     # Check if manifest-config.json exists
-    if [[ ! -f "manifest-config.json" ]]; then
-        warn "manifest-config.json not found. Creating from template..."
-        if [[ -f "manifest-config.template.json" ]]; then
-            cp manifest-config.template.json manifest-config.json
-            warn "Please edit manifest-config.json with your extension information"
+    if [[ ! -f "configs/manifest-config.json" ]]; then
+        warn "configs/manifest-config.json not found. Creating from template..."
+        if [[ -f "configs/manifest-config.template.json" ]]; then
+            cp configs/manifest-config.template.json configs/manifest-config.json
+            warn "Please edit configs/manifest-config.json with your extension information"
         else
-            error "manifest-config.json and template not found"
+            error "configs/manifest-config.json and template not found"
         fi
     fi
-    
+
     # Read configuration
-    local config_content=$(cat manifest-config.json)
+    local config_content=$(cat configs/manifest-config.json)
     
     # Get build information
     local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")

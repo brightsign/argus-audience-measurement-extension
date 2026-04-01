@@ -60,10 +60,12 @@ clean:
 		find "$$dir" -mindepth 1 -maxdepth 1 ! -name model -exec rm -rf {} + 2>/dev/null || true; \
 	done
 	rm -f *.pdf docs/*.pdf
+	rm -f *.zip
 
 clean-all: clean
 	rm -rf install
 	rm -f *.pdf docs/*.pdf
+	rm -f *.zip
 
 # Install documentation build tools
 install-tools:
