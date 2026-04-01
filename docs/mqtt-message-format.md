@@ -704,7 +704,7 @@ const area = width * height;
    - Debug false detections
    - Lighting quality indicator
 
-- **Note:** Tracks with score < 0.70 have their motion suppressed (see [Publish Filtering](./publish-filtering.md))
+- **Note:** Tracks with score < 0.70 have their motion suppressed
 
 ### `dir` (string)
 
@@ -1970,7 +1970,7 @@ client.loop_forever()
 
 ## Configuration Reference
 
-Key parameters affecting published data (see `config.json`):
+Key parameters affecting published data (see `configs/argus-config.json`):
 
 ```json
 {
@@ -1991,15 +1991,6 @@ Key parameters affecting published data (see `config.json`):
   }
 }
 ```
-
----
-
-## Related Documentation
-
-- **ByteTrack Integration:** [bytetrack-integration.md](./bytetrack-integration.md)
-- **KF Velocity:** [kf-velocity-integration.md](./kf-velocity-integration.md)
-- **Publish Filtering:** [publish-filtering.md](./publish-filtering.md)
-- **Configuration:** See `configs/config.json`
 
 ---
 

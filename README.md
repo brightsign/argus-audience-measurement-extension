@@ -22,7 +22,27 @@ Transform your BrightSign digital signage player into an intelligent audience me
 | **Direction** | Which way are people moving? (8-way compass) |
 | **Speed** | How fast are people moving? |
 
-## What are the Parts of the Solution?
+## Quick Start
+
+You can install this extension on any BrightSign player with an NPU.  Simply copy the [Argus BSFW file](link) onto the root of an SD card, install the card in the player, and reboot.
+
+Plug a camera into the USB port of the player, or, for advanced setup you can [configure to read an RTSP network video stream](link).
+
+From another host on your network do:
+
+```bash
+mosquitto_sub -h <player host or ip> -t 'bs/argus/#' -v
+```
+You should see something like:
+
+```bash
+bs/argus/analytics {"schema":"analytics/v7.0","ts":7228.91,"device":"BS-90AC3F2BF3C0","stream":"/dev/video1","frame_w":640,"frame_h":480,"model":"yolox_s","fw_version":"7.0.0","npu_load":0.0,"people":0,"people_confident":0,"gaze":0,"fps":29,"roi":{"type":"border","border_frac":0.30,"rect":[192,144,448,336]},"health":{"detector_fps":29.0,"tracker_fps":29.0,"queue_latency_ms":0,"dropped_frames":0,"last_model_reload_ts":0.0},"tracks":[]}
+bs/argus/analytics {"schema":"analytics/v7.0","ts":7229.91,"device":"BS-90AC3F2BF3C0","stream":"/dev/video1","frame_w":640,"frame_h":480,"model":"yolox_s","fw_version":"7.0.0","npu_load":0.0,"people":0,"people_confident":0,"gaze":0,"fps":29,"roi":{"type":"border","border_frac":0.30,"rect":[192,144,448,336]},"health":{"detector_fps":29.0,"tracker_fps":29.0,"queue_latency_ms":0,"dropped_frames":0,"last_model_reload_ts":0.0},"tracks":[]}
+```
+
+If so, you're good!  See the [MQTT message format guide](./docs/mqtt-message-format.md) for information on the format.
+
+## Solution Description
 
 ```mermaid
 flowchart LR
