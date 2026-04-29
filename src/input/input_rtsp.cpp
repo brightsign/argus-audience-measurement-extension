@@ -428,12 +428,11 @@ public:
         return false;
     }
 
-    bool pull_into_rgb(uint8_t* rgb_out_320x320) {
+    bool pull_into_rgb(std::vector<uint8_t>& rgb_out, int& out_w, int& out_h) {
         if (!pipeline_ || !appsink_) return false;
         if (broken_.load(std::memory_order_acquire)) return false;
 
         const int per_try_ms = 200, tries = 5;
-        if (!rgb_out_320x320) return false;
 
         for (int i = 0; i < tries; ++i) {
             GstSample* sample = gst_app_sink_try_pull_sample(GST_APP_SINK(appsink_), per_try_ms * GST_MSECOND);
@@ -474,45 +473,33 @@ public:
                 src_base = nv12_full.data();
             }
 
+            // Ensure output buffer is sized for full-res W×H BGR
+            rgb_out.resize(size_t(W) * H * 3);
+            out_w = W;
+            out_h = H;
+
             bool ok = false;
             do {
-                // Try RGA first (hardware acceleration)
-                // NV12 (W×H) -> NV12 (320×320) via RGA
-                rga_buffer_t src_nv12       = wrapbuffer_virtualaddr((void*)src_base, W, H, RK_FORMAT_YCbCr_420_SP);
-                rga_buffer_t dst_nv12_small = wrapbuffer_virtualaddr(nv12_small_.data(), 320, 320, RK_FORMAT_YCbCr_420_SP);
-                double fx = 320.0 / (double)W;
-                double fy = 320.0 / (double)H;
-                int ret = imresize(src_nv12, dst_nv12_small, fx, fy, 0, IM_SYNC);
-                
+                // RGA: NV12 (W×H) -> BGR (W×H) directly (color convert only, no resize)
+                rga_buffer_t src_nv12 = wrapbuffer_virtualaddr((void*)src_base, W, H, RK_FORMAT_YCbCr_420_SP);
+                rga_buffer_t dst_bgr  = wrapbuffer_virtualaddr(rgb_out.data(), W, H, RK_FORMAT_BGR_888);
+                int ret = imcvtcolor(src_nv12, dst_bgr, RK_FORMAT_YCbCr_420_SP, RK_FORMAT_BGR_888, IM_SYNC);
+
                 if (ret == IM_STATUS_SUCCESS) {
-                    // NV12 (320×320) -> BGR (320×320) via RGA
-                    rga_buffer_t src_small = wrapbuffer_virtualaddr(nv12_small_.data(), 320, 320, RK_FORMAT_YCbCr_420_SP);
-                    rga_buffer_t dst_bgr   = wrapbuffer_virtualaddr(rgb_out_320x320, 320, 320, RK_FORMAT_BGR_888);
-                    ret = imcvtcolor(src_small, dst_bgr, RK_FORMAT_YCbCr_420_SP, RK_FORMAT_BGR_888, IM_SYNC);
-                    
-                    if (ret == IM_STATUS_SUCCESS) {
-                        ok = true;
-                        break;  // RGA succeeded
-                    }
+                    ok = true;
+                    break;  // RGA succeeded
                 }
-                
-                // RGA failed, fall back to OpenCV (software processing for RK3576)
+
+                // RGA failed, fall back to OpenCV
                 static bool logged_fallback = false;
                 if (!logged_fallback) {
-                    LG_WARN("input_rtsp:RGA failed, using OpenCV for NV12->BGR conversion (slower)\n");
+                    LG_WARN("input_rtsp:RGA color convert failed, using OpenCV fallback\n");
                     logged_fallback = true;
                 }
-                
-                // OpenCV NV12 -> BGR conversion
-                // NV12 has Y plane (W×H) followed by interleaved UV plane (W×H/2)
+
                 cv::Mat nv12_mat(H + H/2, W, CV_8UC1, (void*)src_base);
-                cv::Mat bgr_full(H, W, CV_8UC3);
+                cv::Mat bgr_full(H, W, CV_8UC3, rgb_out.data());
                 cv::cvtColor(nv12_mat, bgr_full, cv::COLOR_YUV2BGR_NV12);
-                
-                // Resize to 320×320
-                cv::Mat bgr_small(320, 320, CV_8UC3, rgb_out_320x320);
-                cv::resize(bgr_full, bgr_small, cv::Size(320, 320), 0, 0, cv::INTER_LINEAR);
-                
                 ok = true;
             } while(false);
 
@@ -569,7 +556,9 @@ struct RtspInputSource::Impl {
   std::unique_ptr<RtspNv12Helper> rtsp_helper;
   
   // Frame buffer (pre-allocated scratch for FrameView)
-  std::vector<uint8_t> rgb_frame_;  // 320×320×3
+  std::vector<uint8_t> rgb_frame_;  // Full-res BGRfrom RTSP (dynamically sized)
+  int frame_w_{0};
+  int frame_h_{0};
   
   Impl(const std::string& u, const RtspOptions& o) 
     : url(u), opts(o), rtsp_helper(new RtspNv12Helper) {}
@@ -592,7 +581,7 @@ bool RtspInputSource::open() noexcept {
     return false;
   }
 
-  p_->rgb_frame_.assign(320 * 320 * 3, 0);
+  // rgb_frame_ is dynamically allocated on first pull_into_rgb call
   p_->opened.store(true, std::memory_order_release);
   LG_INFO("input_rtsp:open succeeded for %s\n", p_->url.c_str());
   return true;
@@ -626,26 +615,24 @@ FetchStatus RtspInputSource::tryFetch(FrameView& out) noexcept {
     return FetchStatus::Broken;
   }
 
-  if (!p_->rtsp_helper->pull_into_rgb(p_->rgb_frame_.data())) {
+  if (!p_->rtsp_helper->pull_into_rgb(p_->rgb_frame_, p_->frame_w_, p_->frame_h_)) {
     return FetchStatus::Timeout;
   }
 
   // Fill FrameView with BGR frame (matching USB camera format)
   out.fmt     = PixelFormat::BGR24;
-  out.width   = 320;  // Preprocessed/resized dimensions
-  out.height  = 320;
-  out.stride0 = 320 * 3;
+  out.width   = p_->frame_w_;
+  out.height  = p_->frame_h_;
+  out.stride0 = p_->frame_w_ * 3;
   out.stride1 = 0;
   out.plane0  = p_->rgb_frame_.data();
   out.plane1  = nullptr;
   out.pts_ns  = std::chrono::duration_cast<std::chrono::nanoseconds>(
                     std::chrono::steady_clock::now().time_since_epoch()).count();
   
-  // V7.1: Store original RTSP stream dimensions for proper coordinate de-letterboxing
-  // The frame has been resized to 320×320, but we need to preserve original dimensions
-  // so that YOLOX can properly de-letterbox detections back to camera coordinates
-  out.orig_width  = p_->rtsp_helper->width();   // Original 1920×1080 (or camera native res)
-  out.orig_height = p_->rtsp_helper->height();
+  // Frame is stored at native RTSP resolution (no downscale); orig == frame dims
+  out.orig_width  = p_->frame_w_;
+  out.orig_height = p_->frame_h_;
   
   // V7.1: Debug - verify original dimensions are being set correctly
   static int rtsp_fetch_debug = 0;

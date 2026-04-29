@@ -370,6 +370,14 @@ copy_models() {
             log "Copied COCO labels for $soc"
         fi
 
+        # Copy MobileNetV3 vest classifier
+        if [[ -f "$install_dir/model/Mobilenetv3_small.rknn" ]]; then
+            cp "$install_dir/model/Mobilenetv3_small.rknn" "$package_soc_dir/model/"
+            log "Copied Mobilenetv3_small model for $soc"
+        else
+            warn "Mobilenetv3_small.rknn not found for $soc (uniform classifier disabled)"
+        fi
+
         success "$soc models copied"
     done
 }

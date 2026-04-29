@@ -163,6 +163,43 @@ bool load_from_file(const std::string& path, AppConfig& out, bool /*strict*/, ch
     if (j.contains("blur_intensity") && j["blur_intensity"].is_number_integer()) {
       out.blur_intensity = j["blur_intensity"].get<int>();
     }
+
+    // Parse employee detection (preferred, new dedicated section)
+    if (j.contains("employee_detection") && j["employee_detection"].is_object()) {
+      const auto& ed = j["employee_detection"];
+      if (ed.contains("enabled") && ed["enabled"].is_boolean())
+        out.employee_detection.enabled = ed["enabled"].get<bool>();
+      if (ed.contains("model_path") && ed["model_path"].is_string())
+        out.employee_detection.model_path = ed["model_path"].get<std::string>();
+      if (ed.contains("npu_core") && ed["npu_core"].is_number_integer())
+        out.employee_detection.npu_core = ed["npu_core"].get<int>();
+    }
+
+    // Parse uniform/vest classifier (MobileNetV3-Small) — legacy fields for backwards compatibility.
+    // If the new employee_detection section is absent but the legacy fields are present,
+    // migrate them into the new structure so old configs continue to work.
+    if (!j.contains("employee_detection")) {
+      if (j.contains("enable_uniform_model") && j["enable_uniform_model"].is_boolean()) {
+        out.enable_uniform_model = j["enable_uniform_model"].get<bool>();
+        out.employee_detection.enabled = out.enable_uniform_model;
+      }
+      if (j.contains("uniform_model") && j["uniform_model"].is_object()) {
+        const auto& um = j["uniform_model"];
+        if (um.contains("model_path") && um["model_path"].is_string()) {
+          out.uniform_model.model_path = um["model_path"].get<std::string>();
+          out.employee_detection.model_path = out.uniform_model.model_path;
+        }
+        if (um.contains("npu_core") && um["npu_core"].is_number_integer()) {
+          out.uniform_model.npu_core = um["npu_core"].get<int>();
+          out.employee_detection.npu_core = out.uniform_model.npu_core;
+        }
+      }
+    } else {
+      // New section present — also keep legacy fields in sync for any code that still reads them
+      out.enable_uniform_model = out.employee_detection.enabled;
+      out.uniform_model.model_path = out.employee_detection.model_path;
+      out.uniform_model.npu_core   = out.employee_detection.npu_core;
+    }
     
     // Parse frame output options
     if (j.contains("enable_frame_output") && j["enable_frame_output"].is_boolean()) {

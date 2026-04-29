@@ -4,6 +4,7 @@
 #include "models/model_runner.h"
 #include "models/model_runner_retinaface.h"
 #include "models/model_runner_yolox.h"
+#include "tracking/tracker.h"
 #include "attention.h"
 #include "metrics/log_global.h"
 #include <opencv2/imgcodecs.hpp>
@@ -61,6 +62,7 @@ static void draw_face_detections(
     // Lock fusion output and copy detections + landmarks for processing
     std::vector<Detection> face_dets_copy;
     std::vector<Landmarks> face_lms_copy;
+    std::vector<TrackedBox> tracks_snap;
     uint64_t face_seq_copy = 0;
     {
         std::lock_guard<std::mutex> g(fusion_output->m);
@@ -77,6 +79,7 @@ static void draw_face_detections(
         face_dets_copy = fusion_output->face_dets;
         face_lms_copy = fusion_output->face_lms;
         face_seq_copy = fusion_output->face_seq;
+        tracks_snap   = fusion_output->tracks;
     }
     
     // Log periodically
@@ -114,44 +117,56 @@ static void draw_face_detections(
         if (i < face_lms_copy.size()) {
             const auto& lm = face_lms_copy[i];
             
-            // Extract eye landmarks (pts[0,1] = left_eye, pts[2,3] = right_eye)
-            float left_eye_x = lm.pts[0];
-            float left_eye_y = lm.pts[1];
-            float right_eye_x = lm.pts[2];
-            float right_eye_y = lm.pts[3];
-            
-            // Compute interocular distance
-            float dx = left_eye_x - right_eye_x;
-            float dy = left_eye_y - right_eye_y;
-            float interocular_dist_pix = std::sqrt(dx * dx + dy * dy);
-            
-            // Compute face dimensions
-            float face_width = det.x1 - det.x0;
-            float face_height = det.y1 - det.y0;
-            float face_aspect_ratio = face_height / face_width;
-            float interocular_face_ratio = interocular_dist_pix / face_width;
-            
-            // Attention detection heuristic (same as face_is_looking_at_us)
-            // Face aspect ratio should be ~1.618 (golden ratio)
-            // Interocular ratio should be ~0.5
-            // Relaxed thresholds: 1.0-2.5 for aspect, 0.25-0.75 for interocular
-            attending = (face_aspect_ratio > 1.0 && face_aspect_ratio < 2.5 &&
-                        interocular_face_ratio > 0.25 && interocular_face_ratio < 0.75);
-            
-            // DEBUG: Log when green box is drawn for timing analysis
-            if (attending) {
-              static int green_box_counter = 0;
-              if (++green_box_counter % 5 == 0) {  // Every 5th green box (~0.5s at 10 Hz)
-                LG_INFO("[VIZ-GAZE] Drawing GREEN box for face #%zu (aspect=%.2f, ioc=%.2f)", 
-                        i, face_aspect_ratio, interocular_face_ratio);
-              }
+            // Landmark-based yaw/pitch/roll head-pose attention heuristic
+            // pts layout: [0,1]=left_eye [2,3]=right_eye [4,5]=nose [6,7]=left_mouth [8,9]=right_mouth
+            const float le_x = lm.pts[0], le_y = lm.pts[1];
+            const float re_x = lm.pts[2], re_y = lm.pts[3];
+            const float nose_x = lm.pts[4], nose_y = lm.pts[5];
+            const float lm_y = lm.pts[7];   // left mouth y
+            const float rm_y = lm.pts[9];   // right mouth y
+
+            // Inter-ocular distance
+            const float dx = re_x - le_x;
+            const float dy = re_y - le_y;
+            const float iod = std::sqrt(dx * dx + dy * dy);
+
+            if (iod >= 8.0f) {
+                // Eye midpoint
+                const float eye_mid_x = (le_x + re_x) * 0.5f;
+                const float eye_mid_y = (le_y + re_y) * 0.5f;
+
+                // Mouth midpoint Y
+                const float mouth_mid_y = (lm_y + rm_y) * 0.5f;
+
+                // YAW proxy: nose lateral offset from eye midpoint, normalised by IOD
+                const float yaw_proxy = (nose_x - eye_mid_x) / iod;
+
+                // PITCH proxy: nose Y in the eye→mouth interval (0=at eyes, 1=at mouth)
+                const float eye_mouth_span = mouth_mid_y - eye_mid_y;
+                float pitch_proxy = 0.5f;
+                if (std::abs(eye_mouth_span) > 5.0f)
+                    pitch_proxy = (nose_y - eye_mid_y) / eye_mouth_span;
+
+                // ROLL proxy: vertical eye asymmetry normalised by IOD
+                const float roll_proxy = (re_y - le_y) / iod;
+
+                const bool yaw_ok   = std::abs(yaw_proxy)   < 0.55f;
+                const bool pitch_ok = pitch_proxy > 0.10f && pitch_proxy < 0.75f;
+                const bool roll_ok  = std::abs(roll_proxy)  < 0.45f;
+                attending = yaw_ok && pitch_ok && roll_ok;
+
+                static int attn_log = 0;
+                if (++attn_log >= 90) {
+                    attn_log = 0;
+                    LG_INFO("[VIZ-GAZE] face#%zu yaw=%.2f pitch=%.2f roll=%.2f  %s",
+                            i, yaw_proxy, pitch_proxy, roll_proxy,
+                            attending ? "ATTENDING" : "away");
+                }
             }
         }
         
-        // Choose box color: green if looking, red otherwise
-        cv::Scalar box_color = attending
-            ? cv::Scalar(0, 255, 0)      // green (BGR)
-            : cv::Scalar(0, 0, 255);     // red (BGR)
+        // All drawn faces are attending — always green
+        const cv::Scalar box_color(0, 255, 0);    // green (BGR)
 
         // V7.0.2: Draw face boxes with attention-based color
         // Detection coords are already in model space (x0, y0, x1, y1)
@@ -162,7 +177,69 @@ static void draw_face_detections(
         float cy0 = (det.y0 - pad_y) / s;
         float cx1 = (det.x1 - pad_x) / s;
         float cy1 = (det.y1 - pad_y) / s;
-        
+
+        // Filter 1: skip tiny detections (e.g. printed badge/logo photos).
+        // A real face visible in the scene is at least ~5% of frame height.
+        const float min_face_h = 0.05f * orig_height;
+        if ((cy1 - cy0) < min_face_h) continue;
+
+        // Filter 2: skip detections whose centre-Y falls in the lower half of a
+        // confirmed employee bbox → those are badge-photo false positives.
+        // Filter 3: skip non-attending detections anywhere inside an employee
+        // bbox → those are back-of-head false positives from employees facing away.
+        //
+        // NOTE: fusion_output->tracks are in YOLOX model space (640x640).
+        // Face coords (cx0/cx1/cy0/cy1) are in camera space.
+        // Must de-letterbox track coords to camera space before comparing.
+        {
+            // YOLOX de-letterbox parameters (640x640 model → camera space)
+            const float yolo_ms = 640.0f;
+            const float ys    = std::min(yolo_ms / orig_width, yolo_ms / orig_height);
+            const float ypadx = (yolo_ms - orig_width  * ys) * 0.5f;
+            const float ypady = (yolo_ms - orig_height * ys) * 0.5f;
+
+            const float face_cy = (cy0 + cy1) * 0.5f;
+            const float face_cx = (cx0 + cx1) * 0.5f;
+            bool skip_face = false;
+            for (const auto& t : tracks_snap) {
+                if (!t.is_employee) continue;
+
+                // Convert track bbox from YOLOX model space → camera space
+                const float tx0 = (t.x0 - ypadx) / ys;
+                const float ty0 = (t.y0 - ypady) / ys;
+                const float tx1 = (t.x1 - ypadx) / ys;
+                const float ty1 = (t.y1 - ypady) / ys;
+                const float mid_y = (ty0 + ty1) * 0.5f;
+
+                // Filter 2: badge-zone (lower half of employee bbox)
+                if (face_cx >= tx0 && face_cx <= tx1 &&
+                    face_cy >= mid_y && face_cy <= ty1) {
+                    skip_face = true;
+                    break;
+                }
+                // Filter 3: back-of-head (non-attending face with >50% overlap inside employee bbox)
+                if (!attending) {
+                    const float ox0 = std::max(cx0, tx0);
+                    const float oy0 = std::max(cy0, ty0);
+                    const float ox1 = std::min(cx1, tx1);
+                    const float oy1 = std::min(cy1, ty1);
+                    if (ox1 > ox0 && oy1 > oy0) {
+                        const float overlap = (ox1 - ox0) * (oy1 - oy0);
+                        const float face_area = (cx1 - cx0) * (cy1 - cy0);
+                        if (face_area > 0.f && overlap / face_area >= 0.5f) {
+                            skip_face = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (skip_face) continue;
+        }
+
+        // Only draw faces that are attending (looking at camera).
+        // Non-attending detections are noise (backs of heads, badges, reflections).
+        if (!attending) continue;
+
         static int face_transform_log = 0;
         if (face_transform_log < 3 && i == 0) {
             LG_INFO("[RET] Face#%zu model=(%.1f,%.1f,%.1f,%.1f) -> camera=(%.1f,%.1f,%.1f,%.1f)",
@@ -189,17 +266,15 @@ static void draw_face_detections(
             2
         );
         
-        // Add "ATTN" label if attending
-        if (attending) {
-            cv::putText(drawMat,
-                        "ATTN",
-                        cv::Point(x0, y0 - 4),
-                        cv::FONT_HERSHEY_SIMPLEX,
-                        0.4,
-                        box_color,
-                        1,
-                        cv::LINE_AA);
-        }
+        // Label attending faces
+        cv::putText(drawMat,
+                    "ATTN",
+                    cv::Point(x0, y0 - 4),
+                    cv::FONT_HERSHEY_SIMPLEX,
+                    0.4,
+                    box_color,
+                    1,
+                    cv::LINE_AA);
         
         // V7.0.2: Draw facial landmarks (eyes, nose, mouth) if available
         // Landmarks structure: float pts[10] = {x0,y0, x1,y1, x2,y2, x3,y3, x4,y4}
@@ -269,7 +344,7 @@ static void draw_yolo_detections(
     // Rainbow colors for visualization (BGR format)
     const cv::Scalar colors[] = {
         cv::Scalar(0, 0, 255),        // Red
-        cv::Scalar(0, 165, 255),      // Orange
+        cv::Scalar(255, 0, 0),         // Blue
         cv::Scalar(0, 255, 255),      // Yellow
         cv::Scalar(0, 255, 0),        // Green
         cv::Scalar(255, 0, 0),        // Blue
@@ -487,13 +562,7 @@ void process_inference_results(
         }
     }
 
-    // V7.2: Apply person blur BEFORE drawing bounding boxes
-    // Blur is applied inside the box area so box lines remain unblurred
-    if (blur_config.enabled) {
-        blur_persons(drawMat, fusion_output, blur_config,
-                    scale_x, scale_y, offset_x, offset_y,
-                    2);  // box_thickness = 2px inset
-    }
+    // Blur disabled: show original video without privacy blur
 
     // V6.2.3.5.6: Draw both face AND YOLOX detections (not mutually exclusive)
     // Both need coordinate transforms from camera space to canvas space
@@ -512,6 +581,36 @@ void process_inference_results(
     }
     if (yolox_runner) {
         draw_yolo_detections(drawMat, yolox_runner, scale_x, scale_y, offset_x, offset_y);
+    }
+
+    // Draw blue bounding boxes for confirmed employees (vest classifier output)
+    if (fusion_output) {
+        std::vector<TrackedBox> tracks_snap;
+        {
+            std::lock_guard<std::mutex> g(fusion_output->m);
+            tracks_snap = fusion_output->tracks;
+        }
+        // Blue (BGR: 255, 0, 0) — distinct from yellow (YOLOX) and green (RetinaFace)
+        const cv::Scalar employee_color(255, 0, 0);
+        const int thickness = 3;
+        for (const auto& t : tracks_snap) {
+            if (!t.is_employee) continue;
+            int x0 = (int)(t.x0 * scale_x) + offset_x;
+            int y0 = (int)(t.y0 * scale_y) + offset_y;
+            int x1 = (int)(t.x1 * scale_x) + offset_x;
+            int y1 = (int)(t.y1 * scale_y) + offset_y;
+            // Clamp to canvas bounds
+            x0 = std::max(0, std::min(x0, drawMat.cols - 1));
+            y0 = std::max(0, std::min(y0, drawMat.rows - 1));
+            x1 = std::max(0, std::min(x1, drawMat.cols - 1));
+            y1 = std::max(0, std::min(y1, drawMat.rows - 1));
+            cv::rectangle(drawMat, cv::Point(x0, y0), cv::Point(x1, y1), employee_color, thickness);
+            char lbl[64];
+            snprintf(lbl, sizeof(lbl), "Employee %.0f%%", t.uniform_confidence * 100.f);
+            cv::putText(drawMat, lbl,
+                        cv::Point(x0, std::max(0, y0 - 6)),
+                        cv::FONT_HERSHEY_SIMPLEX, 0.45, employee_color, 1, cv::LINE_AA);
+        }
     }
 
     // V6.2.3.5.4: Draw guide rectangle to validate letterbox boundaries

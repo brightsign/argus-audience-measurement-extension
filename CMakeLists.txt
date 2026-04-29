@@ -237,6 +237,7 @@ add_executable(attention_demo
         src/metrics/log_global.cpp
         # Models module
         src/models/model_factory.cpp
+        src/models/model_runner_mobilenetv3.cpp
         src/models/model_runner_retinaface.cpp
         src/models/model_runner_yolox.cpp
         # Orchestration module

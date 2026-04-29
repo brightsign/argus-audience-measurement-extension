@@ -290,6 +290,29 @@ bool Orchestrator::build_pipeline() noexcept {
     LG_INFO("[orch] YOLOX disabled (test_yolo_only mode)\n");
     yolo_runner_.reset();
   }
+
+  // Create vest classifier (MobileNetV3-Small on NPU core 2)
+  enable_uniform_model_ = cfg_.enable_uniform_model;
+  if (enable_uniform_model_) {
+    if (cfg_.uniform_model.model_path.empty()) {
+      LG_ERROR("[orch] uniform_model enabled but model_path is empty\n");
+      return false;
+    }
+    uniform_classifier_ = std::make_unique<MobileNetV3Classifier>();
+    LG_INFO("[orch] uniform model load path: %s (core %d)\n",
+            cfg_.uniform_model.model_path.c_str(), cfg_.uniform_model.npu_core);
+    if (!uniform_classifier_->load(cfg_.uniform_model.model_path,
+                                   cfg_.uniform_model.npu_core)) {
+      LG_ERROR("[orch] MobileNetV3 vest classifier load failed: %s\n",
+               cfg_.uniform_model.model_path.c_str());
+      uniform_classifier_.reset();
+      return false;
+    }
+    LG_INFO("[orch] MobileNetV3 vest classifier loaded OK\n");
+  } else {
+    LG_INFO("[orch] Vest classifier disabled\n");
+    uniform_classifier_.reset();
+  }
   
   // Create separate frame writers for each model (both write to same dir)
   if (cfg_.enable_frame_output && !cfg_.output_dir.empty()) {
@@ -367,6 +390,10 @@ void Orchestrator::destroy_pipeline() noexcept {
     yolo_runner_->unload();
     yolo_runner_.reset();
   }
+  if (uniform_classifier_) {
+    uniform_classifier_->unload();
+    uniform_classifier_.reset();
+  }
   if (frame_writer_face_) {
     frame_writer_face_->flush();
     frame_writer_face_.reset();
@@ -400,6 +427,7 @@ bool Orchestrator::start_threads_after_build() noexcept {
   stop_capture_.store(false, std::memory_order_release);
   stop_face_.store(false, std::memory_order_release);
   stop_yolo_.store(false, std::memory_order_release);
+  stop_uniform_.store(false, std::memory_order_release);
   
   try {
     // Launch the capture thread (always runs)
@@ -447,6 +475,22 @@ bool Orchestrator::start_threads_after_build() noexcept {
         }
       });
     }
+
+    // Launch vest classifier thread only if enabled
+    if (enable_uniform_model_ && uniform_classifier_) {
+      LG_INFO("start_threads_after_build: launching vest classifier thread (MobileNetV3)\n");
+      uniform_th_ = std::thread([this]() {
+        try {
+          uniform_loop_threadfn();
+        } catch (const std::exception& e) {
+          LG_CRIT("uniform thread crashed: %s\n", e.what());
+          std::abort();
+        } catch (...) {
+          LG_CRIT("uniform thread crashed: unknown exception\n");
+          std::abort();
+        }
+      });
+    }
   } catch (const std::exception& e) {
     LG_ERROR("start_threads_after_build: failed to launch threads: %s\n", e.what());
     return false;
@@ -463,6 +507,10 @@ void Orchestrator::stop_threads() noexcept {
   stop_capture_.store(true, std::memory_order_release);
   stop_face_.store(true, std::memory_order_release);
   stop_yolo_.store(true, std::memory_order_release);
+  stop_uniform_.store(true, std::memory_order_release);
+
+  // Wake up mailboxes so blocked threads exit
+  mb_uniform_.postFrame(nullptr);
 
   // Ask input to break capture loop
   if (input_) {
@@ -488,6 +536,10 @@ void Orchestrator::stop_threads() noexcept {
     }
     if (yolo_th_.joinable()) {
       LG_INFO("stop_threads: waiting for yolo thread...\n");
+      all_stopped = false;
+    }
+    if (uniform_th_.joinable()) {
+      LG_INFO("stop_threads: waiting for uniform thread...\n");
       all_stopped = false;
     }
     
@@ -520,9 +572,18 @@ void Orchestrator::stop_threads() noexcept {
     if (yolo_th_.joinable()) yolo_th_.detach();
   }
   
-  LG_INFO("stop_threads: all threads stopped (enable_face=%s enable_yolo=%s)\n",
+  try {
+    join_if(uniform_th_);
+    LG_INFO("stop_threads: uniform thread joined\n");
+  } catch (...) {
+    LG_WARN("stop_threads: uniform thread detached after timeout\n");
+    if (uniform_th_.joinable()) uniform_th_.detach();
+  }
+  
+  LG_INFO("stop_threads: all threads stopped (enable_face=%s enable_yolo=%s enable_uniform=%s)\n",
           enable_face_model_ ? "true" : "false",
-          enable_yolo_model_ ? "true" : "false");
+          enable_yolo_model_ ? "true" : "false",
+          enable_uniform_model_ ? "true" : "false");
 }
 
 void Orchestrator::supervisor_loop() noexcept {
@@ -746,7 +807,7 @@ void Orchestrator::supervisor_loop() noexcept {
         for (const auto& det : yolo_dets_copy) {
           // Apply stricter filtering: class, score, and area
           if (det.class_id != 0) continue;  // Person only
-          if (det.score < 0.50f) continue;  // Raised to 0.50 for quality
+          if (det.score < 0.35f) continue;  // Lowered to catch partially-visible employees
           
           // Calculate bbox area
           int w = static_cast<int>(det.x1 - det.x0);
@@ -937,6 +998,97 @@ void Orchestrator::supervisor_loop() noexcept {
           }
         }  // End for (auto& track : tracks)
         
+        // ------------------------------------------------------------------ //
+        // Uniform / vest classification (MobileNetV3)
+        // Match classifier scores to tracks via IoU, update temporal history,
+        // then decide is_employee using a sliding window vote.
+        // ------------------------------------------------------------------ //
+        if (enable_uniform_model_) {
+          // Snapshot latest classifier scores
+          std::vector<FusionState::UniformScore> uniform_snap;
+          {
+            std::lock_guard<std::mutex> lk(fusion_.m);
+            uniform_snap = fusion_.uniform_scores;
+          }
+
+          for (auto& track : tracks) {
+            // --- Find score with best IoU to this track's bbox ---
+            float best_vest_prob = -1.0f;
+            float best_iou_u = 0.20f;  // minimum to accept a match
+
+            for (const auto& us : uniform_snap) {
+              float ix0 = std::max(track.x0, us.x0);
+              float iy0 = std::max(track.y0, us.y0);
+              float ix1 = std::min(track.x1, us.x1);
+              float iy1 = std::min(track.y1, us.y1);
+              float iw = std::max(0.f, ix1 - ix0);
+              float ih = std::max(0.f, iy1 - iy0);
+              float inter = iw * ih;
+              float area_t = (track.x1 - track.x0) * (track.y1 - track.y0);
+              float area_u = (us.x1 - us.x0) * (us.y1 - us.y0);
+              float uni = area_t + area_u - inter + 1e-6f;
+              float iou_u = inter / uni;
+              if (iou_u > best_iou_u) {
+                best_iou_u = iou_u;
+                best_vest_prob = us.vest_prob;
+              }
+            }
+
+            // --- Update per-track temporal history ---
+            if (best_vest_prob >= 0.0f) {
+              auto& hist = uniform_history_[track.id];
+              hist.vest_probs.push_back(best_vest_prob);
+              if (static_cast<int>(hist.vest_probs.size()) > UniformHistory::WINDOW) {
+                hist.vest_probs.pop_front();
+              }
+            }
+
+            // --- Temporal smoothing decision ---
+            auto& hist = uniform_history_[track.id];
+            if (hist.vest_probs.empty()) {
+              track.uniform_label      = "unknown";
+              track.uniform_confidence = 0.0f;
+              track.is_employee = false;
+            } else {
+              int vest_votes = 0;
+              float sum_prob = 0.0f;
+              for (float p : hist.vest_probs) {
+                if (p > 0.75f) vest_votes++;
+                sum_prob += p;
+              }
+              const float avg_prob = sum_prob / hist.vest_probs.size();
+
+              // Need at least 2 observations before committing
+              const bool enough_obs = static_cast<int>(hist.vest_probs.size()) >= 2;
+
+              if (enough_obs && vest_votes >= UniformHistory::THRESH && avg_prob >= 0.65f) {
+                track.uniform_label       = "employee_vest";
+                track.uniform_confidence  = avg_prob;
+                track.is_employee = true;
+              } else if (enough_obs && vest_votes < static_cast<int>(hist.vest_probs.size()) - UniformHistory::THRESH + 1) {
+                track.uniform_label       = "no_vest";
+                track.uniform_confidence  = 1.0f - avg_prob;
+                track.is_employee = false;
+              } else {
+                // Not enough confidence yet
+                track.uniform_label       = "unknown";
+                track.uniform_confidence  = avg_prob;
+                track.is_employee = false;
+              }
+            }
+          }
+
+          // --- Purge history for tracks that are no longer active ---
+          std::unordered_set<int> active_ids;
+          for (const auto& t : tracks) active_ids.insert(t.id);
+          for (auto it = uniform_history_.begin(); it != uniform_history_.end(); ) {
+            if (active_ids.find(it->first) == active_ids.end())
+              it = uniform_history_.erase(it);
+            else
+              ++it;
+          }
+        }
+
         // DEBUG: Log matching summary
         int tracks_with_gaze_match = 0;
         int tracks_gazing = 0;
@@ -974,8 +1126,10 @@ void Orchestrator::supervisor_loop() noexcept {
             }
           }
         } else if ((ts_s - emit_cache_.last_nonempty_ts) <= HOLD_TTL_S) {
-          // No fresh tracks, but within hold period - reuse last
+          // No fresh tracks, but within hold period - reuse last.
+          // Strip is_employee so ghost boxes don't linger after the person leaves.
           tracks_to_emit = emit_cache_.last_nonempty;
+          for (auto& t : tracks_to_emit) t.is_employee = false;
           is_stale = true;
         } else {
           // Beyond hold period - emit empty
@@ -1215,6 +1369,7 @@ bool Orchestrator::recover_pipeline(int64_t now_ns_val) noexcept {
     stop_capture_.store(false, std::memory_order_release);
     stop_face_.store(false, std::memory_order_release);
     stop_yolo_.store(false, std::memory_order_release);
+    stop_uniform_.store(false, std::memory_order_release);
 
     LG_INFO("recover_pipeline:launching new worker threads (enable_face=%s enable_yolo=%s)\n",
             enable_face_model_ ? "true" : "false",
@@ -1230,6 +1385,12 @@ bool Orchestrator::recover_pipeline(int64_t now_ns_val) noexcept {
         // Launch YOLOX worker thread only if enabled
         if (enable_yolo_model_) {
             yolo_th_ = std::thread(&Orchestrator::yolo_loop_threadfn, this);
+        }
+
+        // Launch vest classifier thread only if enabled
+        if (enable_uniform_model_ && uniform_classifier_) {
+            stop_uniform_.store(false, std::memory_order_release);
+            uniform_th_ = std::thread(&Orchestrator::uniform_loop_threadfn, this);
         }
     } catch (const std::exception& e) {
         LG_ERROR("recover_pipeline:failed to launch threads: %s\n", e.what());
@@ -1306,6 +1467,11 @@ void Orchestrator::capture_loop_threadfn() noexcept {
             mb_yolo_.postFrame(sf);
         }
 
+        // Fan out to vest classifier (uses same frame as YOLOX but crops person bboxes)
+        if (enable_uniform_model_) {
+            mb_uniform_.postFrame(sf);
+        }
+
         // Update heartbeat for supervisor
         last_heartbeat_ns_.store(now_ns(), std::memory_order_release);
     }
@@ -1360,6 +1526,163 @@ void Orchestrator::face_loop_threadfn() noexcept {
         std::fflush(nullptr);
         std::abort();
     }
+}
+
+// ============================================================================
+// Vest classifier loop: MobileNetV3-Small uniform classification
+// ============================================================================
+//
+// For each frame:
+//   1. Snapshot current YOLOX person bboxes from fusion_
+//   2. For each person bbox, crop the upper-body/torso region from the frame
+//   3. Letterbox-resize crop to 224×224 RGB
+//   4. Run MobileNetV3 classifier
+//   5. Store (bbox, vest_prob) pairs back into fusion_.uniform_scores
+//
+// Coordinates:
+//   fusion_.yolo_dets use camera space (orig_width × orig_height).
+//   SharedFrame.bgr is a preprocessed BGR buffer at (width × height), letterboxed.
+//   To map camera-space back to frame-space:
+//       scale = min(frame_w / orig_w, frame_h / orig_h)
+//       frame_x = cam_x * scale + pad_x
+//       frame_y = cam_y * scale + pad_y
+
+void Orchestrator::uniform_loop_threadfn() noexcept {
+    LG_INFO("uniform_loop:start (MobileNetV3 vest classifier)");
+
+    if (!enable_uniform_model_ || !uniform_classifier_) {
+        LG_WARN("uniform_loop: classifier not available, exiting");
+        return;
+    }
+
+    // Pre-allocate RGB buffer for MobileNetV3 input
+    static constexpr int IN_W = MobileNetV3Classifier::INPUT_W;
+    static constexpr int IN_H = MobileNetV3Classifier::INPUT_H;
+    std::vector<uint8_t> rgb_input(IN_W * IN_H * 3);
+
+    while (!stop_uniform_.load(std::memory_order_relaxed)) {
+        // Get next frame from mailbox
+        auto sf = mb_uniform_.takeFrame();
+        if (!sf) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            continue;
+        }
+
+        // Snapshot current YOLOX detections (camera-space coords)
+        std::vector<Detection> person_dets;
+        int frame_w = 640, frame_h = 480;
+        int orig_w = 640, orig_h = 480;
+        {
+            std::lock_guard<std::mutex> lk(fusion_.m);
+            for (const auto& d : fusion_.yolo_dets) {
+                if (d.class_id == 0 && d.score >= 0.35f) {  // person — match tracker threshold
+                    person_dets.push_back(d);
+                }
+            }
+            frame_w = fusion_.frame_width;
+            frame_h = fusion_.frame_height;
+        }
+        orig_w = (sf->orig_width  > 0) ? sf->orig_width  : sf->width;
+        orig_h = (sf->orig_height > 0) ? sf->orig_height : sf->height;
+
+        if (person_dets.empty() || sf->bgr.empty()) continue;
+
+        // Letterbox parameters (camera → frame space)
+        const float scale  = std::min(float(sf->width)  / orig_w,
+                                      float(sf->height) / orig_h);
+        const int lb_w     = int(orig_w * scale);
+        const int lb_h     = int(orig_h * scale);
+        const int pad_x    = (sf->width  - lb_w) / 2;
+        const int pad_y    = (sf->height - lb_h) / 2;
+
+        // Wrap SharedFrame.bgr in a cv::Mat (BGR, no copy)
+        const cv::Mat frame(sf->height, sf->width, CV_8UC3,
+                            const_cast<uint8_t*>(sf->bgr.data()));
+
+        std::vector<FusionState::UniformScore> scores;
+        scores.reserve(person_dets.size());
+
+        for (const auto& det : person_dets) {
+            // --- Map camera bbox → frame coords ---
+            const float fx0 = det.x0 * scale + pad_x;
+            const float fy0 = det.y0 * scale + pad_y;
+            const float fx1 = det.x1 * scale + pad_x;
+            const float fy1 = det.y1 * scale + pad_y;
+
+            // --- Torso region: upper 55% of the bbox height (head + chest) ---
+            const float bbox_h   = fy1 - fy0;
+            const float torso_y1 = fy0 + bbox_h * 0.55f;
+
+            // Clip to frame bounds
+            const int cx0 = std::max(0, int(fx0));
+            const int cy0 = std::max(0, int(fy0));
+            const int cx1 = std::min(sf->width  - 1, int(fx1));
+            const int cy1 = std::min(sf->height - 1, int(torso_y1));
+
+            if (cx1 - cx0 < 20 || cy1 - cy0 < 20) continue;  // Too small
+
+            // --- Crop torso ---
+            const cv::Mat crop_bgr = frame(cv::Rect(cx0, cy0, cx1 - cx0, cy1 - cy0));
+
+            // --- Letterbox-resize to 224×224 ---
+            const float scrop = std::min(float(IN_W) / crop_bgr.cols,
+                                         float(IN_H) / crop_bgr.rows);
+            const int rw = int(crop_bgr.cols * scrop);
+            const int rh = int(crop_bgr.rows * scrop);
+            const int offx = (IN_W - rw) / 2;
+            const int offy = (IN_H - rh) / 2;
+
+            // Stretch-resize directly to 224×224 — no letterboxing.
+            // Training used Resize(256)+CenterCrop(224), not letterbox, so
+            // black-padded inputs cause false "vest" predictions.
+            cv::Mat resized_in;
+            cv::resize(crop_bgr, resized_in, cv::Size(IN_W, IN_H), 0, 0, cv::INTER_LINEAR);
+
+            // --- Debug: save every 15th crop (BGR) to /tmp for inspection ---
+            // Debug crop saving disabled; set DBG_SAVE_CROPS=1 to re-enable
+            static std::atomic<int> s_dbg_crop_n{0};
+            static const bool s_save_crops_enabled = (std::getenv("DBG_SAVE_CROPS") != nullptr);
+            const bool save_dbg = s_save_crops_enabled && (s_dbg_crop_n.fetch_add(1) % 15 == 0);
+            cv::Mat dbg_bgr;
+            if (save_dbg) dbg_bgr = resized_in.clone();
+
+            // --- BGR → RGB (MobileNetV3 expects RGB) ---
+            cv::cvtColor(resized_in, resized_in, cv::COLOR_BGR2RGB);
+            std::memcpy(rgb_input.data(), resized_in.data, IN_W * IN_H * 3);
+
+            // --- Run classifier ---
+            float probs[MobileNetV3Classifier::N_CLASSES]{};
+            if (!uniform_classifier_->classify(rgb_input.data(), probs)) continue;
+
+            // --- Write debug JPEG with vest probability in filename ---
+            if (save_dbg && !dbg_bgr.empty()) {
+                int vest_pct = static_cast<int>(
+                    probs[MobileNetV3Classifier::CLASS_EMPLOYEE_VEST] * 100.f);
+                char dbg_path[128];
+                snprintf(dbg_path, sizeof(dbg_path),
+                         "/tmp/uniform_crop_%05u_vest%03d.jpg",
+                         static_cast<unsigned>(sf->seq % 100000), vest_pct);
+                cv::imwrite(dbg_path, dbg_bgr);
+            }
+
+            FusionState::UniformScore us{};
+            us.x0        = det.x0;
+            us.y0        = det.y0;
+            us.x1        = det.x1;
+            us.y1        = det.y1;
+            us.vest_prob = probs[MobileNetV3Classifier::CLASS_EMPLOYEE_VEST];
+            scores.push_back(us);
+        }
+
+        // --- Store results in fusion_ ---
+        if (!scores.empty()) {
+            std::lock_guard<std::mutex> lk(fusion_.m);
+            fusion_.uniform_scores  = std::move(scores);
+            fusion_.uniform_seq     = sf->seq;
+        }
+    }
+
+    LG_INFO("uniform_loop:stop");
 }
 
 void Orchestrator::yolo_loop_threadfn() noexcept {

@@ -14,6 +14,7 @@
 #include "pipeline/pipeline_types.h"
 #include "output/frame_writer.h"
 #include "output/face_blur.h"
+#include "tracking/tracker.h"
 
 // Type alias for the fusion output structure (defined in orchestrator.h)
 struct FusionResults {
@@ -23,6 +24,8 @@ struct FusionResults {
     uint64_t face_seq{0};
     std::vector<Detection> yolo_dets;
     uint64_t yolo_seq{0};
+    // Person tracks with stable IDs and uniform/vest classification results
+    std::vector<TrackedBox> tracks;
 };
 
 namespace inference_worker {

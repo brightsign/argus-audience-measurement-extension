@@ -12,7 +12,7 @@
 // Optimized for small/distant faces with 320x320 model
 #define NMS_THRESHOLD 0.5    // Relaxed for crowded scenes
 #define CONF_THRESHOLD 0.10  // EXTREME: Very low threshold for 1080p distant faces (may get false positives)
-#define VIS_THRESHOLD 0.4
+#define VIS_THRESHOLD 0.25  // Lowered from 0.4 to pass slightly angled/non-frontal faces
 
 static int clamp(int x, int min, int max) {
     if (x > max) return max;

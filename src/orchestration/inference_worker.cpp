@@ -252,14 +252,11 @@ void run_inference_loop(
             // Store results in fusion output FIRST (before visualization)
             store_inference_results(runner, outs, fusion_output, sf->seq);
 
-            // Draw overlays and save debug JPEG
-            // V6.2.3.2: Pass original dimensions so visualization can scale coordinates
-            // V6.2.3.5.7: Pass second_runner to draw detections from both models on same frame
-            // V7.0.2: Pass fusion_output to access synchronized detection results
-            // V7.1: CRITICAL FIX - Pass orig_width/orig_height for proper coordinate transforms
-            // Detections are in camera space (orig: 1920×1080), need to scale to canvas (320×320)
-            cv::Mat rgb_mat(dst_h, dst_w, CV_8UC3, rgb_resized_buf.data());
-            visualization::process_inference_results(runner, rgb_mat, debug_frame_idx,
+            // Draw overlays on full-resolution camera frame (sf->bgr is now at original RTSP res)
+            // Detection coords are in camera/orig space; with canvas == camera size, scale=1.0, offset=0
+            cv::Mat vis_canvas = cv::Mat(sf->height, sf->width, CV_8UC3,
+                                        const_cast<uint8_t*>(sf->bgr.data())).clone();
+            visualization::process_inference_results(runner, vis_canvas, debug_frame_idx,
                                                      sf->orig_width, sf->orig_height, second_runner,
                                                      fusion_output, config.blur_config);
 
@@ -353,7 +350,7 @@ void run_inference_loop(
                     }
                 }
 
-                frame_writer->writeFrame(rgb_mat, result);
+                frame_writer->writeFrame(vis_canvas, result);
             }
 
             // Log periodically
