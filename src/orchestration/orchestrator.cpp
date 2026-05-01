@@ -709,12 +709,33 @@ void Orchestrator::supervisor_loop() noexcept {
         
         // Count YOLOX person detections (class_id == 0 in COCO dataset)
         // Also check confidence score to filter out low-confidence detections
+        // De-letterbox params to convert face dets (model/320x320) -> camera space
+        const float dc_model = 320.0f;
+        const int dc_cam_w = fusion_.frame_width  > 0 ? fusion_.frame_width  : 640;
+        const int dc_cam_h = fusion_.frame_height > 0 ? fusion_.frame_height : 480;
+        const float dc_s     = std::min(dc_model / dc_cam_w, dc_model / dc_cam_h);
+        const float dc_pad_x = (dc_model - dc_cam_w * dc_s) / 2.0f;
+        const float dc_pad_y = (dc_model - dc_cam_h * dc_s) / 2.0f;
+        // Require face center inside person bbox to reject hand/limb false positives.
+        // Falls back (accepts all) when no face detections are present (cold start).
+        auto person_has_face = [&](const Detection& pd) -> bool {
+          if (fusion_.face_dets.empty()) return true;
+          for (const auto& fd : fusion_.face_dets) {
+            const float fcx = ((fd.x0 + fd.x1) * 0.5f - dc_pad_x) / dc_s;
+            const float fcy = ((fd.y0 + fd.y1) * 0.5f - dc_pad_y) / dc_s;
+            if (fcx >= pd.x0 && fcx <= pd.x1 && fcy >= pd.y0 && fcy <= pd.y1) return true;
+          }
+          return false;
+        };
         int person_count = 0;
         const float min_confidence = 0.5f;  // Minimum confidence threshold
+        const float count_frame_h = static_cast<float>(fusion_.frame_height > 0 ? fusion_.frame_height : 480);
         for (const auto& det : fusion_.yolo_dets) {
-          if (det.class_id == 0 && det.score >= min_confidence) {  // 0 = person in COCO
-            person_count++;
-          }
+          if (det.class_id != 0 || det.score < min_confidence) continue;
+          const float dh = det.y1 - det.y0;
+          if (dh < 0.12f * count_frame_h) continue;
+          if (!person_has_face(det)) continue;  // reject hands/limbs without a face
+          person_count++;
         }
         result.people_count = person_count;
         
@@ -742,6 +763,35 @@ void Orchestrator::supervisor_loop() noexcept {
         // Transform each face AND its landmarks from model/letterbox space → camera space
         for (size_t i = 0; i < fusion_.face_dets.size(); ++i) {
           const auto& face_model = fusion_.face_dets[i];
+
+          // Landmark geometry gate (model space): reject hands/objects before accepting
+          // detection into analytics or gaze tracking.
+          if (i < fusion_.face_lms.size()) {
+            const auto& lms_m = fusion_.face_lms[i];
+            // Inline the same checks as visualization::is_plausible_face()
+            const float le_y  = lms_m.pts[1], re_y = lms_m.pts[3];
+            const float n_y   = lms_m.pts[5];
+            const float lmy   = lms_m.pts[7], rmy = lms_m.pts[9];
+            const float eye_mid_y   = (le_y + re_y) * 0.5f;
+            const float mouth_mid_y = (lmy + rmy) * 0.5f;
+            const float dx = lms_m.pts[2] - lms_m.pts[0];
+            const float dy = re_y - le_y;
+            const float iod    = std::sqrt(dx*dx + dy*dy);
+            const float face_w = face_model.x1 - face_model.x0;
+            const float face_h = face_model.y1 - face_model.y0;
+            const bool valid = (face_w > 0.f && face_h > 0.f)
+                             && (n_y > eye_mid_y + 1.0f)
+                             && (mouth_mid_y > n_y + 1.0f)
+                             && (iod > 0.10f * face_w) && (iod < 0.95f * face_w)
+                             && (face_h / face_w > 0.55f);
+            if (!valid) {
+              static int orch_reject_log = 0;
+              if (++orch_reject_log <= 10 || orch_reject_log % 60 == 0)
+                LG_INFO("[ORCH-FACE-FILTER] Rejected face#%zu as non-face (landmark geometry fail)", i);
+              continue;
+            }
+          }
+
           Detection face_cam = face_model;  // Copy
           
           // De-letterbox face bbox: (model coords - padding) / scale = camera coords
@@ -814,7 +864,25 @@ void Orchestrator::supervisor_loop() noexcept {
           int h = static_cast<int>(det.y1 - det.y0);
           int area = w * h;
           if (area < 1600) continue;  // ~40x40 minimum
-          
+
+          // Reject limb/hand false positives: must be at least 12% of frame height.
+          const float frame_h_f = static_cast<float>(fusion_.frame_height > 0 ? fusion_.frame_height : 480);
+          if (static_cast<float>(h) < 0.12f * frame_h_f) continue;
+
+          // Reject if no face center lies inside this person bbox (face_dets_snapshot is
+          // already in camera space, built just above in the same iteration).
+          if (!face_dets_snapshot.empty()) {
+            bool found = false;
+            for (const auto& fd : face_dets_snapshot) {
+              const float fcx = (fd.x0 + fd.x1) * 0.5f;
+              const float fcy = (fd.y0 + fd.y1) * 0.5f;
+              if (fcx >= det.x0 && fcx <= det.x1 && fcy >= det.y0 && fcy <= det.y1) {
+                found = true; break;
+              }
+            }
+            if (!found) continue;
+          }
+
           people.push_back(det);
         }
         
@@ -1500,6 +1568,7 @@ void Orchestrator::face_loop_threadfn() noexcept {
         config.model_input_width = face_runner_->spec().input_size.w;
         config.model_input_height = face_runner_->spec().input_size.h;
         config.model_name = "RetinaFace";
+        config.flip_horizontal = cfg_.flip_horizontal;  // Mirror correction
 
         // Wrap the member mailbox in a shared_ptr wrapper that doesn't own it
         std::shared_ptr<FrameMailbox> mb_wrapper(
@@ -1574,10 +1643,31 @@ void Orchestrator::uniform_loop_threadfn() noexcept {
         int orig_w = 640, orig_h = 480;
         {
             std::lock_guard<std::mutex> lk(fusion_.m);
+            // De-letterbox face dets (model/320x320) -> camera space for overlap check
+            const float vc_model = 320.0f;
+            const int vc_cw = fusion_.frame_width  > 0 ? fusion_.frame_width  : 640;
+            const int vc_ch = fusion_.frame_height > 0 ? fusion_.frame_height : 480;
+            const float vc_s    = std::min(vc_model / vc_cw, vc_model / vc_ch);
+            const float vc_px   = (vc_model - vc_cw * vc_s) / 2.0f;
+            const float vc_py   = (vc_model - vc_ch * vc_s) / 2.0f;
+            const float vc_fh   = static_cast<float>(vc_ch);
             for (const auto& d : fusion_.yolo_dets) {
-                if (d.class_id == 0 && d.score >= 0.35f) {  // person — match tracker threshold
-                    person_dets.push_back(d);
+                if (d.class_id != 0 || d.score < 0.35f) continue;
+                const float dh = d.y1 - d.y0;
+                if (dh < 0.12f * vc_fh) continue;
+                // Reject if no face center inside person bbox
+                if (!fusion_.face_dets.empty()) {
+                    bool found = false;
+                    for (const auto& fd : fusion_.face_dets) {
+                        const float fcx = ((fd.x0 + fd.x1) * 0.5f - vc_px) / vc_s;
+                        const float fcy = ((fd.y0 + fd.y1) * 0.5f - vc_py) / vc_s;
+                        if (fcx >= d.x0 && fcx <= d.x1 && fcy >= d.y0 && fcy <= d.y1) {
+                            found = true; break;
+                        }
+                    }
+                    if (!found) continue;
                 }
+                person_dets.push_back(d);
             }
             frame_w = fusion_.frame_width;
             frame_h = fusion_.frame_height;
@@ -1707,6 +1797,7 @@ void Orchestrator::yolo_loop_threadfn() noexcept {
         config.model_input_height = yolo_runner_->spec().input_size.h;
         config.model_name = "YOLOX";
         config.blur_config = cfg_.blur_config;  // V7.2: Pass blur config for person blur
+        config.flip_horizontal = cfg_.flip_horizontal;  // Mirror correction
 
         // Wrap the member mailbox in a shared_ptr wrapper that doesn't own it
         std::shared_ptr<FrameMailbox> mb_wrapper(

@@ -1,6 +1,6 @@
 {
   "_comment_input_source": "Select 'rtsp', 'usb', or 'file' for your input source",
-  "input_source": "rtsp",
+  "input_source": "usb",
   
   "_comment_device_id": "Device identifier for MQTT messages. Leave empty to auto-detect from MAC address",
   "device_id": "",
@@ -87,6 +87,8 @@
   "blur_faces": false,
   "blur_method": "gaussian",
   "blur_intensity": 71,
+
+  "flip_horizontal": true,
 
   "enable_uniform_model": true,
   "uniform_model": {

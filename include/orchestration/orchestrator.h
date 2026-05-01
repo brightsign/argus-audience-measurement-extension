@@ -55,6 +55,9 @@ struct PipelineConfig {
   // Face blur options (for privacy in output frames)
   output::BlurConfig blur_config;   // Blur configuration
 
+  // Flip output frame horizontally (mirror correction for front-facing cameras)
+  bool flip_horizontal{false};
+
   // Publishers configuration
   std::vector<PublisherConfig> publishers; // MQTT, UDP, File publishers
 };

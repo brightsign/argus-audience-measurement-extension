@@ -399,6 +399,10 @@ int main(int argc, char** argv) {
         pc.blur_config.method = output::BlurMethod::PIXELATE;  // Default
     }
 
+    // Horizontal flip (mirror correction for front-facing cameras)
+    pc.flip_horizontal = appcfg.flip_horizontal;
+    LG_INFO("Horizontal flip: %s", pc.flip_horizontal ? "enabled" : "disabled");
+
     // Configure employee vest detection (MobileNetV3-Small classifier)
     // Prefer the new dedicated employee_detection config; fall back to legacy fields.
     const bool employee_detection_enabled = appcfg.employee_detection.enabled;

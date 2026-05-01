@@ -163,7 +163,10 @@ bool load_from_file(const std::string& path, AppConfig& out, bool /*strict*/, ch
     if (j.contains("blur_intensity") && j["blur_intensity"].is_number_integer()) {
       out.blur_intensity = j["blur_intensity"].get<int>();
     }
-
+    // Parse horizontal flip option (for front-facing/mirrored cameras)
+    if (j.contains("flip_horizontal") && j["flip_horizontal"].is_boolean()) {
+      out.flip_horizontal = j["flip_horizontal"].get<bool>();
+    }
     // Parse employee detection (preferred, new dedicated section)
     if (j.contains("employee_detection") && j["employee_detection"].is_object()) {
       const auto& ed = j["employee_detection"];

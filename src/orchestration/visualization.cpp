@@ -13,6 +13,34 @@
 
 namespace visualization {
 
+// Returns true if the 5 RetinaFace landmarks form a geometrically plausible face.
+// Rejects false positives (hands, badges, reflections) by enforcing:
+//   1. Vertical topology:  eyes Y < nose Y < mouth Y  (top-to-bottom ordering)
+//   2. Inter-ocular distance is a reasonable fraction of face bbox width (10–90%)
+//   3. Face bbox aspect ratio (h/w) > 0.55  (not a flat horizontal stripe)
+// Works in any consistent coordinate space (model OR camera space).
+static bool is_plausible_face(const float* lm_pts, float det_x0, float det_y0,
+                               float det_x1, float det_y1) noexcept {
+    const float le_x = lm_pts[0], le_y = lm_pts[1];
+    const float re_x = lm_pts[2], re_y = lm_pts[3];
+    const float nose_y      = lm_pts[5];
+    const float lm_mouth_y  = lm_pts[7];
+    const float rm_mouth_y  = lm_pts[9];
+    const float eye_mid_y   = (le_y + re_y) * 0.5f;
+    const float mouth_mid_y = (lm_mouth_y + rm_mouth_y) * 0.5f;
+    const float dx = re_x - le_x, dy = re_y - le_y;
+    const float iod    = std::sqrt(dx * dx + dy * dy);
+    const float face_w = det_x1 - det_x0;
+    const float face_h = det_y1 - det_y0;
+    if (face_w <= 0.f || face_h <= 0.f) return false;
+    const bool eye_nose_ok   = (nose_y      >  eye_mid_y + 1.0f);
+    const bool nose_mouth_ok = (mouth_mid_y >  nose_y    + 1.0f);
+    const bool iod_ok        = (iod > 0.10f * face_w) && (iod < 0.95f * face_w);
+    const bool aspect_ok     = (face_h / face_w) > 0.55f;
+    return eye_nose_ok && nose_mouth_ok && iod_ok && aspect_ok;
+}
+
+
 void save_debug_jpg(
     const cv::Mat& visFrame,
     const char* path,
@@ -36,7 +64,8 @@ static void draw_face_detections(
     int offset_y,
     FusionResults* fusion_output,
     int orig_width,
-    int orig_height) noexcept
+    int orig_height,
+    bool flip_h = false) noexcept
 {
     // V7.0.2: Use FusionResults directly for synchronized detection data
     if (!fusion_output) {
@@ -53,6 +82,7 @@ static void draw_face_detections(
             int y0 = static_cast<int>(obj.box.top * scale_y) + offset_y;
             int x1 = static_cast<int>(obj.box.right * scale_x) + offset_x;
             int y1 = static_cast<int>(obj.box.bottom * scale_y) + offset_y;
+            if (flip_h) { int t = drawMat.cols - x0; x0 = drawMat.cols - x1; x1 = t; }
             cv::rectangle(drawMat, cv::Point(x0, y0), cv::Point(x1, y1), 
                          cv::Scalar(0, 255, 0), 2);
         }
@@ -111,7 +141,19 @@ static void draw_face_detections(
     // Draw face detections from fusion data
     for (size_t i = 0; i < face_dets_copy.size(); ++i) {
         const auto& det = face_dets_copy[i];
-        
+
+        // Landmark geometry gate: reject non-face detections (hands, badges, etc.)
+        // Landmarks and det coords are both in model/letterbox space here.
+        if (i < face_lms_copy.size()) {
+            if (!is_plausible_face(face_lms_copy[i].pts,
+                                   det.x0, det.y0, det.x1, det.y1)) {
+                static int reject_log = 0;
+                if (++reject_log <= 10 || reject_log % 60 == 0)
+                    LG_INFO("[VIS-FACE-FILTER] Rejected face#%zu as non-face (landmark geometry fail)", i);
+                continue;
+            }
+        }
+
         // V7.0.2: Compute attention (gaze direction) from landmarks
         bool attending = false;
         if (i < face_lms_copy.size()) {
@@ -252,6 +294,7 @@ static void draw_face_detections(
         int y0 = (int)std::round(cy0 * scale_y) + offset_y;
         int x1 = (int)std::round(cx1 * scale_x) + offset_x;
         int y1 = (int)std::round(cy1 * scale_y) + offset_y;
+        if (flip_h) { int t = drawMat.cols - x0; x0 = drawMat.cols - x1; x1 = t; }
         
         if (face_transform_log <= 3 && i == 0) {
             LG_INFO("[RET] Draw camera=(%.1f,%.1f,%.1f,%.1f) -> canvas=(%d,%d,%d,%d) scale=(%.3f,%.3f) off=(%d,%d)",
@@ -295,6 +338,7 @@ static void draw_face_detections(
                 // Step 2: Camera → canvas (scale, then add offset_y=40)
                 int lx = (int)std::round(cam_lx * scale_x) + offset_x;
                 int ly = (int)std::round(cam_ly * scale_y) + offset_y;
+                if (flip_h) lx = drawMat.cols - lx;
 
                 // Eye landmarks cyan, others yellow
                 cv::Scalar lm_color = (lm_idx < 2)
@@ -320,7 +364,11 @@ static void draw_yolo_detections(
     float scale_x = 1.0f,
     float scale_y = 1.0f,
     int offset_x = 0,
-    int offset_y = 0) noexcept
+    int offset_y = 0,
+    bool flip_h = false,
+    FusionResults* fusion_output = nullptr,
+    int orig_width = 0,
+    int orig_height = 0) noexcept
 {
     if (!yolox_runner) return;
 
@@ -328,6 +376,23 @@ static void draw_yolo_detections(
     int det_count = yolox_runner->get_detection_count();
 
     if (!dets || det_count == 0) return;
+
+    // Pre-compute face centers in camera space for face-overlap filtering.
+    // A valid person detection must contain at least one face center.
+    // This rejects hands, arms, bags and other false positives that have no face.
+    std::vector<std::pair<float,float>> face_centers;  // (cx, cy) in camera/det space
+    if (fusion_output && orig_width > 0 && orig_height > 0) {
+        const float model_sz = 320.0f;
+        const float rf_s     = std::min(model_sz / orig_width, model_sz / orig_height);
+        const float rf_pad_x = (model_sz - orig_width  * rf_s) / 2.0f;
+        const float rf_pad_y = (model_sz - orig_height * rf_s) / 2.0f;
+        std::lock_guard<std::mutex> g(fusion_output->m);
+        for (const auto& fd : fusion_output->face_dets) {
+            float fcx = ((fd.x0 + fd.x1) * 0.5f - rf_pad_x) / rf_s;
+            float fcy = ((fd.y0 + fd.y1) * 0.5f - rf_pad_y) / rf_s;
+            face_centers.emplace_back(fcx, fcy);
+        }
+    }
     
     // V6.2.3.5: Debug what detections we received
     static int debug_vis_det_count = 0;
@@ -379,6 +444,26 @@ static void draw_yolo_detections(
             continue;
         }
 
+        // Reject limb/hand false positives: bbox must be at least 12% of frame height.
+        {
+            const float det_h = det.y1 - det.y0;
+            const float frame_h_f = static_cast<float>(drawMat.rows > 0 ? drawMat.rows : 480);
+            if (det_h < 0.12f * frame_h_f) continue;
+        }
+
+        // Reject if no face center lies inside this person bbox.
+        // A raised hand / arm has no face -> filtered out. Falls back to showing all
+        // boxes when no faces have been detected yet (cold start).
+        if (!face_centers.empty()) {
+            bool found = false;
+            for (const auto& [fcx, fcy] : face_centers) {
+                if (fcx >= det.x0 && fcx <= det.x1 && fcy >= det.y0 && fcy <= det.y1) {
+                    found = true; break;
+                }
+            }
+            if (!found) continue;
+        }
+
         person_count++;
 
         // Yellow color for person
@@ -391,6 +476,7 @@ static void draw_yolo_detections(
         int y0 = (int)(det.y0 * scale_y) + offset_y;
         int x1 = (int)(det.x1 * scale_x) + offset_x;
         int y1 = (int)(det.y1 * scale_y) + offset_y;
+        if (flip_h) { int t = drawMat.cols - x0; x0 = drawMat.cols - x1; x1 = t; }
 
         // V6.2.3.5.3: Enhanced debug - show what we're actually drawing
         if (debug_draw_count < 3 && i < 2) {
@@ -504,7 +590,8 @@ void process_inference_results(
     int orig_height,
     IModelRunner* second_runner,
     FusionResults* fusion_output,
-    const output::BlurConfig& blur_config) noexcept
+    const output::BlurConfig& blur_config,
+    bool flip_h) noexcept
 {
     if (!runner) return;
 
@@ -577,10 +664,10 @@ void process_inference_results(
     }
 
     if (retinaface_runner) {
-        draw_face_detections(drawMat, retinaface_runner, scale_x, scale_y, offset_x, offset_y, fusion_output, orig_width, orig_height);
+        draw_face_detections(drawMat, retinaface_runner, scale_x, scale_y, offset_x, offset_y, fusion_output, orig_width, orig_height, flip_h);
     }
     if (yolox_runner) {
-        draw_yolo_detections(drawMat, yolox_runner, scale_x, scale_y, offset_x, offset_y);
+        draw_yolo_detections(drawMat, yolox_runner, scale_x, scale_y, offset_x, offset_y, flip_h, fusion_output, orig_width, orig_height);
     }
 
     // Draw blue bounding boxes for confirmed employees (vest classifier output)
@@ -604,6 +691,7 @@ void process_inference_results(
             y0 = std::max(0, std::min(y0, drawMat.rows - 1));
             x1 = std::max(0, std::min(x1, drawMat.cols - 1));
             y1 = std::max(0, std::min(y1, drawMat.rows - 1));
+            if (flip_h) { int tmp = drawMat.cols - x0; x0 = drawMat.cols - x1; x1 = tmp; }
             cv::rectangle(drawMat, cv::Point(x0, y0), cv::Point(x1, y1), employee_color, thickness);
             char lbl[64];
             snprintf(lbl, sizeof(lbl), "Employee %.0f%%", t.uniform_confidence * 100.f);

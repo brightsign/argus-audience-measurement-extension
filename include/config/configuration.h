@@ -53,6 +53,10 @@ struct AppConfig {
   std::string blur_method{"pixelate"}; // "pixelate" or "gaussian"
   int blur_intensity{12};              // Block size (4-32) for pixelate, kernel size (31-99) for gaussian
 
+  // Flip output frame horizontally (mirror)
+  // Useful for front-facing webcams that deliver a mirrored image.
+  bool flip_horizontal{false};
+
   // Uniform / vest classifier (MobileNetV3-Small)
   // DEPRECATED: use employee_detection below. Kept for backwards compatibility.
   bool        enable_uniform_model{false};   // Enable vest/uniform classification

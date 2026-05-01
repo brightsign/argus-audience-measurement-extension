@@ -37,6 +37,7 @@ struct WorkerConfig {
     int model_input_height;
     std::string model_name;    // For logging
     output::BlurConfig blur_config;  // Person blur configuration (applied before drawing boxes)
+    bool flip_horizontal{false};     // Flip output frame left-right (mirror correction)
 };
 
 // Run inference loop for a single model
