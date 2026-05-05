@@ -20,6 +20,29 @@ clone_or_update() {
   fi
 }
 
+# Apply local patches to the cloned repository sources.
+# Patches live in <source_root>/scripts/patches/ and are applied after every
+# clone_or_update so they are always baked into the Go binary at build time.
+apply_patches() {
+  # Resolve the source root from this script's location (scripts/ sibling)
+  local SCRIPT_DIR
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+  local PATCHES_DIR="${SCRIPT_DIR}/patches"
+
+  if [ ! -d "$PATCHES_DIR" ]; then
+    echo "[patches] No patches directory found at ${PATCHES_DIR}, skipping."
+    return
+  fi
+
+  # Full-screen dashboard UI (replaces the default 50vw/50vh layout)
+  local INDEX_PATCH="${PATCHES_DIR}/image-stream-server-index.html"
+  local INDEX_DST="${IMAGE_STREAM_SERVER_DIR}/internal/server/static/index.html"
+  if [ -f "$INDEX_PATCH" ] && [ -f "$INDEX_DST" ]; then
+    echo "[patches] Applying full-screen index.html patch..."
+    cp "$INDEX_PATCH" "$INDEX_DST"
+  fi
+}
+
 # Check if build can be skipped (binary exists and commit unchanged)
 skip_if_unchanged() {
   local current_commit
@@ -61,6 +84,10 @@ main() {
   export GOTOOLCHAIN=local
 
   clone_or_update
+
+  # Apply local patches (always, even when skipping rebuild)
+  # so the binary is rebuilt whenever a patch changes commit hash
+  apply_patches
 
   # Check if we can skip the build (commit unchanged)
   if skip_if_unchanged; then

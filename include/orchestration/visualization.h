@@ -24,7 +24,8 @@ void process_inference_results(
     int orig_height = 0,
     IModelRunner* second_runner = nullptr,
     FusionResults* fusion_output = nullptr,
-    const output::BlurConfig& blur_config = output::BlurConfig{}) noexcept;
+    const output::BlurConfig& blur_config = output::BlurConfig{},
+    bool flip_h = false) noexcept;
 
 // Save frame as JPEG every Nth frame (controlled by frame_idx % 3)
 void save_debug_jpg(

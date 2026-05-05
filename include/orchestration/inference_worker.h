@@ -14,6 +14,7 @@
 #include "pipeline/pipeline_types.h"
 #include "output/frame_writer.h"
 #include "output/face_blur.h"
+#include "tracking/tracker.h"
 
 // Type alias for the fusion output structure (defined in orchestrator.h)
 struct FusionResults {
@@ -23,6 +24,8 @@ struct FusionResults {
     uint64_t face_seq{0};
     std::vector<Detection> yolo_dets;
     uint64_t yolo_seq{0};
+    // Person tracks with stable IDs and uniform/vest classification results
+    std::vector<TrackedBox> tracks;
 };
 
 namespace inference_worker {
@@ -34,6 +37,7 @@ struct WorkerConfig {
     int model_input_height;
     std::string model_name;    // For logging
     output::BlurConfig blur_config;  // Person blur configuration (applied before drawing boxes)
+    bool flip_horizontal{false};     // Flip output frame left-right (mirror correction)
 };
 
 // Run inference loop for a single model
