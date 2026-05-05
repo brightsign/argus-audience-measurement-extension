@@ -230,27 +230,21 @@ static void draw_face_detections(
         // Filter 3: skip non-attending detections anywhere inside an employee
         // bbox → those are back-of-head false positives from employees facing away.
         //
-        // NOTE: fusion_output->tracks are in YOLOX model space (640x640).
-        // Face coords (cx0/cx1/cy0/cy1) are in camera space.
-        // Must de-letterbox track coords to camera space before comparing.
+        // NOTE: fusion_output->tracks are already in camera space
+        // (YOLOX runner de-letterboxes to camera coords before storing in tracks).
+        // Face coords (cx0/cx1/cy0/cy1) are also in camera space — compare directly.
         {
-            // YOLOX de-letterbox parameters (640x640 model → camera space)
-            const float yolo_ms = 640.0f;
-            const float ys    = std::min(yolo_ms / orig_width, yolo_ms / orig_height);
-            const float ypadx = (yolo_ms - orig_width  * ys) * 0.5f;
-            const float ypady = (yolo_ms - orig_height * ys) * 0.5f;
-
             const float face_cy = (cy0 + cy1) * 0.5f;
             const float face_cx = (cx0 + cx1) * 0.5f;
             bool skip_face = false;
             for (const auto& t : tracks_snap) {
                 if (!t.is_employee) continue;
 
-                // Convert track bbox from YOLOX model space → camera space
-                const float tx0 = (t.x0 - ypadx) / ys;
-                const float ty0 = (t.y0 - ypady) / ys;
-                const float tx1 = (t.x1 - ypadx) / ys;
-                const float ty1 = (t.y1 - ypady) / ys;
+                // Track bbox is already in camera space — use directly
+                const float tx0 = t.x0;
+                const float ty0 = t.y0;
+                const float tx1 = t.x1;
+                const float ty1 = t.y1;
                 const float mid_y = (ty0 + ty1) * 0.5f;
 
                 // Filter 2: badge-zone (lower half of employee bbox)
@@ -649,7 +643,10 @@ void process_inference_results(
         }
     }
 
-    // Blur disabled: show original video without privacy blur
+    // Apply privacy blur before drawing overlays so annotations remain visible
+    if (blur_config.enabled && fusion_output) {
+        blur_persons(drawMat, fusion_output, blur_config, scale_x, scale_y, offset_x, offset_y);
+    }
 
     // V6.2.3.5.6: Draw both face AND YOLOX detections (not mutually exclusive)
     // Both need coordinate transforms from camera space to canvas space

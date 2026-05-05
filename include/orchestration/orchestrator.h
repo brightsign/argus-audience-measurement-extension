@@ -88,8 +88,9 @@ public:
   // Read-only snapshots for logging/metrics UIs
   HealthSnapshot source_health() const noexcept { return source_health_.snapshot(); }
 
-  // Helper: safe thread join (only if joinable)
-  static void join_if(std::thread& t) noexcept {
+  // Helper: safe thread join (only if joinable).
+  // Not noexcept so callers can catch std::system_error if join fails.
+  static void join_if(std::thread& t) {
     if (t.joinable()) t.join();
   }
 

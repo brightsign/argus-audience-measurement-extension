@@ -21,7 +21,9 @@
 
 set -euo pipefail
 set +e   # mediamtx grep filter can exit non-zero; we handle failures explicitly
-trap 'echo; echo "Stopping..."; kill "$MTX_PID" "$FFM_PID" 2>/dev/null; exit 0' INT TERM
+MTX_PID=""
+FFM_PID=""
+trap 'echo; echo "Stopping..."; [[ -n "${MTX_PID:-}" ]] && kill "$MTX_PID" 2>/dev/null; [[ -n "${FFM_PID:-}" ]] && kill "$FFM_PID" 2>/dev/null; exit 0' INT TERM
 
 VIDEO="${1:-/home/sree/bs/argus_demo/000921246-vest-overlay-kf.mp4}"
 MEDIAMTX="${MEDIAMTX_BIN:-/tmp/mediamtx}"

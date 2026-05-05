@@ -90,16 +90,10 @@
 
   "flip_horizontal": true,
 
-  "enable_uniform_model": true,
-  "uniform_model": {
-    "model_path": "model/Mobilenetv3_small.rknn",
-    "npu_core": 2
-  },
-
-  "_comment_employee_detection": "Employee vest/logo detection (MobileNetV3 classifier). Enable this to identify uniformed employees by their high-vis vest. Model is loaded from the SD card path below. This supersedes the legacy enable_uniform_model / uniform_model fields.",
+  "_comment_employee_detection": "Employee vest/logo detection (MobileNetV3 classifier). Enable this to identify uniformed employees by their high-vis vest. Model is loaded from the SD card path below. Legacy enable_uniform_model / uniform_model fields are no longer used.",
   "employee_detection": {
-    "enabled": false,
-    "model_path": "/storage/sd/employee_detection/model/Mobilenetv3_small.rknn",
+    "enabled": true,
+    "model_path": "model/Mobilenetv3_small.rknn",
     "npu_core": 2
   },
 
