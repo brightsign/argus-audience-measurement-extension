@@ -1,6 +1,9 @@
 #pragma once
 #include <atomic>
 #include <string>
+#include <vector>
+#include <cstdint>
+#include <cstddef>
 #include <opencv2/opencv.hpp>
 #include "input/input_source.h"
 
@@ -32,22 +35,27 @@ public:
 
   // Called by orchestrator before stopping worker to unblock any blocking read()
   void request_stop() noexcept {
+    // Raw V4L2 capture uses a short select() timeout in tryFetch(), so simply
+    // setting this flag lets the worker thread exit promptly without a risky
+    // cross-thread close of the V4L2 file descriptor.
     stopping_.store(true, std::memory_order_release);
-    // Note: Do NOT release cap_ here! The worker thread is still in tryFetch().
-    // Instead, we'll close the device file to interrupt any blocking V4L2 ioctl.
-    try {
-      if (cap_.isOpened()) {
-        // Release will close the file descriptor, unblocking any read/ioctl
-        cap_.release();
-
-      }
-    } catch (...) {}
   }
 
 private:
+  // Raw V4L2 mmap capture. We bypass cv::VideoCapture because its open() issues
+  // VIDIOC_STREAMON internally, locking the UVC frame rate before CAP_PROP_FPS
+  // can take effect. Driving V4L2 directly lets us issue VIDIOC_S_PARM (fps)
+  // BEFORE VIDIOC_STREAMON, so the camera honours the requested rate.
+  void cleanup() noexcept;
+
   std::string      device_;
-  cv::VideoCapture cap_;
-  cv::Mat          last_frame_; // store last captured frame for FrameView
+  int              fd_{-1};
+  bool             streaming_{false};
+  uint32_t         pixfmt_{0};   // V4L2 fourcc the driver actually negotiated
+  int              cap_w_{0};    // negotiated capture width
+  int              cap_h_{0};    // negotiated capture height
+  std::vector<void*>  bufs_;
+  std::vector<size_t> buf_lens_;
   int              pref_w_{0};
   int              pref_h_{0};
   double           pref_fps_{0.0};

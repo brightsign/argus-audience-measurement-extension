@@ -227,6 +227,68 @@ TEST_F(ConfigTest, InputSourcePriority) {
     }
 }
 
+// TC-006b: Runtime target_fps and USB capture options parsing
+TEST_F(ConfigTest, RuntimeAndUsbCaptureOptions) {
+    std::string json = R"({
+        "input_source": "usb",
+        "input": {
+            "usb": {
+                "width": 1280,
+                "height": 720,
+                "fps": 30
+            }
+        },
+        "runtime": {
+            "target_fps": 25,
+            "heartbeat_ms": 2000
+        },
+        "primary_model": {
+            "name": "RetinaFace",
+            "model_path": "model/RetinaFace.rknn"
+        }
+    })";
+
+    fs::path config_file = write_config(json);
+    AppConfig cfg;
+    char err[256] = {0};
+
+    ASSERT_TRUE(config::load_from_file(config_file.string(), cfg, false, err, sizeof(err)))
+        << "Config load failed: " << err;
+
+    // runtime.target_fps must be parsed (previously ignored → stuck at default 30)
+    EXPECT_EQ(cfg.runtime.target_fps, 25);
+    EXPECT_EQ(cfg.runtime.heartbeat_ms, 2000);
+
+    // input.usb.{width,height,fps} must be parsed
+    EXPECT_EQ(cfg.input.usb.width, 1280);
+    EXPECT_EQ(cfg.input.usb.height, 720);
+    EXPECT_EQ(cfg.input.usb.fps, 30);
+}
+
+// TC-006c: USB capture options fall back to struct defaults when absent
+TEST_F(ConfigTest, UsbCaptureOptionsDefaults) {
+    std::string json = R"({
+        "input_source": "usb",
+        "primary_model": {
+            "name": "RetinaFace",
+            "model_path": "model/RetinaFace.rknn"
+        }
+    })";
+
+    fs::path config_file = write_config(json);
+    AppConfig cfg;
+    char err[256] = {0};
+
+    ASSERT_TRUE(config::load_from_file(config_file.string(), cfg, false, err, sizeof(err)))
+        << "Config load failed: " << err;
+
+    // Defaults from UsbOptions / RuntimeSettings struct initializers
+    EXPECT_EQ(cfg.input.usb.width, 640);
+    EXPECT_EQ(cfg.input.usb.height, 480);
+    EXPECT_EQ(cfg.input.usb.fps, 30);
+    EXPECT_EQ(cfg.runtime.target_fps, 30);
+}
+
 // TC-007: Model configuration details
 TEST_F(ConfigTest, ModelConfiguration) {
     std::string json = R"({

@@ -659,9 +659,15 @@ void Orchestrator::supervisor_loop() noexcept {
           recovery_backoff_ms = static_cast<int>(std::min(8000LL, static_cast<long long>(recovery_backoff_ms) * 2));
           LG_WARN("supervisor_loop:recovery attempt failed, next retry in %dms\n", recovery_backoff_ms);
         } else {
-          // Recovery succeeded, reset backoff
-          recovery_backoff_ms = 250;
-          LG_INFO("supervisor_loop:recovery succeeded\n");
+          // Recovery succeeded: reset backoff and update timestamp to NOW (recovery end),
+          // not the pre-recovery 'now'. This ensures the post-recovery grace period is
+          // enforced from when the new pipeline actually started, not from when we began
+          // tearing down the old one. Without this, a 2-3s recovery means time_since_last
+          // is already >> backoff_ms the moment recover_pipeline returns, causing an
+          // immediate re-recovery if health flickers broken again during thread startup.
+          last_recovery_attempt_ns = now_ns();
+          recovery_backoff_ms = 2000;  // 2s grace before allowing another recovery attempt
+          LG_INFO("supervisor_loop:recovery succeeded, next attempt allowed in %dms\n", recovery_backoff_ms);
         }
       } else {
         LG_INFO("supervisor_loop:waiting for backoff (elapsed=%lldms, need=%dms)\n", 

@@ -161,34 +161,51 @@ run_attention_demo() {
         echo "DEBUG: Arguments: ${CMD_ARGS}"
         
         # Create a wrapper script that handles exit code 42 (config change)
-        cat > /tmp/attention_demo_wrapper.sh << 'WRAPPER_EOF'
-#!/bin/bash
+        # Note: use double-quoted heredoc so LD_LIBRARY_PATH is expanded at write time
+        cat > /tmp/attention_demo_wrapper.sh << WRAPPER_EOF
+#!/bin/sh
 # Auto-restart wrapper for attention_demo
 # Restarts on exit code 42 (config change detected)
 
-SOC_HOME="$1"
-shift
-CMD_ARGS="$@"
+export LD_LIBRARY_PATH="${LD_LIBRARY_PATH}"
+export GST_PLUGIN_PATH="${GST_PLUGIN_PATH}"
+export GST_PLUGIN_SYSTEM_PATH="${GST_PLUGIN_SYSTEM_PATH}"
+export GST_REGISTRY="${GST_REGISTRY}"
+export GST_PLUGIN_SCANNER="${GST_PLUGIN_SCANNER}"
+export GST_REGISTRY_REUSE_PLUGIN_SCANNER="${GST_REGISTRY_REUSE_PLUGIN_SCANNER}"
+export GST_DEBUG_NO_COLOR="${GST_DEBUG_NO_COLOR}"
 
+SOC_HOME="\$1"
+shift
+CMD_ARGS="\$@"
+
+echo "[\$(date)] Wrapper started. LD_LIBRARY_PATH=\${LD_LIBRARY_PATH}"
+echo "[\$(date)] SOC_HOME=\${SOC_HOME} CMD_ARGS=\${CMD_ARGS}"
+
+cd "\${SOC_HOME}"
 while true; do
-    echo "[$(date)] Starting attention_demo..."
-    ${SOC_HOME}/attention_demo ${CMD_ARGS}
-    EXIT_CODE=$?
+    echo "[\$(date)] Starting attention_demo..."
+    \${SOC_HOME}/attention_demo \${CMD_ARGS}
+    EXIT_CODE=\$?
     
-    if [ $EXIT_CODE -eq 42 ]; then
-        echo "[$(date)] Config change detected (exit code 42), restarting in 2 seconds..."
+    if [ \$EXIT_CODE -eq 42 ]; then
+        echo "[\$(date)] Config change detected (exit code 42), restarting in 2 seconds..."
         sleep 2
     else
-        echo "[$(date)] attention_demo exited with code $EXIT_CODE, stopping."
+        echo "[\$(date)] attention_demo exited with code \$EXIT_CODE, stopping."
         break
     fi
 done
 WRAPPER_EOF
         chmod +x /tmp/attention_demo_wrapper.sh
-        
-        echo "DEBUG: Full command: start-stop-daemon --start --background --make-pidfile --pidfile ${PIDFILE} --exec /tmp/attention_demo_wrapper.sh -- ${SOC_HOME} ${CMD_ARGS}"
-        start-stop-daemon --start --background --make-pidfile --pidfile ${PIDFILE} \
-                          --exec /tmp/attention_demo_wrapper.sh -- ${SOC_HOME} ${CMD_ARGS}
+
+        # Run wrapper directly in background - redirect output before forking so log
+        # is always created regardless of start-stop-daemon exec quirks on busybox
+        echo "DEBUG: Launching wrapper in background, log: /storage/sd/logs/attention_demo_wrapper.log"
+        /tmp/attention_demo_wrapper.sh ${SOC_HOME} ${CMD_ARGS} >> /tmp/gaze.log 2>&1 &
+        WRAPPER_PID=$!
+        echo $WRAPPER_PID > ${PIDFILE}
+        echo "DEBUG: attention_demo_wrapper PID=${WRAPPER_PID}"
     else
         # Run directly in foreground with auto-restart on config change
         echo "DEBUG: Running in foreground with auto-restart support"
