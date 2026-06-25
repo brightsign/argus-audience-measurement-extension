@@ -353,7 +353,11 @@ FetchStatus UsbInputSource::tryFetch(FrameView& out) noexcept {
     return FetchStatus::Broken;
   }
 
-  // Requeue the buffer immediately, before any heavy downstream work.
+  // Requeue the buffer once decoding is done. Both decoders (imdecode for
+  // MJPEG, cvtColor for YUYV) read directly from the mmap'd buffer, so it must
+  // stay dequeued until decode completes. With 4 ring buffers this brief hold
+  // does not starve capture. The heavier work (FrameView copy, downstream
+  // inference) happens only after this QBUF returns the buffer to the driver.
   if (ioctl(fd_, VIDIOC_QBUF, &buf) < 0) {
     LG_WARN("usb: VIDIOC_QBUF after decode failed: %s", strerror(errno));
   }
