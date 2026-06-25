@@ -104,6 +104,7 @@ bool load_from_file(const std::string& path, AppConfig& out, bool /*strict*/, ch
     if (j.contains("runtime")) {
       const auto& rt = j["runtime"];
       if (rt.contains("heartbeat_ms")) out.runtime.heartbeat_ms = rt["heartbeat_ms"];
+      if (rt.contains("target_fps")) out.runtime.target_fps = rt["target_fps"];
     }
     
     if (j.contains("input")) {
@@ -111,6 +112,14 @@ bool load_from_file(const std::string& path, AppConfig& out, bool /*strict*/, ch
       if (in.contains("rtsp_url")) out.input.rtsp_url = in["rtsp_url"];
       // usb_device is intentionally not read from config; it is auto-detected at runtime
       if (in.contains("file_path")) out.input.file_path = in["file_path"];
+
+      // USB capture options (width/height/fps)
+      if (in.contains("usb") && in["usb"].is_object()) {
+        const auto& usb = in["usb"];
+        if (usb.contains("width"))  out.input.usb.width  = usb["width"];
+        if (usb.contains("height")) out.input.usb.height = usb["height"];
+        if (usb.contains("fps"))    out.input.usb.fps    = usb["fps"];
+      }
     }
     
     // Parse input source priority

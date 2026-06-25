@@ -203,6 +203,15 @@ else()
     message(STATUS "Demo mode DISABLED - production build")
 endif()
 
+# ON by default; pass -DENABLE_YOLOX=OFF for a gaze-only binary (no yolox_s.rknn required).
+option(ENABLE_YOLOX "Include YOLOX object detection" ON)
+if(NOT ENABLE_YOLOX)
+    message(STATUS "YOLOX DISABLED - gaze-only build")
+else()
+    add_definitions(-DYOLOX_ENABLED=1)
+    message(STATUS "YOLOX ENABLED")
+endif()
+
 add_executable(attention_demo
         src/main.cpp
         src/attention.cpp
@@ -239,7 +248,7 @@ add_executable(attention_demo
         src/models/model_factory.cpp
         src/models/model_runner_mobilenetv3.cpp
         src/models/model_runner_retinaface.cpp
-        src/models/model_runner_yolox.cpp
+        $<$<BOOL:${ENABLE_YOLOX}>:src/models/model_runner_yolox.cpp>
         # Orchestration module
         src/orchestration/inference_worker.cpp
         src/orchestration/orchestrator.cpp
@@ -271,7 +280,7 @@ add_executable(attention_demo
         src/tracking/byte_tracker_lite.cpp
         # Utility module
         src/util/util.cpp
-        src/yolox.cc
+        $<$<BOOL:${ENABLE_YOLOX}>:src/yolox.cc>
         # Demo mode license checker (always compiled; only active when DEMO_MODE_ENABLED defined)
         src/demo/demo_license_checker.cpp
 )

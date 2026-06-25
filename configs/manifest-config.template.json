@@ -23,7 +23,7 @@
   "compatibility": {
     "osVersion": {
       "min": "9.0.189",
-      "target": "9.1.0",
+      "target": "9.1.52",
       "max": "10.0.0"
     },
     "_osVersionNotes": [

@@ -13,7 +13,7 @@
     "usb": {
       "width": 640,
       "height": 480,
-      "fps": 30
+      "fps": 15
     },
     "rtsp": {
       "latency_ms": 100
@@ -59,7 +59,7 @@
   },
 
   "runtime": {
-    "target_fps": 30,
+    "target_fps": 15,
     "heartbeat_ms": 1000
   },
 

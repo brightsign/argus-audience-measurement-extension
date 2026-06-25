@@ -352,8 +352,8 @@ step0_setup() {
     print_status "Setting up BrightSign OS SDK..."
     
     # Set OS version variables
-    export BRIGHTSIGN_OS_MAJOR_VERSION=9.0
-    export BRIGHTSIGN_OS_MINOR_VERSION=189
+    export BRIGHTSIGN_OS_MAJOR_VERSION=9.1
+    export BRIGHTSIGN_OS_MINOR_VERSION=52
     export BRIGHTSIGN_OS_VERSION=${BRIGHTSIGN_OS_MAJOR_VERSION}.${BRIGHTSIGN_OS_MINOR_VERSION}
     
     # Download BrightSign OS source if not already downloaded
@@ -377,8 +377,8 @@ step0_setup() {
 
     # Build SDK in container
     if [ ! -f "Dockerfile" ]; then
-        print_status "Downloading Dockerfile..."
-        wget https://raw.githubusercontent.com/brightsign/extension-template/refs/heads/main/Dockerfile
+        print_status "Restoring Dockerfile from git..."
+        git checkout Dockerfile
     fi
 
     if ! $CONTAINER_CMD images | grep -q "bsoe-build"; then
@@ -389,6 +389,10 @@ step0_setup() {
     fi
 
     mkdir -p srv
+
+    # Always sync custom recipes into the build tree before building
+    print_status "Syncing bsoe-recipes into brightsign-oe..."
+    rsync -a bsoe-recipes/ brightsign-oe/
 
     # Check if SDK already exists
     if [ ! -f "brightsign-x86_64-cobra-toolchain-${BRIGHTSIGN_OS_VERSION}.sh" ]; then
