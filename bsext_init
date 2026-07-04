@@ -200,9 +200,14 @@ WRAPPER_EOF
         chmod +x /tmp/attention_demo_wrapper.sh
 
         # Run wrapper directly in background - redirect output before forking so log
-        # is always created regardless of start-stop-daemon exec quirks on busybox
-        echo "DEBUG: Launching wrapper in background, log: /storage/sd/logs/attention_demo_wrapper.log"
-        /tmp/attention_demo_wrapper.sh ${SOC_HOME} ${CMD_ARGS} >> /tmp/gaze.log 2>&1 &
+        # is always created regardless of start-stop-daemon exec quirks on busybox.
+        # This captures ONLY raw stdout/stderr (early-boot printfs, crashes). The
+        # structured, rotated application log is owned by the C++ logger at
+        # /tmp/gaze.log (5MB x 5). Keep this console capture on a SEPARATE file so
+        # it never fights the logger's rotation, and truncate ('>' not '>>') on each
+        # start because /tmp is tmpfs (RAM) and this file is not rotated.
+        echo "DEBUG: Launching wrapper in background, console: /tmp/gaze_console.log"
+        /tmp/attention_demo_wrapper.sh ${SOC_HOME} ${CMD_ARGS} > /tmp/gaze_console.log 2>&1 &
         WRAPPER_PID=$!
         echo $WRAPPER_PID > ${PIDFILE}
         echo "DEBUG: attention_demo_wrapper PID=${WRAPPER_PID}"

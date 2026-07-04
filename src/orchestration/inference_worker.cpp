@@ -22,8 +22,8 @@ namespace inference_worker {
 
 // Local helper: Check if we should process this frame based on skip count
 static bool should_process_frame(uint64_t seq, int skip_frames) noexcept {
-    if (skip_frames <= 1) return true;  // Process all frames
-    return (seq & (skip_frames - 1)) == 0;  // Bitmask for power-of-2 skip
+    if (skip_frames <= 1) return true;                  // Process every frame
+    return (seq % static_cast<uint64_t>(skip_frames)) == 0;  // Process every Nth frame
 }
 
 // Local helper: Resize frame via RGA hardware acceleration (with OpenCV fallback)
@@ -48,30 +48,49 @@ static bool resize_frame_rga(
     // V6.2.3.4: CRITICAL FIX - Do letterbox resize, not stretch!
     // YOLOX expects letterboxed input (maintain aspect ratio + black padding)
     // Previous code was stretching/squashing, causing wrong detections
-    
+
     // Calculate letterbox parameters
     float scale = std::min(float(dst_w) / src_w, float(dst_h) / src_h);
     int letterbox_w = int(src_w * scale);
     int letterbox_h = int(src_h * scale);
     int pad_x = (dst_w - letterbox_w) / 2;
     int pad_y = (dst_h - letterbox_h) / 2;
-    
+
     // Resize destination buffer to target size and fill with black
     if (dst_buf.size() != size_t(dst_w) * dst_h * 3) {
         dst_buf.resize(size_t(dst_w) * dst_h * 3);
     }
     std::fill(dst_buf.begin(), dst_buf.end(), 0);  // Black padding
-    
-    // Use OpenCV for letterbox resize (RGA doesn't support offset/padding easily)
+
+    // Fast path: offload the aspect-ratio resize to the RGA hardware block.
+    // improcess() scales the whole source into the destination ROI (drect),
+    // which gives us the letterbox placement in one hardware call. The black
+    // padding is already in place from the fill above.
+    rga_buffer_t src_rga = wrapbuffer_virtualaddr(
+        const_cast<uint8_t*>(src_bgr.data()), src_w, src_h, RK_FORMAT_BGR_888);
+    rga_buffer_t dst_rga = wrapbuffer_virtualaddr(
+        dst_buf.data(), dst_w, dst_h, RK_FORMAT_BGR_888);
+
+    im_rect srect{0, 0, src_w, src_h};
+    im_rect drect{pad_x, pad_y, letterbox_w, letterbox_h};
+    im_rect prect{};
+    rga_buffer_t pat{};
+
+    IM_STATUS st = improcess(src_rga, dst_rga, pat, srect, drect, prect, 0);
+    if (st == IM_STATUS_SUCCESS) {
+        return true;
+    }
+
+    // Fallback: OpenCV letterbox resize on the CPU (SIMD).
     cv::Mat src_mat(src_h, src_w, CV_8UC3, const_cast<uint8_t*>(src_bgr.data()));
     cv::Mat dst_full(dst_h, dst_w, CV_8UC3, dst_buf.data());
-    
+
     // Create ROI in destination for the letterboxed image (skip padding area)
     cv::Mat dst_roi = dst_full(cv::Rect(pad_x, pad_y, letterbox_w, letterbox_h));
-    
+
     // Resize source to fit in ROI (maintains aspect ratio)
     cv::resize(src_mat, dst_roi, cv::Size(letterbox_w, letterbox_h), 0, 0, cv::INTER_LINEAR);
-    
+
     return true;
 }
 
@@ -182,6 +201,18 @@ void run_inference_loop(
         int fps_frame_count = 0;
         int fps_processed_count = 0;
 
+        // Method 2: per-stage timing accumulators (nanoseconds), reset each second
+        const bool perf = config.log_performance;
+        int64_t acc_resize_ns = 0;
+        int64_t acc_infer_ns  = 0;   // wall time around runner->infer()
+        int64_t acc_pre_ns    = 0;   // model-reported preprocess
+        int64_t acc_npu_ns    = 0;   // model-reported NPU inference
+        int64_t acc_post_ns   = 0;   // model-reported postprocess
+        int64_t acc_vis_ns    = 0;   // clone + draw overlays
+        int64_t acc_write_ns  = 0;   // frame writer
+        int      perf_samples = 0;
+        auto perf_start_time = std::chrono::steady_clock::now();
+
         while (!stop_flag.load(std::memory_order_relaxed)) {
             // Get next frame from mailbox
             auto sf = frame_mailbox->takeFrame();
@@ -230,11 +261,17 @@ void run_inference_loop(
             }
 
             // Resize frame via RGA hardware accelerator (BGR24 → BGR24)
+            auto t_resize0 = perf ? std::chrono::steady_clock::now()
+                                  : std::chrono::steady_clock::time_point{};
             if (!resize_frame_rga(sf->bgr, sf->width, sf->height,
                                   rgb_resized_buf, dst_w, dst_h)) {
                 LG_WARN("inference_worker: RGA resize failed (seq=%llu, %s)",
                         (unsigned long long)sf->seq, config.model_name.c_str());
                 continue;
+            }
+            if (perf) {
+                acc_resize_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now() - t_resize0).count();
             }
 
             // Prepare input frame view
@@ -243,10 +280,19 @@ void run_inference_loop(
 
             // Run inference
             InferenceOutputs outs{};
+            auto t_infer0 = perf ? std::chrono::steady_clock::now()
+                                 : std::chrono::steady_clock::time_point{};
             if (!runner->infer(fv_in, outs)) {
                 LG_WARN("inference_worker: inference failed (seq=%llu, %s)",
                         (unsigned long long)sf->seq, config.model_name.c_str());
                 continue;
+            }
+            if (perf) {
+                acc_infer_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now() - t_infer0).count();
+                acc_pre_ns  += runner->last_pre_ns();
+                acc_npu_ns  += runner->last_infer_ns();
+                acc_post_ns += runner->last_post_ns();
             }
 
             // Store results in fusion output FIRST (before visualization)
@@ -254,6 +300,8 @@ void run_inference_loop(
 
             // Draw overlays on full-resolution camera frame (sf->bgr is now at original RTSP res)
             // Detection coords are in camera/orig space; with canvas == camera size, scale=1.0, offset=0
+            auto t_vis0 = perf ? std::chrono::steady_clock::now()
+                               : std::chrono::steady_clock::time_point{};
             cv::Mat vis_canvas = cv::Mat(sf->height, sf->width, CV_8UC3,
                                         const_cast<uint8_t*>(sf->bgr.data())).clone();
 
@@ -269,8 +317,14 @@ void run_inference_loop(
                                                      config.flip_horizontal);
 
             // (flip already applied above — no post-visualization flip needed)
+            if (perf) {
+                acc_vis_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now() - t_vis0).count();
+            }
 
             // Write frame to disk if writer is available
+            auto t_write0 = perf ? std::chrono::steady_clock::now()
+                                 : std::chrono::steady_clock::time_point{};
             if (frame_writer) {
                 PipelineResult result{};
                 result.seq = sf->seq;
@@ -361,6 +415,39 @@ void run_inference_loop(
                 }
 
                 frame_writer->writeFrame(vis_canvas, result);
+            }
+            if (perf) {
+                acc_write_ns += std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now() - t_write0).count();
+                perf_samples++;
+            }
+
+            // Method 2: emit per-stage timing breakdown every second when enabled.
+            if (perf) {
+                auto perf_now = std::chrono::steady_clock::now();
+                auto perf_elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                    perf_now - perf_start_time).count();
+                if (perf_elapsed_ms >= 1000 && perf_samples > 0) {
+                    const double inv = 1.0 / (perf_samples * 1e6);  // ns total -> ms avg
+                    const double per_frame_fps =
+                        (perf_elapsed_ms > 0) ? (1000.0 * perf_samples / perf_elapsed_ms) : 0.0;
+                    LG_INFO("inference_worker: PERF (%s) fps=%.1f frames=%d | "
+                            "resize=%.2fms infer=%.2fms (pre=%.2f npu=%.2f post=%.2f) "
+                            "vis=%.2fms write=%.2fms total=%.2fms",
+                            config.model_name.c_str(), per_frame_fps, perf_samples,
+                            acc_resize_ns * inv,
+                            acc_infer_ns  * inv,
+                            acc_pre_ns    * inv,
+                            acc_npu_ns    * inv,
+                            acc_post_ns   * inv,
+                            acc_vis_ns    * inv,
+                            acc_write_ns  * inv,
+                            (acc_resize_ns + acc_infer_ns + acc_vis_ns + acc_write_ns) * inv);
+                    acc_resize_ns = acc_infer_ns = acc_pre_ns = acc_npu_ns = 0;
+                    acc_post_ns = acc_vis_ns = acc_write_ns = 0;
+                    perf_samples = 0;
+                    perf_start_time = perf_now;
+                }
             }
 
             // Log periodically

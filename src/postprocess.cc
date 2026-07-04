@@ -655,7 +655,7 @@ int post_process(rknn_app_context_t *app_ctx, void *outputs, letterbox_t *letter
     memset(od_results, 0, sizeof(object_detect_result_list));
 
     // Process YOLOX outputs
-    printf("Processing YOLOX outputs\n");
+    // printf("Processing YOLOX outputs\n");  // silenced: per-frame log spam (CPU + flash writes)
     validCount = process_standard_yolox_outputs(app_ctx, outputs, filterBoxes, objProbs, classId, conf_threshold);
 
     // no object detect

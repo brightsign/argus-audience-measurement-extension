@@ -105,6 +105,8 @@ bool load_from_file(const std::string& path, AppConfig& out, bool /*strict*/, ch
       const auto& rt = j["runtime"];
       if (rt.contains("heartbeat_ms")) out.runtime.heartbeat_ms = rt["heartbeat_ms"];
       if (rt.contains("target_fps")) out.runtime.target_fps = rt["target_fps"];
+      if (rt.contains("face_skip_frames")) out.runtime.face_skip_frames = rt["face_skip_frames"];
+      if (rt.contains("yolo_skip_frames")) out.runtime.yolo_skip_frames = rt["yolo_skip_frames"];
     }
     
     if (j.contains("input")) {
@@ -146,6 +148,9 @@ bool load_from_file(const std::string& path, AppConfig& out, bool /*strict*/, ch
     }
     if (j.contains("log_json") && j["log_json"].is_boolean()) {
       out.log_json = j["log_json"].get<bool>();
+    }
+    if (j.contains("log_performance") && j["log_performance"].is_boolean()) {
+      out.log_performance = j["log_performance"].get<bool>();
     }
 
     // Parse frame output options

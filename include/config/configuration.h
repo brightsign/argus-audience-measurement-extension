@@ -76,6 +76,12 @@ struct AppConfig {
   std::string log_dir{"/storage/sd/logs"};
   bool        log_json{true};
 
+  // Performance instrumentation (Method 2)
+  // When true, the inference worker logs per-stage CPU/NPU timing every second:
+  // resize, pre/infer/post (NPU), visualization, frame-write, and total per-frame ms.
+  // Useful for diagnosing CPU load on weaker SoCs (e.g. LS5/RK3568).
+  bool        log_performance{false};
+
   // Validate composite config (no throws). Returns true if ok.
   bool validate(char* err, size_t err_sz) const noexcept;
 };

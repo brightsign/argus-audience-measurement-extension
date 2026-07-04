@@ -1570,11 +1570,12 @@ void Orchestrator::face_loop_threadfn() noexcept {
 
         // Configure generic worker for face detection
         inference_worker::WorkerConfig config{};
-        config.skip_frames = 0;  // Process all frames (NPU has capacity - 19% load)
+        config.skip_frames = cfg_.face_skip_frames;  // 0/1 = every frame (from config)
         config.model_input_width = face_runner_->spec().input_size.w;
         config.model_input_height = face_runner_->spec().input_size.h;
         config.model_name = "RetinaFace";
         config.flip_horizontal = cfg_.flip_horizontal;  // Mirror correction
+        config.log_performance = cfg_.log_performance;  // Method 2: per-stage timing
 
         // Wrap the member mailbox in a shared_ptr wrapper that doesn't own it
         std::shared_ptr<FrameMailbox> mb_wrapper(
@@ -1798,12 +1799,13 @@ void Orchestrator::yolo_loop_threadfn() noexcept {
 
         // Configure generic worker for object detection
         inference_worker::WorkerConfig config{};
-        config.skip_frames = 0;  // Process all frames (NPU has capacity - 19% load)
+        config.skip_frames = cfg_.yolo_skip_frames;  // 0/1 = every frame (from config)
         config.model_input_width = yolo_runner_->spec().input_size.w;
         config.model_input_height = yolo_runner_->spec().input_size.h;
         config.model_name = "YOLOX";
         config.blur_config = cfg_.blur_config;  // V7.2: Pass blur config for person blur
         config.flip_horizontal = cfg_.flip_horizontal;  // Mirror correction
+        config.log_performance = cfg_.log_performance;  // Method 2: per-stage timing
 
         // Wrap the member mailbox in a shared_ptr wrapper that doesn't own it
         std::shared_ptr<FrameMailbox> mb_wrapper(

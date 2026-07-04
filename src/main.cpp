@@ -130,12 +130,18 @@ int main(int argc, char** argv) {
     cv::ocl::setUseOpenCL(false);
     #endif
     
-    // ---- logging (initial setup - use /tmp to avoid boot-time SD mount race) ----
+    // ---- logging (rotating file on tmpfs) ----
+    // Logs live on /tmp (tmpfs) with rotation so a delayed SD-card mount at boot
+    // cannot cause log loss. FileRotatingLogger keeps 5 files of 5MB each.
     FileRotatingLogger::Config logcfg;
     logcfg.path = "/tmp/gaze.log";
     logcfg.max_mb = 5;
     logcfg.max_files = 5;
     logcfg.min_level = LogLevel::Info;  // Start with Info, will be updated from config
+    // Do NOT mirror to stderr: bsext_init captures stderr into a separate console
+    // file (/tmp/gaze_console.log). Mirroring would let that unrotated file grow
+    // without bound in tmpfs/RAM. All structured logs go to the rotating file above.
+    logcfg.also_stderr = false;
     auto flog = std::make_shared<FileRotatingLogger>(logcfg);
     set_global_logger(flog);
     LG_INFO("Starting attention_demo; initial log file: %s", flog->path().c_str());
@@ -183,21 +189,30 @@ int main(int argc, char** argv) {
       LG_INFO("Log level set to: %s", level_names[static_cast<int>(level)]);
     }
 
-    // Re-initialize logger to configured log_dir if specified
+    // Re-initialize logger to a configured log_dir ONLY if it differs from the
+    // current /tmp path. By default log_dir is "/tmp", so the rotating tmpfs
+    // logger above is kept (robust against delayed SD mount). Point log_dir at an
+    // SD path only if you need persistence across reboots and accept that a
+    // delayed mount at boot may drop early logs.
     if (!appcfg.log_dir.empty()) {
       std::string log_path = appcfg.log_dir + "/gaze.log";
-      FileRotatingLogger::Config cfg2;
-      cfg2.path      = log_path;
-      cfg2.max_mb    = 5;
-      cfg2.max_files = 5;
-      cfg2.min_level = flog->level();
-      auto flog2 = std::make_shared<FileRotatingLogger>(cfg2);
-      if (flog2->is_open()) {
-        set_global_logger(flog2);
-        flog = flog2;
-        LG_INFO("Logger switched to: %s", log_path.c_str());
+      if (log_path != flog->path()) {
+        FileRotatingLogger::Config cfg2;
+        cfg2.path      = log_path;
+        cfg2.max_mb    = 5;
+        cfg2.max_files = 5;
+        cfg2.min_level = flog->level();
+        cfg2.also_stderr = false;
+        auto flog2 = std::make_shared<FileRotatingLogger>(cfg2);
+        if (flog2->is_open()) {
+          set_global_logger(flog2);
+          flog = flog2;
+          LG_INFO("Logger switched to: %s", log_path.c_str());
+        } else {
+          LG_WARN("Could not open log at %s, keeping %s", log_path.c_str(), flog->path().c_str());
+        }
       } else {
-        LG_WARN("Could not open log at %s, keeping /tmp/gaze.log", log_path.c_str());
+        LG_INFO("Logging to rotating file: %s (5MB x 5)", flog->path().c_str());
       }
     }
 
@@ -402,6 +417,16 @@ int main(int argc, char** argv) {
     // Horizontal flip (mirror correction for front-facing cameras)
     pc.flip_horizontal = appcfg.flip_horizontal;
     LG_INFO("Horizontal flip: %s", pc.flip_horizontal ? "enabled" : "disabled");
+
+    // Performance instrumentation (Method 2)
+    pc.log_performance = appcfg.log_performance;
+    LG_INFO("Performance logging: %s", pc.log_performance ? "enabled" : "disabled");
+
+    // Frame skipping (per model)
+    pc.face_skip_frames = appcfg.runtime.face_skip_frames;
+    pc.yolo_skip_frames = appcfg.runtime.yolo_skip_frames;
+    LG_INFO("Frame skip: face=%d yolo=%d (0/1 = every frame)",
+            pc.face_skip_frames, pc.yolo_skip_frames);
 
     // Configure employee vest detection (MobileNetV3-Small classifier)
     // Prefer the new dedicated employee_detection config; fall back to legacy fields.

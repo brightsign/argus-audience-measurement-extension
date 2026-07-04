@@ -58,6 +58,13 @@ struct PipelineConfig {
   // Flip output frame horizontally (mirror correction for front-facing cameras)
   bool flip_horizontal{false};
 
+  // Performance instrumentation (Method 2): log per-stage CPU/NPU timing every second
+  bool log_performance{false};
+
+  // Frame skipping (per model): process every Nth frame (0/1 = all)
+  int  face_skip_frames{0};
+  int  yolo_skip_frames{0};
+
   // Publishers configuration
   std::vector<PublisherConfig> publishers; // MQTT, UDP, File publishers
 };

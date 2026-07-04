@@ -60,7 +60,10 @@
 
   "runtime": {
     "target_fps": 30,
-    "heartbeat_ms": 1000
+    "heartbeat_ms": 1000,
+    "_comment_skip_frames": "Frame skipping per model. Value = process every Nth frame: 0 or 1 = every frame (no skipping), 2 = every 2nd frame (half the work), 3 = every 3rd, etc. Higher value = lower NPU/CPU load and less heat, but fewer detections per second (slower reaction to movement). See _frame_skip_notes below for guidance.",
+    "face_skip_frames": 0,
+    "yolo_skip_frames": 0
   },
 
   "publishers": [
@@ -78,8 +81,10 @@
   ],
 
   "log_level": "info",
-  "log_dir": "/storage/sd/logs",
+  "_comment_log_dir": "Directory for the rotating structured log (gaze.log, 5MB x 5 files). Default '/tmp' (RAM/tmpfs) is robust against delayed SD-card mount at boot. Use an SD path (e.g. '/storage/sd/logs') only if you need logs to persist across reboots. See _log_notes below.",
+  "log_dir": "/tmp",
   "log_json": true,
+  "log_performance": false,
 
   "enable_frame_output": true,
   "output_dir": "/tmp",
@@ -92,7 +97,7 @@
 
   "_comment_employee_detection": "Employee vest/logo detection (MobileNetV3 classifier). Enable this to identify uniformed employees by their high-vis vest. Model is loaded from the SD card path below. Legacy enable_uniform_model / uniform_model fields are no longer used.",
   "employee_detection": {
-    "enabled": true,
+    "enabled": false,
     "model_path": "model/Mobilenetv3_small.rknn",
     "npu_core": 2
   },
@@ -129,6 +134,25 @@
     "usage": "See TEST_MODES.md for detailed usage examples and debugging workflows"
   },
 
+  "_frame_skip_notes": {
+    "description": "Per-model frame skipping to reduce NPU/CPU load. Located under \"runtime\": face_skip_frames (RetinaFace) and yolo_skip_frames (YOLOX).",
+    "how_it_works": "The worker processes 1 out of every N frames and skips the rest. Skipped frames are still captured but not run through the model, so they cost almost nothing.",
+    "values": {
+      "0 or 1": "Process every frame - maximum accuracy/responsiveness, highest load (default)",
+      "2": "Process every 2nd frame - roughly halves that model's NPU + CPU work",
+      "3": "Process every 3rd frame - roughly one third of the work",
+      "N": "Process every Nth frame - effective inference rate becomes (capture_fps / N)"
+    },
+    "effect": "Higher value => lower CPU/NPU usage, lower power/heat, smoother host playback, BUT fewer detections per second and slower reaction to fast movement. Detections are simply reused/absent between processed frames.",
+    "tuning_guidance": {
+      "single_core_npu": "On single-NPU-core SoCs (e.g. LS5/RK3568) both models share one NPU and serialize. Skipping the pricier model (YOLOX) frees the NPU so the other model (RetinaFace) also speeds up. Start with yolo_skip_frames=2.",
+      "multi_core_npu": "On 3-core NPU SoCs (e.g. XT5/RK3588) each model has its own core; skipping is usually unnecessary unless CPU (pre/resize/visualization) is the limit.",
+      "people_counting": "People/faces move slowly relative to 30fps, so yolo_skip_frames=2 or 3 rarely misses anyone while cutting load significantly.",
+      "measure": "Enable log_performance=true and compare the PERF log lines (npu/total ms and fps) before and after changing these values."
+    },
+    "example": "face_skip_frames=0, yolo_skip_frames=2  => RetinaFace every frame, YOLOX every 2nd frame."
+  },
+
   "_log_level_notes": {
     "description": "Controls verbosity of logging output",
     "options": {
@@ -139,6 +163,14 @@
     },
     "note": "Change log_level without recompiling. Logs are written to log_dir location.",
     "default": "info"
+  },
+
+  "_log_notes": {
+    "description": "Log file layout on the player.",
+    "structured_log": "log_dir/gaze.log (default /tmp/gaze.log) - the main application log. Rotates automatically at 5MB, keeping 5 files (gaze.log, gaze.log.1 .. gaze.log.4). Grep this for PERF, detections, errors, etc.",
+    "console_log": "/tmp/gaze_console.log - raw stdout/stderr capture (early-boot messages, crashes). Truncated on each start. Not rotated; kept small.",
+    "why_tmp": "/tmp is tmpfs (RAM). Logging here avoids losing logs when the SD card mount is delayed at boot. Downside: logs are cleared on reboot/power-cycle.",
+    "persistent": "Set log_dir to an SD path (e.g. /storage/sd/logs) to keep logs across reboots, accepting the boot-time mount-race risk."
   },
 
   "_blur_faces_notes": {
