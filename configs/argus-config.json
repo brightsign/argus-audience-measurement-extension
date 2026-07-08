@@ -95,13 +95,6 @@
 
   "flip_horizontal": true,
 
-  "_comment_employee_detection": "Employee vest/logo detection (MobileNetV3 classifier). Enable this to identify uniformed employees by their high-vis vest. Model is loaded from the SD card path below. Legacy enable_uniform_model / uniform_model fields are no longer used.",
-  "employee_detection": {
-    "enabled": false,
-    "model_path": "model/Mobilenetv3_small.rknn",
-    "npu_core": 2
-  },
-
   "test_face_only": false,
   "test_yolo_only": false,
 

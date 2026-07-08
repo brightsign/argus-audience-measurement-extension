@@ -7,7 +7,6 @@ enum class ModelFamily : uint8_t {
   Unknown = 0,
   RetinaFace,
   YOLOX,
-  MobileNetV3,
   Custom
 };
 

@@ -13,7 +13,6 @@
 #include "health/health_manager.h"
 #include "config/model_spec.h"
 #include "models/model_runner.h"
-#include "models/model_runner_mobilenetv3.h"
 #include "pipeline/shared_frame.h"
 #include "pipeline/frame_mailbox.h"
 #include "output/frame_writer.h"
@@ -36,16 +35,7 @@ struct PipelineConfig {
   // Test mode: control which models are enabled (default: both enabled)
   bool enable_face_model = true;   // Enable RetinaFace on NPU core 0
   bool enable_yolo_model = true;   // Enable YOLOX on NPU core 1
-  // Vest/uniform classifier (legacy name — kept for internal compatibility)
-  bool      enable_uniform_model{false}; // Enable MobileNetV3 vest classifier (legacy name)
-  ModelSpec uniform_model{};             // MobileNetV3 model spec (family=MobileNetV3)
 
-  // Employee vest detection — dedicated feature toggle (preferred over enable_uniform_model)
-  // Model is loaded from employee_model_path when enabled.
-  bool        enable_employee_detection{false};
-  std::string employee_model_path{"/storage/sd/employee_detection/model/Mobilenetv3_small.rknn"};
-  int         employee_npu_core{2};
-  
   // Frame output options (optional)
   bool enable_frame_output = false; // Enable decorated frame writing
   std::string output_dir;           // Directory for decorated frames
@@ -115,7 +105,6 @@ private:
   void capture_loop_threadfn() noexcept;     // Reads camera, fans out to mailboxes
   void face_loop_threadfn() noexcept;        // RetinaFace on NPU core 0
   void yolo_loop_threadfn() noexcept;        // YOLOX detection loop
-  void uniform_loop_threadfn() noexcept;     // Vest classifier loop (MobileNetV3)
 
   // ---- recovery helpers ----
   void mark_broken(FaultCode code, int64_t now_ns) noexcept;
@@ -131,7 +120,6 @@ private:
   // ---- Model enablement flags (set during build_pipeline) ----
   bool enable_face_model_{true};   // RetinaFace enabled?
   bool enable_yolo_model_{true};   // YOLOX enabled?
-  bool enable_uniform_model_{false}; // MobileNetV3 vest/employee classifier enabled?
 
   // ---- Model runners (multi-model) ----
   // Primary: RetinaFace for face/gaze detection (NPU core 0)
@@ -139,30 +127,24 @@ private:
   
   // Secondary: YOLOX for object/person detection (NPU core 0 and 1)
   std::shared_ptr<IModelRunner> yolo_runner_;   // YOLOX on NPU
-  
-  // Uniform classifier: MobileNetV3-Small vest classifier (NPU core 2)
-  std::unique_ptr<MobileNetV3Classifier> uniform_classifier_;
 
   // ---- Frame fan-out mailboxes (lock-free) ----
   FrameMailbox mb_face_;   // For RetinaFace worker
 
   // ---- YOLOX shared state (double-buffer pattern) ----
   FrameMailbox mb_yolo_;           // YOLOX frame queue
-  FrameMailbox mb_uniform_;        // Uniform classifier frame queue
 
   // ---- Worker threads ----
   std::thread supervisor_th_;
   std::thread capture_th_;
   std::thread face_th_;
   std::thread yolo_th_;            // YOLOX thread
-  std::thread uniform_th_;         // Vest classifier thread
 
   // ---- Stop flags for each thread ----
   std::atomic<bool> orchestrator_stop_{false};  // Supervisor loop
   std::atomic<bool> stop_capture_{false};       // Capture thread
   std::atomic<bool> stop_face_{false};          // RetinaFace thread
   std::atomic<bool> stop_yolo_{false};          // YOLOX workers
-  std::atomic<bool> stop_uniform_{false};       // Vest classifier worker
 
   // ---- Frame sequencing ----
   std::atomic<uint64_t> frame_seq_{0};
@@ -186,25 +168,7 @@ private:
     // V6.2: Frame dimensions for normalized speed
     int frame_width{640};
     int frame_height{480};
-
-    // Uniform classifier results (from vest classifier thread)
-    // Each entry corresponds to one person detection bbox (camera-space coords)
-    struct UniformScore {
-      float x0, y0, x1, y1;  // Person bbox in camera space (same coords as yolo_dets)
-      float vest_prob;        // Probability of employee_vest class (0..1)
-    };
-    std::vector<UniformScore> uniform_scores;
-    uint64_t uniform_seq{0};
   } fusion_;
-
-  // ---- Temporal smoothing history per track (only accessed from supervisor loop) ----
-  // Keyed by trackedbox.id, stores recent vest-probability observations.
-  struct UniformHistory {
-    std::deque<float> vest_probs; // Recent observations (1 per supervisor tick)
-    static constexpr int WINDOW = 8;   // Number of observations to keep
-    static constexpr int THRESH = 5;   // Minimum vest observations to classify as employee
-  };
-  std::unordered_map<int, UniformHistory> uniform_history_;
 
   // health/backoff for the source pipeline
   HealthManager source_health_{SourceKind::Unknown};

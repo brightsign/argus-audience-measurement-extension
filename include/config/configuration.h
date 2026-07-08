@@ -57,20 +57,6 @@ struct AppConfig {
   // Useful for front-facing webcams that deliver a mirrored image.
   bool flip_horizontal{false};
 
-  // Uniform / vest classifier (MobileNetV3-Small)
-  // DEPRECATED: use employee_detection below. Kept for backwards compatibility.
-  bool        enable_uniform_model{false};   // Enable vest/uniform classification
-  ModelSpec   uniform_model{};               // Path, npu_core, etc.
-
-  // Employee vest detection — separate feature toggle
-  // When enabled, loads a MobileNetV3 classifier to identify uniformed employees by vest.
-  // Model is loaded from employee_detection.model_path (default: SD card location).
-  struct EmployeeDetectionConfig {
-    bool        enabled{false};                                        // Feature on/off
-    std::string model_path{"/storage/sd/employee_detection/model/Mobilenetv3_small.rknn"};
-    int         npu_core{2};
-  } employee_detection;
-
   // Optional: diagnostic logging
   std::string log_level{"info"};        // "debug", "info", "warn", "error"
   std::string log_dir{"/storage/sd/logs"};

@@ -92,7 +92,6 @@ static void draw_face_detections(
     // Lock fusion output and copy detections + landmarks for processing
     std::vector<Detection> face_dets_copy;
     std::vector<Landmarks> face_lms_copy;
-    std::vector<TrackedBox> tracks_snap;
     uint64_t face_seq_copy = 0;
     {
         std::lock_guard<std::mutex> g(fusion_output->m);
@@ -109,7 +108,6 @@ static void draw_face_detections(
         face_dets_copy = fusion_output->face_dets;
         face_lms_copy = fusion_output->face_lms;
         face_seq_copy = fusion_output->face_seq;
-        tracks_snap   = fusion_output->tracks;
     }
     
     // Log periodically
@@ -224,53 +222,6 @@ static void draw_face_detections(
         // A real face visible in the scene is at least ~5% of frame height.
         const float min_face_h = 0.05f * orig_height;
         if ((cy1 - cy0) < min_face_h) continue;
-
-        // Filter 2: skip detections whose centre-Y falls in the lower half of a
-        // confirmed employee bbox → those are badge-photo false positives.
-        // Filter 3: skip non-attending detections anywhere inside an employee
-        // bbox → those are back-of-head false positives from employees facing away.
-        //
-        // NOTE: fusion_output->tracks are already in camera space
-        // (YOLOX runner de-letterboxes to camera coords before storing in tracks).
-        // Face coords (cx0/cx1/cy0/cy1) are also in camera space — compare directly.
-        {
-            const float face_cy = (cy0 + cy1) * 0.5f;
-            const float face_cx = (cx0 + cx1) * 0.5f;
-            bool skip_face = false;
-            for (const auto& t : tracks_snap) {
-                if (!t.is_employee) continue;
-
-                // Track bbox is already in camera space — use directly
-                const float tx0 = t.x0;
-                const float ty0 = t.y0;
-                const float tx1 = t.x1;
-                const float ty1 = t.y1;
-                const float mid_y = (ty0 + ty1) * 0.5f;
-
-                // Filter 2: badge-zone (lower half of employee bbox)
-                if (face_cx >= tx0 && face_cx <= tx1 &&
-                    face_cy >= mid_y && face_cy <= ty1) {
-                    skip_face = true;
-                    break;
-                }
-                // Filter 3: back-of-head (non-attending face with >50% overlap inside employee bbox)
-                if (!attending) {
-                    const float ox0 = std::max(cx0, tx0);
-                    const float oy0 = std::max(cy0, ty0);
-                    const float ox1 = std::min(cx1, tx1);
-                    const float oy1 = std::min(cy1, ty1);
-                    if (ox1 > ox0 && oy1 > oy0) {
-                        const float overlap = (ox1 - ox0) * (oy1 - oy0);
-                        const float face_area = (cx1 - cx0) * (cy1 - cy0);
-                        if (face_area > 0.f && overlap / face_area >= 0.5f) {
-                            skip_face = true;
-                            break;
-                        }
-                    }
-                }
-            }
-            if (skip_face) continue;
-        }
 
         // Only draw faces that are attending (looking at camera).
         // Non-attending detections are noise (backs of heads, badges, reflections).
@@ -665,37 +616,6 @@ void process_inference_results(
     }
     if (yolox_runner) {
         draw_yolo_detections(drawMat, yolox_runner, scale_x, scale_y, offset_x, offset_y, flip_h, fusion_output, orig_width, orig_height);
-    }
-
-    // Draw blue bounding boxes for confirmed employees (vest classifier output)
-    if (fusion_output) {
-        std::vector<TrackedBox> tracks_snap;
-        {
-            std::lock_guard<std::mutex> g(fusion_output->m);
-            tracks_snap = fusion_output->tracks;
-        }
-        // Blue (BGR: 255, 0, 0) — distinct from yellow (YOLOX) and green (RetinaFace)
-        const cv::Scalar employee_color(255, 0, 0);
-        const int thickness = 3;
-        for (const auto& t : tracks_snap) {
-            if (!t.is_employee) continue;
-            int x0 = (int)(t.x0 * scale_x) + offset_x;
-            int y0 = (int)(t.y0 * scale_y) + offset_y;
-            int x1 = (int)(t.x1 * scale_x) + offset_x;
-            int y1 = (int)(t.y1 * scale_y) + offset_y;
-            // Clamp to canvas bounds
-            x0 = std::max(0, std::min(x0, drawMat.cols - 1));
-            y0 = std::max(0, std::min(y0, drawMat.rows - 1));
-            x1 = std::max(0, std::min(x1, drawMat.cols - 1));
-            y1 = std::max(0, std::min(y1, drawMat.rows - 1));
-            if (flip_h) { int tmp = drawMat.cols - x0; x0 = drawMat.cols - x1; x1 = tmp; }
-            cv::rectangle(drawMat, cv::Point(x0, y0), cv::Point(x1, y1), employee_color, thickness);
-            char lbl[64];
-            snprintf(lbl, sizeof(lbl), "Employee %.0f%%", t.uniform_confidence * 100.f);
-            cv::putText(drawMat, lbl,
-                        cv::Point(x0, std::max(0, y0 - 6)),
-                        cv::FONT_HERSHEY_SIMPLEX, 0.45, employee_color, 1, cv::LINE_AA);
-        }
     }
 
     // V6.2.3.5.4: Draw guide rectangle to validate letterbox boundaries

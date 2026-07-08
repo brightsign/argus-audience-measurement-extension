@@ -428,29 +428,6 @@ int main(int argc, char** argv) {
     LG_INFO("Frame skip: face=%d yolo=%d (0/1 = every frame)",
             pc.face_skip_frames, pc.yolo_skip_frames);
 
-    // Configure employee vest detection (MobileNetV3-Small classifier)
-    // Prefer the new dedicated employee_detection config; fall back to legacy fields.
-    const bool employee_detection_enabled = appcfg.employee_detection.enabled;
-    pc.enable_employee_detection = employee_detection_enabled;
-    pc.enable_uniform_model      = employee_detection_enabled;  // keep legacy flag in sync
-    if (employee_detection_enabled) {
-        pc.employee_model_path = appcfg.employee_detection.model_path;
-        pc.employee_npu_core   = appcfg.employee_detection.npu_core;
-        // Also populate legacy ModelSpec so existing orchestrator code continues to work
-        pc.uniform_model.model_path    = appcfg.employee_detection.model_path;
-        pc.uniform_model.npu_core      = appcfg.employee_detection.npu_core;
-        pc.uniform_model.family        = ModelFamily::MobileNetV3;
-        pc.uniform_model.backend       = Backend::RKNN;
-        pc.uniform_model.task          = TaskType::Classifier;
-        pc.uniform_model.input_size    = {224, 224};
-        pc.uniform_model.input_channels = 3;
-        pc.uniform_model.input_layout  = ColorLayout::RGB;
-        LG_INFO("Employee vest detection enabled: model=%s npu_core=%d",
-                pc.employee_model_path.c_str(), pc.employee_npu_core);
-    } else {
-        LG_INFO("Employee vest detection disabled");
-    }
-
     // If frame output not configured, enable with defaults
     if (!pc.enable_frame_output) {
         pc.enable_frame_output = true;

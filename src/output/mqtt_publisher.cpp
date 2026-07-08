@@ -192,25 +192,11 @@ std::string MqttPublisher::make_payload_locked() const {
     if (t.score >= 0.70f) people_confident++;
   }
 
-  // Employee vest / uniform scene counts
-  int employee_count = 0;
-  int customer_count = 0;
-  int unknown_uniform_count = 0;
-  for (const auto& t : tracks_) {
-    if (t.is_employee) {
-      employee_count++;
-    } else if (t.uniform_label && std::strcmp(t.uniform_label, "no_vest") == 0) {
-      customer_count++;
-    } else {
-      unknown_uniform_count++;
-    }
-  }
-  
   // Phase 2: Reuse pre-allocated buffer
   payload_buffer_.clear();
   payload_buffer_.reserve(1024 + tracks_.size() * 384);  // Ensure capacity for this message
   
-  // V7.0: Full schema with metadata + employee scene counts
+  // V7.0: Full schema with metadata + scene counts
   char header[1024];
   std::snprintf(header, sizeof(header),
     "{\"schema\":\"analytics/v7.0\","
@@ -220,8 +206,7 @@ std::string MqttPublisher::make_payload_locked() const {
     "\"npu_load\":%.1f,"
     "\"people\":%d,\"people_confident\":%d,"
     "\"gaze\":%d,\"fps\":%d,"
-    "\"scene\":{\"person_count\":%d,\"employee_count\":%d,"
-               "\"customer_count\":%d,\"unknown_uniform_count\":%d},"
+    "\"scene\":{\"person_count\":%d},"
     "\"roi\":{\"type\":\"border\",\"border_frac\":0.30,\"rect\":[%d,%d,%d,%d]},"
     "\"health\":{\"detector_fps\":%.1f,\"tracker_fps\":%.1f,\"queue_latency_ms\":0,\"dropped_frames\":%d,\"last_model_reload_ts\":%.1f},"
     "\"tracks\":[",
@@ -232,7 +217,7 @@ std::string MqttPublisher::make_payload_locked() const {
     npu_load_,
     people_count, people_confident,
     gaze_, fps,
-    people_count, employee_count, customer_count, unknown_uniform_count,
+    people_count,
     // ROI rect (30% border inset)
     int(frame_width_ * 0.30f), int(frame_height_ * 0.30f),
     int(frame_width_ * 0.70f), int(frame_height_ * 0.70f),
@@ -278,12 +263,7 @@ std::string MqttPublisher::make_payload_locked() const {
     // V7.1b: Cosmetic - zero tiny speeds for cleaner telemetry
     const float pub_speed = (t.speed >= 2.0f) ? t.speed : 0.0f;
 
-    // Uniform / vest classification fields
-    const char* uniform_lbl  = t.uniform_label ? t.uniform_label : "unknown";
-    const float uniform_conf = t.uniform_confidence;
-    const bool  is_employee  = t.is_employee;
-
-    char buf[1024];  // Larger buffer for v7.0 + gaze + uniform data
+    char buf[1024];  // Larger buffer for v7.0 + gaze data
     
     // Build gaze object if available
     if (t.has_gaze) {
@@ -299,7 +279,6 @@ std::string MqttPublisher::make_payload_locked() const {
         "\"dir\":\"%s\",\"deg\":%.1f,\"dir_conf\":%.2f,"
         "\"speed\":%.1f,\"speed_norm\":%.3f,"
         "\"dwell\":%.2f,\"enter\":%s,\"exit\":%s,"
-        "\"uniform\":{\"class\":\"%s\",\"confidence\":%.3f,\"is_employee\":%s},"
         "\"gaze\":{\"detected\":%d,\"time\":%.2f,\"face_bbox\":[%.1f,%.1f,%.1f,%.1f]}}",
         t.id,
         t.x0, t.y0, t.x1, t.y1, t.score,
@@ -309,7 +288,6 @@ std::string MqttPublisher::make_payload_locked() const {
         t.dwell_s,
         t.just_entered ? "true" : "false",
         t.just_exited ? "true" : "false",
-        uniform_lbl, uniform_conf, is_employee ? "true" : "false",
         t.is_gazing ? 1 : 0,
         t.gaze_time,
         t.face_bbox_x0, t.face_bbox_y0, t.face_bbox_x1, t.face_bbox_y1);
@@ -326,8 +304,7 @@ std::string MqttPublisher::make_payload_locked() const {
         "\"zones\":%s,"
         "\"dir\":\"%s\",\"deg\":%.1f,\"dir_conf\":%.2f,"
         "\"speed\":%.1f,\"speed_norm\":%.3f,"
-        "\"dwell\":%.2f,\"enter\":%s,\"exit\":%s,"
-        "\"uniform\":{\"class\":\"%s\",\"confidence\":%.3f,\"is_employee\":%s}}",
+        "\"dwell\":%.2f,\"enter\":%s,\"exit\":%s}",
         t.id,
         t.x0, t.y0, t.x1, t.y1, t.score,
         zones_str,
@@ -335,8 +312,7 @@ std::string MqttPublisher::make_payload_locked() const {
         pub_speed, speed_norm,
         t.dwell_s,
         t.just_entered ? "true" : "false",
-        t.just_exited ? "true" : "false",
-        uniform_lbl, uniform_conf, is_employee ? "true" : "false");
+        t.just_exited ? "true" : "false");
     }
     
     if (i > 0) payload_buffer_ += ",";
