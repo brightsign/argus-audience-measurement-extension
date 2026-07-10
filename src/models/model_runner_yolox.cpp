@@ -1,4 +1,5 @@
 #include "models/model_runner_yolox.h"
+#include "models/rga_color.h"
 #include "metrics/log_global.h"
 #include <cstring>
 #include <chrono>
@@ -145,22 +146,33 @@ bool RKNNYoloXRunner::infer(const FrameView& in, InferenceOutputs& out) noexcept
     const uint8_t* src = in.plane0;
     const bool src_is_bgr = (in.fmt == PixelFormat::BGR24);
 
-    for (int y = 0; y < p_->in_h; ++y) {
-        const uint8_t* s = src + y * in.stride0;
-        uint8_t* d       = dst + y * row_bytes;
-
-        if (!src_is_bgr) {
-            // RGB → memcpy row (no swap)
-            std::memcpy(d, s, size_t(row_bytes));
+    if (in.stride0 == row_bytes) {
+        // Fast path: source is contiguous. Offload BGR->RGB to RGA hardware
+        // (near-zero CPU); RGB stays a straight copy.
+        if (src_is_bgr) {
+            model_pre::bgr_to_rgb_packed(src, dst, p_->in_w, p_->in_h);
         } else {
-            // BGR → RGB swap per pixel (essential for RKNN)
-            for (int x = 0; x < p_->in_w; ++x) {
-                const uint8_t b = s[3*x + 0];
-                const uint8_t g = s[3*x + 1];
-                const uint8_t r = s[3*x + 2];
-                d[3*x + 0] = r;
-                d[3*x + 1] = g;
-                d[3*x + 2] = b;
+            std::memcpy(dst, src, size_t(row_bytes) * size_t(p_->in_h));
+        }
+    } else {
+        // Strided fallback: per-row copy / scalar swap.
+        for (int y = 0; y < p_->in_h; ++y) {
+            const uint8_t* s = src + y * in.stride0;
+            uint8_t* d       = dst + y * row_bytes;
+
+            if (!src_is_bgr) {
+                // RGB → memcpy row (no swap)
+                std::memcpy(d, s, size_t(row_bytes));
+            } else {
+                // BGR → RGB swap per pixel (essential for RKNN)
+                for (int x = 0; x < p_->in_w; ++x) {
+                    const uint8_t b = s[3*x + 0];
+                    const uint8_t g = s[3*x + 1];
+                    const uint8_t r = s[3*x + 2];
+                    d[3*x + 0] = r;
+                    d[3*x + 1] = g;
+                    d[3*x + 2] = b;
+                }
             }
         }
     }

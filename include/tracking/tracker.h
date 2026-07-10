@@ -51,10 +51,6 @@ struct TrackedBox {
   int    age_frames{0};           // how many frames the track has existed
   int    hits{0};                 // consecutive matched frames
   int    missed{0};               // consecutive frames not matched
-  // Employee vest classification (set by MobileNetV3 classifier, smoothed over time)
-  const char* uniform_label{"unknown"};  // "employee_vest", "no_vest", or "unknown"
-  float       uniform_confidence{0.0f};  // Confidence of the classification (0..1)
-  bool        is_employee{false};        // true after temporal smoothing confirms vest
 };
 
 struct TrackerConfig {

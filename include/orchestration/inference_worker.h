@@ -32,12 +32,13 @@ namespace inference_worker {
 
 // Generic inference worker configuration
 struct WorkerConfig {
-    int skip_frames;           // Process every Nth frame (1 = all, 2 = every other, etc)
+    int skip_frames;           // Process every Nth frame (0/1 = all, 2 = every 2nd, 3 = every 3rd, ...)
     int model_input_width;     // Model input size
     int model_input_height;
     std::string model_name;    // For logging
     output::BlurConfig blur_config;  // Person blur configuration (applied before drawing boxes)
     bool flip_horizontal{false};     // Flip output frame left-right (mirror correction)
+    bool log_performance{false};     // Log per-stage CPU/NPU timing every second (Method 2)
 };
 
 // Run inference loop for a single model
