@@ -52,7 +52,7 @@ For a complete build including SDK setup and model compilation:
 
 ```bash
 # Clone the repository
-git clone https://github.com/BrightSign-Playground/argus-audience-measurement-extension.git
+git clone https://github.com/brightsign/argus-audience-measurement-extension.git
 cd argus-audience-measurement-extension
 
 # Full build - creates packages for all supported devices

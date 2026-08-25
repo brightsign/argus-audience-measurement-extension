@@ -1042,7 +1042,7 @@ client.loop_forever()
 
 ## Related Documentation
 
-- **[MQTT Schema Reference](docs/mqtt-message-format.md)** - Complete field definitions
-- **[Configuration Reference](docs/CONFIGURATION.md)** - All configuration options
-- **[Tracking Explained](docs/TRACKING-EXPLAINED.md)** - How person tracking works
-- **[Prometheus Integration](docs/INTEGRATION-PROMETHEUS.md)** - Metrics and Grafana setup
+- **[MQTT Schema Reference](mqtt-message-format.md)** - Complete field definitions
+- **[Configuration Reference](CONFIGURATION.md)** - All configuration options
+- **[Tracking Explained](TRACKING-EXPLAINED.md)** - How person tracking works
+- **[Prometheus Integration](INTEGRATION-PROMETHEUS.md)** - Metrics and Grafana setup
