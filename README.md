@@ -198,10 +198,10 @@ Key metrics:
 
 ## Image Streamer Included
 
-For test and debug purposes only, we have included a debug and test tool. You can access a web page
-on the player to "see" what the output of the AI model is visually. It will show "bounding boxes"
-around objects of interest. This is started automatically and can be accessed at
-`http://<PLAYER_IP>:20200` by default.
+For test and debug purposes only, we include a web-based image streamer that visualizes model output with bounding boxes.
+It starts automatically and is available at `http://<PLAYER_IP>:20200` by default.
+Configure the port via the BrightSign registry key `networking.bs-image-stream-server-port`
+(set it to `0` to disable the server).
 
 ## Build Packages
 
