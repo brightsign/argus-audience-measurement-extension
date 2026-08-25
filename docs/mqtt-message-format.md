@@ -2005,7 +2005,7 @@ Key parameters affecting published data (see `configs/argus-config.json`):
 
 For questions, issues, or feature requests:
 
-- **GitHub:** [argus-audience-measurement-extension](https://github.com/BrightSign-Playground/argus-audience-measurement-extension)
+- **GitHub:** [argus-audience-measurement-extension](https://github.com/brightsign/argus-audience-measurement-extension)
 - **Documentation:** `/docs` folder in repository
 
 ---

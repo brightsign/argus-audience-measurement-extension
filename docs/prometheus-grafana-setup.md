@@ -286,5 +286,5 @@ Pre-computed metrics for dashboard performance:
 ## Related Documentation
 
 - [MQTT Message Format](mqtt-message-format.md) - Analytics message structure
-- [Argus Exporter README](/external/argus-exporter/README.md) - Exporter configuration
-- [Dashboard README](/external/argus-exporter/dashboard/README.md) - Dashboard details
+- Argus Exporter README - exporter configuration (in the separate `argus-exporter` component, not vendored in this repository)
+- Dashboard README - dashboard details (in the `argus-exporter` component under `dashboard/`)

@@ -14,6 +14,14 @@ Transform your BrightSign digital signage player into an intelligent audience me
 
 In Greek mythology, Argus Panoptes ("all-seeing") was a giant with a hundred eyes who served as an ever-watchful guardian. The name fits an audience measurement system that uses computer vision to observe and understand how people engage with digital displays.
 
+## Release Status
+
+**BETA.** The `analytics/v7.0` MQTT schema and the `argus_*` Prometheus metric names are stable —
+they will not change without a schema version bump.
+
+Performance tuning and hardware validation are ongoing. Suitable for pilots and integration work;
+validate on your own hardware before wide rollout.
+
 ## What Argus Measures
 
 | Measurement | Description |
@@ -28,14 +36,17 @@ In Greek mythology, Argus Panoptes ("all-seeing") was a giant with a hundred eye
 
 ## Quick Start
 
-You can install this extension on any BrightSign player with an NPU.  Simply copy the [Argus BSFW file](link) onto the root of an SD card, install the card in the player, and reboot.
+You can install this extension on any BrightSign player with an NPU. Download the latest
+[Argus BSFW package](https://github.com/brightsign/argus-audience-measurement-extension/releases/latest),
+copy it onto the root of an SD card, install the card in the player, and reboot.
 
-Plug a camera into the USB port of the player, or, for advanced setup you can [configure to read an RTSP network video stream](link).
+Plug a camera into the USB port of the player, or, for advanced setup, you can
+[configure Argus to read an RTSP network video stream](docs/CONFIGURATION.md).
 
 From another host on your network do:
 
 ```bash
-mosquitto_sub -h <player host or ip> -t 'bs/argus/#' -v
+mosquitto_sub -h <PLAYER_IP> -t 'bs/argus/#' -v
 ```
 You should see something like:
 
@@ -185,6 +196,13 @@ Key metrics:
 
 **[Full Prometheus & Grafana Setup Guide →](docs/prometheus-grafana-setup.md)**
 
+## Image Streamer Included
+
+For test and debug purposes only, we include a web-based image streamer that visualizes model output with bounding boxes.
+It starts automatically and is available at `http://<PLAYER_IP>:20200` by default.
+Configure the port via the BrightSign registry key `networking.bs-image-stream-server-port`
+(set it to `0` to disable the server).
+
 ## Build Packages
 
 The build produces two zip packages, each containing the same binaries, models, and configs for all supported SOCs. They differ in how they are deployed to a BrightSign player.
@@ -298,11 +316,26 @@ mosquitto_sub -h <PLAYER_IP> -t 'bs/argus/#' -v
 | Camera not detected | Check device: `ls /dev/video*` |
 | Low FPS | Reduce resolution or enable single model mode |
 
+## Related Projects
+
+Argus is the complete audience-measurement application. If you need a smaller starting point, or
+are learning how BrightSign extensions work, these are the single-purpose siblings:
+
+| Repository | What it is |
+|---|---|
+| [brightsign-npu-general](https://github.com/brightsign/brightsign-npu-general) | Start here: what an NPU is, how BSMPs are packaged, and model licensing |
+| [brightsign-npu-gaze-extension](https://github.com/brightsign/brightsign-npu-gaze-extension) | Gaze detection alone (RetinaFace) — one of the two models Argus runs |
+| [brightsign-npu-object-extension](https://github.com/brightsign/brightsign-npu-object-extension) | Object detection alone, with selectable classes |
+| [brightsign-npu-voice-extension](https://github.com/brightsign/brightsign-npu-voice-extension) | Gaze-triggered speech-to-text via Whisper |
+| [bs-image-stream-server](https://github.com/brightsign/bs-image-stream-server) | Dev tool: view annotated model output in a browser |
+| [bs-workshop-extension](https://github.com/BrightDevelopers/bs-workshop-extension) | 3.5-hour hands-on workshop on the extension development cycle |
+| [extension-template](https://github.com/BrightDevelopers/extension-template) | The starter template all BrightSign extensions are built from |
+
 ## License
 
-*License information to be determined.*
+Released under the terms of the [Apache 2.0 License](./LICENSE.txt).
 
 ## Support
 
-- **Issues**: [GitHub Issues](https://github.com/BrightSign-Playground/argus-audience-measurement-extension/issues)
+- **Issues**: [GitHub Issues](https://github.com/brightsign/argus-audience-measurement-extension/issues)
 - **Documentation**: See `/docs` folder

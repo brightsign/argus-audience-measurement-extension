@@ -95,7 +95,7 @@ sudo ldconfig
 ### 1. Clone the Repository
 
 ```bash
-git clone <repository-url> argus-audience-measurement-extension
+git clone https://github.com/brightsign/argus-audience-measurement-extension.git
 cd argus-audience-measurement-extension
 ```
 
