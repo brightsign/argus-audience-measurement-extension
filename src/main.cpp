@@ -62,18 +62,14 @@ static void install_crash_handlers() {
     (void)backtrace(prime, 4);
   }
 
-  std::set_terminate([](){
-    LG_CRIT("FATAL: std::terminate called (uncaught exception).");
-    std::fflush(nullptr);
-    std::_Exit(134);
-  });
-
   auto sig_handler = [](int s){
-    // Capture the backtrace FIRST, using only async-signal-safe writes.
+    // Best-effort crash backtrace. Avoid heap allocations where possible so it
+    // still works after heap corruption, but this handler is not strictly
+    // async-signal-safe (it also calls open()/LG_CRIT for diagnostics).
     // backtrace_symbols_fd() writes straight to a fd without calling malloc,
-    // so it is safe even when the heap allocator is the thing that aborted
-    // (glibc "double free"/"corruption" -> SIGABRT). This pinpoints the exact
-    // free() call site of the crash. Symbols require -rdynamic at link time.
+    // so it pinpoints the exact free() call site even when the allocator is the
+    // thing that aborted (glibc "double free"/"corruption" -> SIGABRT).
+    // Symbols require -rdynamic at link time.
     void* frames[64];
     int n = backtrace(frames, 64);
     static const char hdr[] = "\n==== FATAL SIGNAL: crash backtrace ====\n";

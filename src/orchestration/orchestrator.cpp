@@ -165,7 +165,14 @@ Orchestrator::Orchestrator(PipelineConfig cfg) noexcept
   // Remember the input exactly as configured. recover_pipeline() mutates
   // cfg_.input (it may overwrite rtsp_url with a registry USB node), so we keep
   // a pristine copy to reconnect explicit RTSP/HTTP/file sources to themselves.
-  original_input_ = cfg_.input;
+  // Copying std::string fields may allocate; this ctor is noexcept, so make the
+  // snapshot best-effort and fall back to an empty InputConfig on OOM rather
+  // than letting an exception escape and call std::terminate.
+  try {
+    original_input_ = cfg_.input;
+  } catch (...) {
+    original_input_ = InputConfig{};
+  }
 }
 
 Orchestrator::~Orchestrator() { stop_threads(); destroy_pipeline(); }
@@ -1232,11 +1239,16 @@ bool Orchestrator::recover_pipeline(int64_t now_ns_val) noexcept {
         LG_INFO("recover_pipeline:RTSP stream %s available for connection\n",
                 cfg_.input.rtsp_url.c_str());
     } else if (!cfg_.input.file_path.empty()) {
-        // For file sources, assume available (open() will validate the path).
-        device_available = true;
+        // For file sources, stat() the path so a missing file is retried later
+        // instead of driving futile rebuild/open cycles (and log spam).
+        struct stat st;
+        if (stat(cfg_.input.file_path.c_str(), &st) == 0) {
+            device_available = true;
+        }
         device_desc = cfg_.input.file_path;
-        LG_INFO("recover_pipeline:file source %s available for reopen\n",
-                cfg_.input.file_path.c_str());
+        LG_INFO("recover_pipeline:file source %s %s\n",
+                cfg_.input.file_path.c_str(),
+                device_available ? "available" : "missing");
     } else {
         LG_INFO("recover_pipeline:no device or stream configured, nothing to open yet\n");
     }
