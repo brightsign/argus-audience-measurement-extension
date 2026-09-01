@@ -80,7 +80,7 @@ if [ "$HAS_WRAPPER" = "yes" ] && [ "$HAS_MONITOR" = "yes" ] && [ "$HAS_RESTART" 
     echo "✅ Config auto-reload is FULLY FUNCTIONAL"
     echo ""
     echo "Test it:"
-    echo "  1. vi /storage/sd/configs/config.json"
+    echo "  1. vi /storage/sd/configs/argus-config.json"
     echo "  2. Make any change, save"
     echo "  3. tail -f /storage/sd/logs/gaze.log | grep -E 'CONFIG|Starting'"
     echo "  4. Should see restart within 5-13 seconds"
@@ -100,7 +100,7 @@ else
     echo "  1. Stop: /var/volatile/bsext/ext_npu_argus/bsext_init stop"
     echo "  2. Extract: cd /var/volatile/bsext/ext_npu_argus && unzip -o /storage/sd/argus-dev-1765378420.zip"
     echo "  3. Start: /var/volatile/bsext/ext_npu_argus/bsext_init start"
-    echo "  4. Test: vi /storage/sd/configs/config.json (make a change)"
+    echo "  4. Test: vi /storage/sd/configs/argus-config.json (make a change)"
 fi
 
 echo ""

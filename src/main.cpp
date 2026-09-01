@@ -1,8 +1,13 @@
 #include <atomic>
 #include <csignal>
 #include <chrono>
+#include <cstdio>
+#include <cstring>
 #include <thread>
 #include <iostream>
+#include <execinfo.h>
+#include <fcntl.h>
+#include <unistd.h>
 #include <opencv2/core.hpp>
 #include <opencv2/core/ocl.hpp>
 
@@ -15,6 +20,7 @@
 #include "output/mqtt_broker.h"
 #include "output/face_blur.h"
 #include "util/util.h"
+#include "version.h"
 #ifdef DEMO_MODE_ENABLED
 #include "demo/demo_license_checker.h"
 #endif
@@ -47,13 +53,37 @@ static void test_atomic_flags() {
 
 // Install comprehensive crash handlers (SIGSEGV, SIGABRT, terminate, etc)
 static void install_crash_handlers() {
-  std::set_terminate([](){
-    LG_CRIT("FATAL: std::terminate called (uncaught exception).");
-    std::fflush(nullptr);
-    std::_Exit(134);
-  });
+  // Prime backtrace() once on the normal path. Its first call lazily loads the
+  // unwinder (which allocates); doing it here avoids that allocation running
+  // inside the signal handler AFTER heap corruption (e.g. a double free), where
+  // it could crash again before we capture the stack.
+  {
+    void* prime[4];
+    (void)backtrace(prime, 4);
+  }
 
   auto sig_handler = [](int s){
+    // Best-effort crash backtrace. Avoid heap allocations where possible so it
+    // still works after heap corruption, but this handler is not strictly
+    // async-signal-safe (it also calls open()/LG_CRIT for diagnostics).
+    // backtrace_symbols_fd() writes straight to a fd without calling malloc,
+    // so it pinpoints the exact free() call site even when the allocator is the
+    // thing that aborted (glibc "double free"/"corruption" -> SIGABRT).
+    // Symbols require -rdynamic at link time.
+    void* frames[64];
+    int n = backtrace(frames, 64);
+    static const char hdr[] = "\n==== FATAL SIGNAL: crash backtrace ====\n";
+    ssize_t w = ::write(STDERR_FILENO, hdr, sizeof(hdr) - 1); (void)w;
+    backtrace_symbols_fd(frames, n, STDERR_FILENO);
+    // Also persist to SD so it survives a tmpfs wipe / reboot.
+    int fd = ::open("/storage/sd/logs/crash-backtrace.txt",
+                    O_CREAT | O_WRONLY | O_APPEND, 0644);
+    if (fd >= 0) {
+      w = ::write(fd, hdr, sizeof(hdr) - 1); (void)w;
+      backtrace_symbols_fd(frames, n, fd);
+      ::close(fd);
+    }
+
     LG_CRIT("FATAL: Signal %d received (segfault/abort)", s);
     std::fflush(nullptr);
     std::_Exit(128 + s);
@@ -64,6 +94,10 @@ static void install_crash_handlers() {
   std::signal(SIGFPE,  sig_handler);
   std::signal(SIGILL,  sig_handler);
   std::signal(SIGBUS,  sig_handler);
+  // A failed _GLIBCXX_ASSERTIONS check (e.g. out-of-bounds std::vector::operator[])
+  // compiles to __builtin_trap(), which on aarch64 emits a `brk` instruction and
+  // raises SIGTRAP. Handle it so the offending access is captured with a backtrace.
+  std::signal(SIGTRAP, sig_handler);
 }
 
 // Crash handler to log uncaught exceptions and other crashes
@@ -120,6 +154,29 @@ static CliArgs parse_cli(int argc, char** argv) {
 }
 
 int main(int argc, char** argv) {
+    // Fast path: report build/version stamp and exit, before any heavy init.
+    // Lets you confirm exactly which build is deployed on the device:
+    //   attention_demo --version
+    for (int i = 1; i < argc; ++i) {
+        const std::string arg = argv[i] ? argv[i] : "";
+        if (arg == "--version" || arg == "-v") {
+            std::printf("%s\n", ARGUS_VERSION_STRING);
+            return 0;
+        }
+    }
+
+    // Startup banner -> stderr, which bsext_init captures into
+    // /tmp/gaze_console.log. LG_INFO below only reaches the rotating file, so
+    // this stderr banner is the unmistakable "which binary is live" marker you
+    // can grep for right after an install/reboot.
+    std::fprintf(stderr,
+        "\n"
+        "==================== ARGUS attention_demo ====================\n"
+        "  Build: %s\n"
+        "==============================================================\n\n",
+        ARGUS_VERSION_STRING);
+    std::fflush(stderr);
+
     // Install crash handlers first, before any other initialization
     install_crash_handlers();
     std::set_terminate(crash_handler);
@@ -137,7 +194,7 @@ int main(int argc, char** argv) {
     logcfg.path = "/tmp/gaze.log";
     logcfg.max_mb = 5;
     logcfg.max_files = 5;
-    logcfg.min_level = LogLevel::Info;  // Start with Info, will be updated from config
+    logcfg.min_level = LogLevel::Warn;  // Start with Warn, will be updated from config
     // Do NOT mirror to stderr: bsext_init captures stderr into a separate console
     // file (/tmp/gaze_console.log). Mirroring would let that unrotated file grow
     // without bound in tmpfs/RAM. All structured logs go to the rotating file above.
@@ -145,6 +202,7 @@ int main(int argc, char** argv) {
     auto flog = std::make_shared<FileRotatingLogger>(logcfg);
     set_global_logger(flog);
     LG_INFO("Starting attention_demo; initial log file: %s", flog->path().c_str());
+    LG_INFO("Build: %s", ARGUS_VERSION_STRING);
     
     // TEST: Verify atomic flag operations work correctly
     test_atomic_flags();
@@ -170,7 +228,7 @@ int main(int argc, char** argv) {
 
     // Apply log level from config
     {
-      LogLevel level = LogLevel::Info;  // default to Info
+      LogLevel level = LogLevel::Warn;  // default to Warn
       std::string log_level_str = appcfg.log_level;
       // Normalize to lowercase
       for (auto& c : log_level_str) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
@@ -181,7 +239,7 @@ int main(int argc, char** argv) {
       else if (log_level_str == "error") level = LogLevel::Error;
       else if (log_level_str == "critical") level = LogLevel::Critical;
       else {
-        LG_WARN("Invalid log_level '%s' in config, defaulting to 'info'", appcfg.log_level.c_str());
+        LG_WARN("Invalid log_level '%s' in config, defaulting to 'warn'", appcfg.log_level.c_str());
       }
       
       flog->set_level(level);
@@ -509,7 +567,7 @@ int main(int argc, char** argv) {
 #endif  // DEMO_MODE_ENABLED
 
     // ---- Config monitoring for automatic restart ----
-    // Monitor /storage/sd/configs/config.json for changes
+    // Monitor /storage/sd/configs/argus-config.json for changes
     // When changed, request graceful restart to apply new config
     LG_INFO("Initializing config monitor...");
     LG_INFO("Initial flag states: g_stop=%d g_restart_requested=%d", 

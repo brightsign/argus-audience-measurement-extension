@@ -9,9 +9,11 @@ AsyncPublisher::AsyncPublisher(PublisherPtr inner, const Config& cfg) noexcept
 
 bool AsyncPublisher::start() noexcept {
   if (!inner_) return false;
-  if (!q_.empty()) return true;
-  q_.assign(cfg_.queue_capacity ? cfg_.queue_capacity : 64, Msg{});
-  r_.store(0); w_.store(0);
+  {
+    std::lock_guard<std::mutex> lk(mu_);
+    if (th_.joinable()) return true;  // already running
+    q_.clear();
+  }
   stop_.store(false, std::memory_order_release);
   if (!inner_->start()) return false;
   th_ = std::thread(&AsyncPublisher::run, this);
@@ -19,21 +21,25 @@ bool AsyncPublisher::start() noexcept {
 }
 void AsyncPublisher::stop() noexcept {
   stop_.store(true, std::memory_order_release);
+  cv_.notify_all();
   if (th_.joinable()) th_.join();
   if (inner_) inner_->stop();
 }
 
 bool AsyncPublisher::enqueue(Msg&& m) noexcept {
-  const size_t cap = q_.size();
-  size_t w = w_.load(std::memory_order_relaxed);
-  size_t r = r_.load(std::memory_order_acquire);
-  size_t next = (w + 1) % cap;
-  if (next == r) { // full -> drop-old
-    r = (r + 1) % cap;
-    r_.store(r, std::memory_order_release);
+  const size_t cap = cfg_.queue_capacity ? cfg_.queue_capacity : 64;
+  try {
+    {
+      std::lock_guard<std::mutex> lk(mu_);
+      // Drop-old: never block the producer on a slow sink.
+      while (q_.size() >= cap) q_.pop_front();
+      q_.push_back(std::move(m));
+    }
+    cv_.notify_one();
+  } catch (...) {
+    // Allocation failure: drop this message rather than throw from noexcept.
+    return false;
   }
-  q_[w] = std::move(m);
-  w_.store(next, std::memory_order_release);
   return true;
 }
 
@@ -45,14 +51,19 @@ bool AsyncPublisher::publish_blob(OutputFormat fmt, const void* data, size_t len
 }
 
 void AsyncPublisher::run() noexcept {
-  const size_t cap = q_.size();
-  while (!stop_.load(std::memory_order_acquire)) {
-    size_t r = r_.load(std::memory_order_relaxed);
-    size_t w = w_.load(std::memory_order_acquire);
-    if (r == w) { std::this_thread::sleep_for(std::chrono::milliseconds(2)); continue; }
-    Msg m = std::move(q_[r]);
-    r_.store((r+1)%cap, std::memory_order_release);
+  for (;;) {
+    Msg m;
+    {
+      std::unique_lock<std::mutex> lk(mu_);
+      cv_.wait(lk, [this]{ return stop_.load(std::memory_order_acquire) || !q_.empty(); });
+      if (stop_.load(std::memory_order_acquire) && q_.empty()) return;
+      if (q_.empty()) continue;
+      m = std::move(q_.front());
+      q_.pop_front();
+    }
 
+    // Deliver to the wrapped sink outside the lock so a slow sink never
+    // blocks producers.
     std::visit([this](auto&& item){
       using T = std::decay_t<decltype(item)>;
       if constexpr (std::is_same_v<T, PipelineResult>) inner_->publish_result(item);

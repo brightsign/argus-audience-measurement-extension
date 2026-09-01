@@ -161,7 +161,19 @@ static void normalize_rgb_u8_to_float(const uint8_t* src_rgb, float* dst_f,
 Orchestrator::Orchestrator(PipelineConfig cfg) noexcept
     : cfg_(std::move(cfg)),
       state_(OrchestratorState::Stopped),
-      source_health_(detect_source_kind(cfg_.input)) {}
+      source_health_(detect_source_kind(cfg_.input)) {
+  // Remember the input exactly as configured. recover_pipeline() mutates
+  // cfg_.input (it may overwrite rtsp_url with a registry USB node), so we keep
+  // a pristine copy to reconnect explicit RTSP/HTTP/file sources to themselves.
+  // Copying std::string fields may allocate; this ctor is noexcept, so make the
+  // snapshot best-effort and fall back to an empty InputConfig on OOM rather
+  // than letting an exception escape and call std::terminate.
+  try {
+    original_input_ = cfg_.input;
+  } catch (...) {
+    original_input_ = InputConfig{};
+  }
+}
 
 Orchestrator::~Orchestrator() { stop_threads(); destroy_pipeline(); }
 
@@ -1122,7 +1134,28 @@ bool Orchestrator::recover_pipeline(int64_t now_ns_val) noexcept {
     // DO NOT set state_ = Running yet.
 
     // 2. Figure out what device we *should* try to use.
-    //    We always consult registry on every attempt.
+    //
+    // If the pipeline was originally configured with an explicit network/file
+    // source (RTSP/HTTP/file, e.g. from argus-config.json), we must reconnect to
+    // THAT source. Only USB/registry-driven camera setups should consult the
+    // registry video-device on recovery. Previously we always queried the
+    // registry, so an RTSP input whose stream briefly dropped would be
+    // "recovered" as the registry's USB node (e.g. /dev/video1) and could never
+    // reconnect - the supervisor then looped forever scanning for a USB camera
+    // that does not exist.
+    const SourceKind orig_kind = detect_source_kind(original_input_);
+    if (orig_kind == SourceKind::RTSP || orig_kind == SourceKind::File) {
+        // Restore the pristine original input and reconnect to it directly.
+        cfg_.input = original_input_;
+        const std::string& url = !original_input_.rtsp_url.empty()
+                                     ? original_input_.rtsp_url
+                                     : original_input_.file_path;
+        LG_INFO("recover_pipeline:reconnecting original %s source %s\n",
+                orig_kind == SourceKind::RTSP ? "RTSP" : "file", url.c_str());
+        // Fall through to the availability check + rebuild below (steps 4-7).
+    } else {
+    //    For USB/registry-driven sources we consult the registry on every
+    //    attempt so we can hop e.g. /dev/video1 -> /dev/video2.
     const std::string reg_choice = RegistryHelper::getVideoDevice(); 
     // reg_choice is "usb_camera", or "/dev/video1", or "rtsp://...", etc.
 
@@ -1184,6 +1217,7 @@ bool Orchestrator::recover_pipeline(int64_t now_ns_val) noexcept {
             cfg_.input.usb_device.clear();
         }
     }
+    }  // end else: USB/registry-driven source resolution
 
     // 4. Is that device/stream actually accessible *right now*?
     bool device_available = false;
@@ -1204,6 +1238,17 @@ bool Orchestrator::recover_pipeline(int64_t now_ns_val) noexcept {
         device_desc = cfg_.input.rtsp_url;
         LG_INFO("recover_pipeline:RTSP stream %s available for connection\n",
                 cfg_.input.rtsp_url.c_str());
+    } else if (!cfg_.input.file_path.empty()) {
+        // For file sources, stat() the path so a missing file is retried later
+        // instead of driving futile rebuild/open cycles (and log spam).
+        struct stat st;
+        if (stat(cfg_.input.file_path.c_str(), &st) == 0) {
+            device_available = true;
+        }
+        device_desc = cfg_.input.file_path;
+        LG_INFO("recover_pipeline:file source %s %s\n",
+                cfg_.input.file_path.c_str(),
+                device_available ? "available" : "missing");
     } else {
         LG_INFO("recover_pipeline:no device or stream configured, nothing to open yet\n");
     }

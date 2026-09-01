@@ -224,6 +224,26 @@ create_package_structure() {
     success "Package structure created"
 }
 
+# Pick the directory holding the FRESHEST attention_demo binary.
+# Guards against a stale build_<platform>/ directory shadowing a newer build
+# (e.g. a manual `cmake -DTARGET_SOC=rkXXXX` that lands in build_rkXXXX/ +
+# install/<SOC>/ while build_<platform>/ keeps an old binary). Prefers the
+# newer of build_dir/install_dir by mtime; echoes the chosen dir (empty if
+# neither has a binary).
+pick_binary_source_dir() {
+    local build_dir="$1"
+    local install_dir="$2"
+    local b="$build_dir/attention_demo"
+    local i="$install_dir/attention_demo"
+    if [[ -f "$b" && -f "$i" ]]; then
+        if [[ "$b" -nt "$i" ]]; then echo "$build_dir"; else echo "$install_dir"; fi
+    elif [[ -f "$b" ]]; then
+        echo "$build_dir"
+    elif [[ -f "$i" ]]; then
+        echo "$install_dir"
+    fi
+}
+
 # Copy binaries and libraries for each SOC
 copy_binaries() {
     log "Copying compiled binaries and libraries..."
@@ -240,16 +260,21 @@ copy_binaries() {
         
         log "Copying $soc ($platform) binaries..."
         
-        # Try build directory first, then install directory
-        local source_dir=""
-        if [[ -d "$build_dir" && -f "$build_dir/attention_demo" ]]; then
-            source_dir="$build_dir"
-        elif [[ -d "$install_dir" && -f "$install_dir/attention_demo" ]]; then
-            source_dir="$install_dir"
-        else
+        # Select whichever of build_dir/install_dir has the FRESHEST binary,
+        # so a rebuild is always picked up regardless of which tree it landed in.
+        local source_dir
+        source_dir="$(pick_binary_source_dir "$build_dir" "$install_dir")"
+        if [[ -z "$source_dir" ]]; then
             warn "No binaries found for $soc, skipping"
             continue
         fi
+
+        # Report exactly which binary is being packaged (mtime + embedded
+        # version stamp) so a stale binary is immediately obvious in the output.
+        local _bin="$source_dir/attention_demo"
+        local _stamp
+        _stamp="$(strings "$_bin" 2>/dev/null | grep -Em1 '^argus [0-9a-f]{7,}')"
+        log "  -> using $_bin (built $(date -r "$_bin" '+%Y-%m-%d %H:%M:%S')${_stamp:+, $_stamp})"
 
         # Copy main binary
         if [[ -f "$source_dir/attention_demo" ]]; then

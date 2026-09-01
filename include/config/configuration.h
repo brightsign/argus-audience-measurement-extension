@@ -58,7 +58,7 @@ struct AppConfig {
   bool flip_horizontal{false};
 
   // Optional: diagnostic logging
-  std::string log_level{"info"};        // "debug", "info", "warn", "error"
+  std::string log_level{"warn"};        // "debug", "info", "warn", "error"
   std::string log_dir{"/storage/sd/logs"};
   bool        log_json{true};
 

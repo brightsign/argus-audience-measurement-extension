@@ -12,6 +12,7 @@ CLEAN=false
 QUIET=false
 VERBOSE=false
 TARGET_PLATFORM=""
+PACKAGE=true
 
 # Platform configurations (matching gaze extension structure)
 declare -A PLATFORMS=(
@@ -31,6 +32,7 @@ usage() {
     echo "  -c, --clean           Clean build artifacts before building"
     echo "  -q, --quiet           Use quieter build output"
     echo "  -v, --verbose         Enable verbose output"
+    echo "      --no-package      Build only; do not package the extension afterwards"
     echo "  -h, --help            Show this help message"
     echo ""
     echo "Examples:"
@@ -60,6 +62,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         -v|--verbose)
             VERBOSE=true
+            shift
+            ;;
+        --no-package)
+            PACKAGE=false
             shift
             ;;
         -h|--help)
@@ -189,6 +195,22 @@ build_platform() {
     
     # Ensure build directory exists
     mkdir -p "$build_dir"
+
+    # Guard against a stale/mismatched CMake cache. CMake bakes the absolute
+    # build-dir path into CMakeCache.txt; if the cache was created for a
+    # different directory (e.g. a dir was copied/renamed), configure fails with
+    # "current CMakeCache.txt directory ... is different than ...". Detect that
+    # and drop the cache so it reconfigures cleanly in place.
+    if [ -f "$build_dir/CMakeCache.txt" ]; then
+        local cached_dir
+        cached_dir=$(grep -m1 '^CMAKE_CACHEFILE_DIR' "$build_dir/CMakeCache.txt" 2>/dev/null | cut -d= -f2-)
+        local want_dir="$PWD/$build_dir"
+        if [ -n "$cached_dir" ] && [ "$cached_dir" != "$want_dir" ]; then
+            log "Stale CMake cache detected (was $cached_dir); resetting $build_dir..."
+            rm -f "$build_dir/CMakeCache.txt"
+            rm -rf "$build_dir/CMakeFiles"
+        fi
+    fi
     
     # Source the SDK environment
     log "Sourcing SDK environment..."
@@ -203,6 +225,11 @@ build_platform() {
     log "Running CMake for $platform..."
     local cmake_cmd="cmake .. -DOECORE_TARGET_SYSROOT=\"\${OECORE_TARGET_SYSROOT}\" -DTARGET_SOC=$soc"
     cmake_cmd="$cmake_cmd -DCMAKE_BUILD_TYPE=Release"
+    # Unit tests require GoogleTest and native OpenCV, which are NOT in the
+    # aarch64 cross-compile SDK sysroot. They are meant to be built/run natively
+    # (x86). Disable them here so the deployment cross-build isn't broken by the
+    # run_all_tests target failing on a missing <gtest/gtest.h>.
+    cmake_cmd="$cmake_cmd -DBUILD_TESTS=OFF"
     
     if [ "$VERBOSE" = true ]; then
         cmake_cmd="$cmake_cmd -DCMAKE_VERBOSE_MAKEFILE=ON"
@@ -301,14 +328,34 @@ main() {
             echo "  ✓ $platform install: install/$soc_upper/"
         fi
     done
-    
-    echo ""
-    echo "Next steps:"
-    echo "1. Test locally: ./build_xt5/attention_demo (requires camera)"
-    echo "2. Package for deployment: use existing sh/make-extension-lvm"
-    echo "3. Deploy to BrightSign player"
-    echo ""
-    echo "See CLAUDE.md for complete deployment instructions."
+
+    # Package the extension using the binaries we just built. The package
+    # script selects the freshest attention_demo, so this always ships the
+    # latest build. Disable with --no-package if you only want to compile.
+    if [ "$PACKAGE" = true ]; then
+        echo ""
+        if [ ! -x ./package ]; then
+            error "package script not found or not executable in $(pwd)"
+        fi
+        local pkg_args=()
+        if [ -n "$TARGET_PLATFORM" ]; then
+            local soc_upper_pkg="${PLATFORMS[$TARGET_PLATFORM]^^}"   # rk3576 -> RK3576
+            pkg_args=(--soc "$soc_upper_pkg")
+            log "Packaging extension for $TARGET_PLATFORM ($soc_upper_pkg)..."
+        else
+            log "Packaging extension for all platforms..."
+        fi
+        ./package "${pkg_args[@]}" || error "Packaging failed"
+        success "Extension package(s) created"
+    else
+        echo ""
+        echo "Next steps:"
+        echo "1. Test locally: ./build_xt5/attention_demo (requires camera)"
+        echo "2. Package for deployment: ./package  (or re-run without --no-package)"
+        echo "3. Deploy to BrightSign player"
+        echo ""
+        echo "See CLAUDE.md for complete deployment instructions."
+    fi
 }
 
 # Run main function if script is executed directly  
