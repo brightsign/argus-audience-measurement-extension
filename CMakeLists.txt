@@ -72,6 +72,39 @@ set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -g")
 # skip 3rd-party lib dependencies
 set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,--allow-shlib-undefined")
 
+# Export the dynamic symbol table so backtrace()/backtrace_symbols_fd() in the
+# crash handler can resolve addresses to function names (used to locate the
+# exact call site of a fatal signal such as a glibc double-free abort).
+set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -rdynamic")
+
+# ---- Heap-corruption diagnostics ------------------------------------------
+# We are chasing a rare heap-corruption crash (a std::vector<Detection>/
+# std::vector<TrackedBox> abort that only reproduces after many hours). These
+# flags make libstdc++ turn precondition violations - most importantly an
+# out-of-bounds std::vector/std::string operator[] - into an immediate abort AT
+# the offending call site, instead of silently smashing the heap and aborting
+# much later in an unrelated allocation. Combined with the -rdynamic crash
+# handler above, the resulting backtrace points straight at the culprit.
+# Cost is negligible (a size comparison on operator[]), so it is safe to keep on.
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D_GLIBCXX_ASSERTIONS")
+
+# Optional, heavier diagnostic build: -DENABLE_ASAN=ON would add AddressSanitizer.
+# NOTE: this BrightSign aarch64 cross-SDK does NOT ship the libasan runtime
+# (only the compiler plugin header is present), so an ASan build cannot be
+# linked for the target. The option is kept for completeness but hard-errors so
+# nobody wastes time on a link failure. For on-device heap-corruption diagnosis
+# use -D_GLIBCXX_ASSERTIONS (above, always on) together with the glibc heap
+# checker MALLOC_CHECK_=3 / GLIBC_TUNABLES=glibc.malloc.check=3, which the
+# extension launcher (bsext_init) enables when /storage/sd/ARGUS_MALLOC_CHECK
+# exists. Both abort on the first detected inconsistency and are captured by the
+# -rdynamic crash-backtrace handler.
+option(ENABLE_ASAN "Build with AddressSanitizer (NOT available in this SDK)" OFF)
+if(ENABLE_ASAN)
+  message(FATAL_ERROR
+    "ENABLE_ASAN is not supported: the aarch64 cross-SDK has no libasan runtime. "
+    "Use -D_GLIBCXX_ASSERTIONS (already enabled) and MALLOC_CHECK_=3 on-device instead.")
+endif()
+
 # install target and libraries
 if(NOT DEFINED TARGET_SOC)
   set(TARGET_SOC rk3588)
@@ -212,6 +245,23 @@ else()
     message(STATUS "YOLOX ENABLED")
 endif()
 
+# ---- Build/version stamp (git hash + UTC build time) ----
+# Regenerated on every build so the binary always reports the exact source it
+# was built from. Query at runtime with `attention_demo --version`; also logged
+# at startup. Generated header lands in the build dir and is added to includes.
+set(ARGUS_VERSION_HEADER "${CMAKE_BINARY_DIR}/generated/version.h")
+add_custom_target(argus_version ALL
+    BYPRODUCTS "${ARGUS_VERSION_HEADER}"
+    COMMAND ${CMAKE_COMMAND}
+        -DSRC_DIR=${CMAKE_SOURCE_DIR}
+        -DIN=${CMAKE_SOURCE_DIR}/src/version.h.in
+        -DOUT=${ARGUS_VERSION_HEADER}
+        -P ${CMAKE_SOURCE_DIR}/cmake/GenerateVersion.cmake
+    COMMENT "Generating build/version stamp (${ARGUS_VERSION_HEADER})"
+    VERBATIM
+)
+include_directories(${CMAKE_BINARY_DIR}/generated)
+
 add_executable(attention_demo
         src/main.cpp
         src/attention.cpp
@@ -292,6 +342,9 @@ target_link_libraries(attention_demo
   ${MY_LIBS}
   mosquitto
 )
+
+# Ensure the version stamp is regenerated before attention_demo is (re)built.
+add_dependencies(attention_demo argus_version)
 
 # Convert TARGET_SOC to uppercase for SOC_DIR
 string(TOUPPER ${TARGET_SOC} SOC_DIR)

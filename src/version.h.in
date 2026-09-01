@@ -1,0 +1,14 @@
+#pragma once
+
+// This header is generated at build time by cmake/GenerateVersion.cmake.
+// Do not edit the generated version.h directly; edit version.h.in instead.
+
+#define ARGUS_GIT_HASH    "@ARGUS_GIT_HASH@"
+#define ARGUS_GIT_BRANCH  "@ARGUS_GIT_BRANCH@"
+#define ARGUS_GIT_DIRTY   "@ARGUS_GIT_DIRTY@"
+#define ARGUS_BUILD_UTC   "@ARGUS_BUILD_UTC@"
+
+// Convenience one-line version string, e.g.
+//   "argus 3a1b2c4 (main) built 2026-08-26T12:34:56Z"
+#define ARGUS_VERSION_STRING "argus " ARGUS_GIT_HASH ARGUS_GIT_DIRTY \
+    " (" ARGUS_GIT_BRANCH ") built " ARGUS_BUILD_UTC

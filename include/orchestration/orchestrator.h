@@ -219,6 +219,12 @@ private:
   std::string device_id_;          // e.g., "xt5-01"
   std::string stream_id_;          // e.g., "/dev/video1"
 
+  // Snapshot of the input source as originally configured (before any recovery
+  // mutates cfg_.input). Used by recover_pipeline() so that an explicitly
+  // configured RTSP/HTTP/file source is reconnected to ITSELF on recovery,
+  // instead of being incorrectly replaced by the registry's USB video-device.
+  InputConfig original_input_;
+
   // cached input kind for HealthManager
   SourceKind detect_source_kind(const InputConfig& ic) const noexcept {
     if (!ic.rtsp_url.empty()) return SourceKind::RTSP;

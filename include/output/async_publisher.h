@@ -3,7 +3,9 @@
 
 #include <atomic>
 #include <thread>
-#include <vector>
+#include <deque>
+#include <mutex>
+#include <condition_variable>
 #include <variant>
 #include <memory>
 #include "output/publisher_v2.h"
@@ -43,9 +45,13 @@ private:
   std::thread th_;
   std::atomic<bool> stop_{false};
 
-  // Simple ring with drop-old
-  std::vector<Msg> q_;
-  std::atomic<size_t> r_{0}, w_{0};
+  // Bounded queue with drop-old policy, guarded by a mutex.
+  // A mutex (rather than a lock-free ring) is used deliberately: the publish
+  // rate is low (~10 Hz) so contention is negligible, and it avoids the
+  // multi-writer index races that can corrupt queued messages.
+  std::mutex mu_;
+  std::condition_variable cv_;
+  std::deque<Msg> q_;
 };
 
 #endif // ASYNC_PUBLISHER_H

@@ -80,7 +80,7 @@
     }
   ],
 
-  "log_level": "info",
+  "log_level": "warn",
   "_comment_log_dir": "Directory for the rotating structured log (gaze.log, 5MB x 5 files). Default '/tmp' (RAM/tmpfs) is robust against delayed SD-card mount at boot. Use an SD path (e.g. '/storage/sd/logs') only if you need logs to persist across reboots. See _log_notes below.",
   "log_dir": "/tmp",
   "log_json": true,

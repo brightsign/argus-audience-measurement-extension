@@ -175,6 +175,19 @@ export GST_PLUGIN_SCANNER="${GST_PLUGIN_SCANNER}"
 export GST_REGISTRY_REUSE_PLUGIN_SCANNER="${GST_REGISTRY_REUSE_PLUGIN_SCANNER}"
 export GST_DEBUG_NO_COLOR="${GST_DEBUG_NO_COLOR}"
 
+# Heap-corruption diagnostics (opt-in, zero cost unless enabled):
+# If /storage/sd/ARGUS_MALLOC_CHECK exists, turn on glibc's hardened allocator.
+# It validates heap metadata on every malloc/free and aborts at the FIRST
+# detected inconsistency (overflow/double-free), which is much closer to the
+# corrupting operation than the default lazy detection. The SIGABRT is captured
+# by the app's crash-backtrace handler (/storage/sd/logs/crash-backtrace.txt).
+# Remove the file (and restart) to return to normal performance.
+if [ -f /storage/sd/ARGUS_MALLOC_CHECK ]; then
+    export MALLOC_CHECK_=3
+    export GLIBC_TUNABLES=glibc.malloc.check=3
+    echo "[\$(date)] ARGUS_MALLOC_CHECK present -> MALLOC_CHECK_=3 enabled (diagnostic)"
+fi
+
 SOC_HOME="\$1"
 shift
 CMD_ARGS="\$@"

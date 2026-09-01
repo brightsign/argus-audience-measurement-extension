@@ -18,3 +18,7 @@ bin/
 brightsign-*-src-*.tar.gz
 .aider*
 .envrc
+
+# Stray runtime logs pulled from devices
+gaze.log
+gaze.log.*
