@@ -562,13 +562,13 @@ install(CODE "
       message(STATUS \"Skipping RGA library copy - not available\")
     else()
       execute_process(
-          COMMAND bash -c \"find $(dirname ${RGA_LIB}) -name 'librga.so*' -type f -o -type l | xargs -I{} cp -L {} \${CMAKE_INSTALL_PREFIX}/lib/\"
+          COMMAND bash -c \"find $(dirname ${RGA_LIB}) -maxdepth 1 -name 'librga.so*' | xargs -I{} cp -L {} \${CMAKE_INSTALL_PREFIX}/lib/\"
       )
     endif()
     
     # Copy TurboJPEG library and its versioned counterparts
     execute_process(
-        COMMAND bash -c \"find $(dirname ${TURBOJPEG_LIB}) -name 'libturbojpeg.so*' -type f -o -type l | xargs -I{} cp -L {} \${CMAKE_INSTALL_PREFIX}/lib/\"
+        COMMAND bash -c \"find $(dirname ${TURBOJPEG_LIB}) -maxdepth 1 -name 'libturbojpeg.so*' | xargs -I{} cp -L {} \${CMAKE_INSTALL_PREFIX}/lib/\"
     )
     
     # Copy OpenCV libraries

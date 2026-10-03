@@ -8,6 +8,16 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+# The OE build tree and SDK come from the shared cache provisioned by the
+# brightsign-sdk-builder repo (this repo no longer builds them). The OE tree is
+# builder-internal (CACHE_DIR/bsoe) and is reclaimed by the builder's `make
+# clean`; this optional plugin build needs it present.
+# shellcheck disable=SC1091
+source "$SCRIPT_DIR/lib/cache.sh"   # sets CACHE_DIR, SDK_DIR
+BSOE_ROOT="${CACHE_DIR}/bsoe"
+OE_DIR="${BSOE_ROOT}/brightsign-oe"
+SRV_DIR="${BSOE_ROOT}/srv"
+
 # Colors
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -58,12 +68,13 @@ fi
 info "Using container runtime: $CONTAINER_CMD"
 
 # Check prerequisites
-if [[ ! -d "$PROJECT_ROOT/brightsign-oe" ]]; then
-    error "brightsign-oe directory not found. Run runall.sh first to set up the build environment."
+if [[ ! -d "$OE_DIR" ]]; then
+    error "OE build tree not found at $OE_DIR. Provision it from the sibling repo: cd ../brightsign-sdk-builder && make build (and do not 'make clean' it, which reclaims the OE tree this plugin build needs)."
 fi
+mkdir -p "$SRV_DIR"
 
 if ! $CONTAINER_CMD images | grep -q "bsoe-build"; then
-    error "bsoe-build container image not found. Run runall.sh first."
+    error "bsoe-build container image not found. Provision it: cd ../brightsign-sdk-builder && make build"
 fi
 
 # Target plugins
@@ -96,8 +107,8 @@ info "Packages required: ${PACKAGES_TO_BUILD[*]}"
 for pkg in "${PACKAGES_TO_BUILD[@]}"; do
     info "Building $pkg in container (this may take a while)..."
     $CONTAINER_CMD run --rm \
-        -v "$PROJECT_ROOT/brightsign-oe:/home/builder/bsoe" \
-        -v "$PROJECT_ROOT/srv:/srv" \
+        -v "$OE_DIR:/home/builder/bsoe" \
+        -v "$SRV_DIR:/srv" \
         bsoe-build \
         bash -c "cd /home/builder/bsoe/build && MACHINE=cobra ./bsbb $pkg"
 done
@@ -107,10 +118,10 @@ copy_plugin() {
     local plugin_name="$1"
 
     info "Searching for $plugin_name..."
-    local plugin_path=$(find "$PROJECT_ROOT/brightsign-oe/build/tmp-glibc" -name "$plugin_name" -path "*/aarch64*" 2>/dev/null | grep -v "\.debug" | head -1)
+    local plugin_path=$(find "$OE_DIR/build/tmp-glibc" -name "$plugin_name" -path "*/aarch64*" 2>/dev/null | grep -v "\.debug" | head -1)
 
     if [[ -z "$plugin_path" ]]; then
-        plugin_path=$(find "$PROJECT_ROOT/brightsign-oe/build" -name "$plugin_name" 2>/dev/null | grep -v "\.debug" | head -1)
+        plugin_path=$(find "$OE_DIR/build" -name "$plugin_name" 2>/dev/null | grep -v "\.debug" | head -1)
     fi
 
     if [[ -z "$plugin_path" ]]; then
@@ -138,7 +149,7 @@ copy_plugin() {
     done
 
     # Copy to SDK
-    local sdk_dir="$PROJECT_ROOT/sdk/sysroots/aarch64-oe-linux/usr/lib/gstreamer-1.0"
+    local sdk_dir="$SDK_DIR/sysroots/aarch64-oe-linux/usr/lib/gstreamer-1.0"
     if [[ -d "$sdk_dir" ]]; then
         cp "$plugin_path" "$sdk_dir/"
         success "Installed $plugin_name to SDK"

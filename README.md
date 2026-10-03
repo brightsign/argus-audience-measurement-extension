@@ -242,16 +242,31 @@ reboot
 
 ### Building Packages
 
-Building requires an **x86_64 Linux** machine (Ubuntu 20.04+ recommended) with Docker or Podman. The build uses a containerized cross-compilation SDK to produce ARM binaries for the BrightSign players — it cannot run on ARM, macOS, or Windows hosts.
+Building requires an **x86_64 Linux** machine (Ubuntu 20.04+ recommended) with Docker or Podman. The build cross-compiles ARM binaries for the BrightSign players — it cannot run on ARM, macOS, or Windows hosts.
+
+The heavy, box-level assets (the custom cross-compile SDK, the RKNN toolkit, and the compiled models) are **not** built in this repo. They are provisioned **once per build box** by the sibling [`brightsign-sdk-builder`](https://github.com/brightsign/brightsign-sdk-builder) repo into a shared cache, and this repo builds against that cache. Provision it once from a checkout parallel to this one:
 
 ```bash
-make build          # Production build
-make build-demo     # Demo build (adds expiration date enforcement)
+cd ../brightsign-sdk-builder && make build    # one-time per build box (downloads OS source, builds SDK; hours)
 ```
 
-Both targets compile the application and run `./package`, which produces the two zip files in the project root. Demo builds include a `demo` prefix in the filenames (e.g., `argus-demo-dev-*.zip`).
+Then, in this repo:
 
-See **[Build & Installation Guide](docs/BUILD-INSTRUCTIONS.md)** for full details on prerequisites, SDK setup, and incremental builds.
+```bash
+make package        # cross-compile all SoCs, sync models from the cache, and produce the zips (production)
+make package-demo   # same, with demo expiration-date enforcement
+```
+
+`make build` cross-compiles only; `make package` adds model sync and runs `./package` to produce the two zips in the project root. Demo builds include a `demo` prefix in the filenames (e.g., `argus-demo-dev-*.zip`).
+
+The shared cache defaults to `../argus-build-cache` (parallel to the repo). If this repo is not checked out alongside `brightsign-sdk-builder`, point both at the same cache with `ARGUS_CACHE_DIR`:
+
+```bash
+make cache-info ARGUS_CACHE_DIR=/path/to/argus-build-cache   # show the resolved cache and what is present
+make package    ARGUS_CACHE_DIR=/path/to/argus-build-cache
+```
+
+See **[Build & Installation Guide](docs/BUILD-INSTRUCTIONS.md)** for full details on prerequisites, the shared cache, and incremental builds.
 
 ## Supported Hardware
 
