@@ -747,6 +747,15 @@ set -e
 
 fail() { echo "install-on-player: \$1" >&2; exit 1; }
 
+# Stop the running extension (if already installed) so its squashfs mount at
+# /var/volatile/bsext/ext_npu_argus is released; otherwise the installer's umount
+# fails with "Device or resource busy". Best-effort: absent on a first install.
+if [ -x /var/volatile/bsext/ext_npu_argus/bsext_init ]; then
+    echo "install-on-player: stopping running ext_npu_argus service..."
+    /var/volatile/bsext/ext_npu_argus/bsext_init stop || true
+    sleep 2
+fi
+
 cd /usr/local || fail "cannot cd /usr/local"
 unzip -o /storage/sd/$zip || fail "unzip of $zip failed"
 bash ./$installer || fail "$installer failed"
