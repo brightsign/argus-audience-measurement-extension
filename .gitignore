@@ -8,6 +8,8 @@ argus-ext*.zip
 argus-dev*.zip
 argus-demo-ext*.zip
 argus-demo-dev*.zip
+# Generated per-build on-device install helper (made by ./package)
+/install-on-player.sh
 .env
 cache.env
 *~

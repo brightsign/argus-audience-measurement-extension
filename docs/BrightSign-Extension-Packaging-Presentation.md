@@ -39,7 +39,7 @@ A **BrightSign Extension** is a packaged application that:
 ### Business Value
 
 ✅ **Persistent Installation** - Survives reboots, no re-deployment
-✅ **Multi-Platform Support** - Single package for XT5, LS5, Firebird
+✅ **Multi-Platform Support** - Single package for XT5, LS5, XS6/XD6
 ✅ **Integrity Verification** - SHA256 checksums prevent corruption
 ✅ **Easy Deployment** - Simple installation process
 ✅ **Production Ready** - Used in live customer deployments
@@ -59,7 +59,7 @@ A **BrightSign Extension** is a packaged application that:
 │  1. Compile for multiple SOCs:                              │
 │     • RK3588 (XT5: XT1145, XT2145)                          │
 │     • RK3568 (LS5: LS445)                                   │
-│     • RK3576 (Firebird dev boards)                          │
+│     • RK3576 (XS6/XD6 dev boards)                           │
 │                                                              │
 │  2. Collect artifacts:                                       │
 │     • Binaries: attention_demo, image-stream-server         │
@@ -72,7 +72,7 @@ A **BrightSign Extension** is a packaged application that:
 │     staging/                                                 │
 │     ├── RK3588/  (XT5 files)                                │
 │     ├── RK3568/  (LS5 files)                                │
-│     ├── RK3576/  (Firebird files)                           │
+│     ├── RK3576/  (XS6/XD6 files)                            │
 │     ├── manifest.json                                        │
 │     └── bsext_init                                           │
 │                                                              │

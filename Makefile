@@ -53,7 +53,7 @@ DOCS_MD := $(DOCS_DIR)/argus-api-integration-guide.md \
 DOCS_PDF := $(DOCS_MD:.md=.pdf)
 
 .PHONY: help build build-demo build-update build-demo-update build-gst-plugins \
-	fetch-sdk build-models sync-models package package-demo cache-info cache-clean \
+	fetch-sdk build-models sync-models package package-demo copy cache-info cache-clean \
 	clean clean-all run-tests test install-tools build-docs pdf
 
 help:                ## Print available targets
@@ -96,6 +96,28 @@ package: build       ## Build all SoCs (which syncs models) and create the exten
 package-demo:        ## Same as package but with demo expiration enforcement
 	$(MAKE) package DEMO_MODE=1
 
+# Deploy: scp the newest ext zip + the generated install-on-player.sh to the player.
+# BS_PLAYER/BS_PASSWORD come from .envrc (git-ignored); BS_USER/BS_DEST are
+# overridable. Override the zip with ZIP=<name>.
+BS_USER ?= brightsign
+BS_DEST ?= /storage/sd/
+
+copy:                ## scp the newest ext zip + install-on-player.sh to the player (needs BS_PLAYER/BS_PASSWORD in .envrc; override ZIP=)
+	@command -v sshpass >/dev/null 2>&1 || { echo "sshpass not found -- install it: sudo apt-get install -y sshpass"; exit 1; }
+	@test -f install-on-player.sh || { echo "install-on-player.sh missing -- run 'make package' first"; exit 1; }
+	@set -a; [ -f .envrc ] && . ./.envrc; set +a; \
+	if [ -z "$$BS_PLAYER" ] || [ -z "$$BS_PASSWORD" ]; then \
+		echo "BS_PLAYER and BS_PASSWORD must be set (edit .envrc)"; exit 1; fi; \
+	zip="$(ZIP)"; [ -n "$$zip" ] || zip=$$(ls -t argus-ext-*.zip argus-demo-ext-*.zip 2>/dev/null | head -n1); \
+	if [ -z "$$zip" ]; then echo "No ext zip found -- run 'make package' first"; exit 1; fi; \
+	echo "Copying $$zip + install-on-player.sh -> $(BS_USER)@$$BS_PLAYER:$(BS_DEST)"; \
+	sshpass -p "$$BS_PASSWORD" scp -p -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$$zip" install-on-player.sh "$(BS_USER)@$$BS_PLAYER:$(BS_DEST)"; \
+	echo "Copied. On the player's root Linux shell, run:  sh $(BS_DEST)install-on-player.sh"
+	@# NOTE: no `scp -O`. The player's SSH login is the BrightSign REPL, not a Unix
+	@# shell; legacy SCP (-O) runs `scp -t` through that REPL and fails with
+	@# "Unknown command: -c scp -t". Default scp uses the SFTP subsystem, which
+	@# dropbear serves independently of the REPL, so it works.
+
 cache-info:          ## Show the resolved shared-cache location and what is present
 	@echo "ARGUS_CACHE_DIR : $(if $(ARGUS_CACHE_DIR),$(ARGUS_CACHE_DIR) (override),(unset -> default))"
 	@echo "cache   : $(CACHE_DIR)"
@@ -116,6 +138,7 @@ clean:               ## Remove this repo's build artifacts (leaves the shared ca
 	done
 	rm -f *.pdf docs/*.pdf
 	rm -f *.zip
+	rm -f install-on-player.sh
 
 clean-all: clean     ## Also remove install/ and generated docs (leaves the shared cache)
 	rm -rf install

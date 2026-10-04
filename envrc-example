@@ -1,0 +1,18 @@
+# Example deployment settings for `make copy`. SAFE TO COMMIT -- placeholders only.
+#
+# Copy this to .envrc and fill in your player's details:
+#     cp envrc-example .envrc
+#     direnv allow          # if you use direnv (optional; `make copy` also sources .envrc directly)
+#
+# .envrc holds a plaintext SSH password, so it is git-ignored and must never be
+# committed. Keep real credentials only in .envrc, never in this example.
+
+# Target BrightSign player: hostname, FQDN, or IP.
+export BS_PLAYER=player.example.lan
+
+# The player's SSH password.
+export BS_PASSWORD=changeme
+
+# Optional overrides (defaults shown; uncomment to change):
+# export BS_USER=brightsign            # SSH user on the player
+# export BS_DEST=/storage/sd/          # destination directory on the player

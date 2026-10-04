@@ -22,7 +22,7 @@ Orange Pi boards with Rockchip SoCs (RK3588, RK3568, RK3576) provide an excellen
 | Orange Pi 5 Plus | RK3588 | XT5 | `XT5` / `rk3588` |
 | Orange Pi 5 | RK3588 | XT5 | `XT5` / `rk3588` |
 | Orange Pi 3B | RK3568 | LS5 | `LS5` / `rk3568` |
-| Orange Pi CM5 | RK3576 | XS156/Firebird | `Firebird` / `rk3576` |
+| Orange Pi CM5 | RK3576 | XS156/XS6/XD6 | `XS6/XD6` / `rk3576` |
 
 ## Prerequisites
 
@@ -487,7 +487,7 @@ When ready to deploy to BrightSign, use the cross-compilation build system on yo
 # Build for specific platform
 ./build-apps XT5      # For RK3588/XT5
 ./build-apps LS5      # For RK3568/LS5
-./build-apps Firebird # For RK3576/XS156
+./build-apps XS6/XD6 # For RK3576/XS156
 
 # Build for all platforms
 ./build-apps
