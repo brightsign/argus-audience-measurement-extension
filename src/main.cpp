@@ -295,9 +295,9 @@ int main(int argc, char** argv) {
         LG_INFO("CLI: overriding input -> %s", cli.input);
         effective_input = make_input_from_registry_value(cli.input);
     } else if (priority == "config") {
-        // Priority setting: "config" - use argus-config.json input based on input_source selection
+        // Priority setting: "config" - use config.json input based on input_source selection
         const std::string& input_src = appcfg.input_source;
-        LG_INFO("Config: using input from argus-config.json (priority='config', input_source='%s')", input_src.c_str());
+        LG_INFO("Config: using input from config.json (priority='config', input_source='%s')", input_src.c_str());
         
         // Select input based on input_source field
         if (input_src == "rtsp" && !appcfg.input.rtsp_url.empty()) {
@@ -353,7 +353,7 @@ int main(int argc, char** argv) {
             }
         }
     } else {
-        // Priority setting: "registry" - prefer registry over argus-config.json
+        // Priority setting: "registry" - prefer registry over config.json
         const std::string choice = RegistryHelper::getVideoDevice();
         LG_INFO("Registry: video-device='%s' (priority='registry')", choice.c_str());
         InputConfig reg_input = make_input_from_registry_value(choice);
@@ -362,7 +362,7 @@ int main(int argc, char** argv) {
         } else {
             // Registry returned nothing useful, fallback to config
             if (!appcfg.input.rtsp_url.empty() || !appcfg.input.file_path.empty()) {
-                LG_INFO("Registry empty, using argus-config.json fallback");
+                LG_INFO("Registry empty, using config.json fallback");
                 if (!appcfg.input.rtsp_url.empty()) {
                     LG_INFO("  - RTSP URL: %s", appcfg.input.rtsp_url.c_str());
                 } else if (!appcfg.input.file_path.empty()) {
@@ -567,7 +567,7 @@ int main(int argc, char** argv) {
 #endif  // DEMO_MODE_ENABLED
 
     // ---- Config monitoring for automatic restart ----
-    // Monitor /storage/sd/configs/argus-config.json for changes
+    // Monitor /storage/sd/configs/config.json for changes
     // When changed, request graceful restart to apply new config
     LG_INFO("Initializing config monitor...");
     LG_INFO("Initial flag states: g_stop=%d g_restart_requested=%d", 

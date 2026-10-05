@@ -331,6 +331,13 @@ void Tracker::update_track(TrackStateInternal& t, const Detection& d, double ts,
     return overlap_ratio > 0.35f;
   };
   bool now_inside = inside_roi(t.x0, t.y0, t.x1, t.y1, t.cx, t.cy);
+  // Dwell uses CENTER-in-ROI (consistent with the published "roi" zone and the
+  // people count), not bbox overlap -- an oversized detection whose center is in
+  // the ROI still counts as dwelling. Enter/exit keep using now_inside (overlap).
+  const float _dwell_bx = cfg_.enter_exit_border_frac * frame_w_;
+  const float _dwell_by = cfg_.enter_exit_border_frac * frame_h_;
+  const bool center_inside = (t.cx >= _dwell_bx && t.cx <= frame_w_ - _dwell_bx &&
+                              t.cy >= _dwell_by && t.cy <= frame_h_ - _dwell_by);
   
   // DEBUG: Log overlap ratio calculation
   static int overlap_log_count = 0;
@@ -413,7 +420,7 @@ void Tracker::update_track(TrackStateInternal& t, const Detection& d, double ts,
     
     double time_delta = ts - t.last_ts;
     t.last_ts = ts;
-    if (t.state == ::TrackState::Confirmed && now_inside) {
+    if (t.state == ::TrackState::Confirmed && center_inside) {
       t.dwell_s += time_delta;
     }
     t.was_inside = now_inside;
@@ -484,7 +491,7 @@ void Tracker::update_track(TrackStateInternal& t, const Detection& d, double ts,
     
     double time_delta = ts - t.last_ts;
     t.last_ts = ts;
-    if (t.state == ::TrackState::Confirmed && now_inside) {
+    if (t.state == ::TrackState::Confirmed && center_inside) {
       t.dwell_s += time_delta;
     }
     t.was_inside = now_inside;
@@ -526,7 +533,7 @@ void Tracker::update_track(TrackStateInternal& t, const Detection& d, double ts,
     
     double time_delta = ts - t.last_ts;
     t.last_ts = ts;
-    if (t.state == ::TrackState::Confirmed && now_inside) {
+    if (t.state == ::TrackState::Confirmed && center_inside) {
       t.dwell_s += time_delta;
     }
     t.was_inside = now_inside;
@@ -597,7 +604,7 @@ void Tracker::update_track(TrackStateInternal& t, const Detection& d, double ts,
     
     double time_delta = ts - t.last_ts;
     t.last_ts = ts;
-    if (t.state == ::TrackState::Confirmed && now_inside) {
+    if (t.state == ::TrackState::Confirmed && center_inside) {
       t.dwell_s += time_delta;
     }
     t.was_inside = now_inside;
@@ -689,7 +696,7 @@ void Tracker::update_track(TrackStateInternal& t, const Detection& d, double ts,
   // Update time and dwell (only when confirmed & inside ROI)
   double time_delta = ts - t.last_ts;
   t.last_ts = ts;
-  if (t.state == ::TrackState::Confirmed && now_inside) {
+  if (t.state == ::TrackState::Confirmed && center_inside) {
     t.dwell_s += time_delta;  // Accumulate time inside ROI only
   }
   t.was_inside = now_inside;

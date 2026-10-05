@@ -10,7 +10,7 @@ Argus looks for configuration in the following order (first found wins):
 flowchart TD
     CLI["1. CLI Argument<br/>--config /path/to/config.json"] --> ENV
     ENV["2. Environment Variable<br/>BSEXT_CONFIG=/path/to/config.json"] --> SD
-    SD["3. SD Card Override<br/>/storage/sd/configs/argus-config.json"] --> PKG
+    SD["3. SD Card Override<br/>/storage/sd/configs/config.json"] --> PKG
     PKG["4. Package Default<br/>(built into extension)"]
 
     CLI --> |Found| USE[Use this config]
@@ -19,7 +19,7 @@ flowchart TD
     PKG --> |Fallback| USE
 ```
 
-**Recommended:** Use `/storage/sd/configs/argus-config.json` for easy customization.
+**Recommended:** Use `/storage/sd/configs/config.json` for easy customization.
 
 ## Quick Configuration
 
@@ -469,7 +469,7 @@ Set `input_source_priority` to control which takes precedence:
 
 ```bash
 # Validate JSON syntax
-cat /storage/sd/configs/argus-config.json | python3 -m json.tool
+cat /storage/sd/configs/config.json | python3 -m json.tool
 ```
 
 ### Test Configuration
@@ -477,7 +477,7 @@ cat /storage/sd/configs/argus-config.json | python3 -m json.tool
 ```bash
 # Start with specific config
 cd /var/volatile/bsext/ext_npu_argus
-./attention_demo --config /storage/sd/configs/argus-config.json
+./attention_demo --config /storage/sd/configs/config.json
 ```
 
 ### View Active Configuration

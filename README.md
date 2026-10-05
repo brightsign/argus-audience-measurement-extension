@@ -213,13 +213,21 @@ How it is wired:
 - The browser receives analytics over **MQTT-WebSockets** directly from the bundled mosquitto broker (a `websockets` listener on port **9001**), using a vendored MQTT.js — no internet or CDN required.
 - If no broker is reachable, the dashboard falls back to a **built-in simulator** so it always renders; force it with `http://<PLAYER_IP>:8081/?sim=1`.
 
-Registry overrides (set the value to `0` to disable a piece):
+Configure the ports in **`config.json`** (the recommended, easiest place) — this overrides the registry/defaults:
+
+```json
+"dashboard": { "port": 8081, "ws_port": 9001 }
+```
+
+Or via the BrightSign registry (set the value to `0` to disable a piece):
 
 | Registry key (`networking.*`) | Purpose | Default |
 |---|---|---|
 | `bs-argus-dashboard-port` | dashboard HTTP port | `8081` |
 | `bs-mqtt-ws-port` | mosquitto WebSocket port | `9001` |
 | `bs-image-stream-server-port` | live-frame source (proxied by the dashboard) | `20200` |
+
+Precedence: `config.json` `dashboard.port` > registry > default.
 
 The dashboard UI lives in `./dashboard` (static HTML/CSS/JS); edit it there and it ships with the next `make package`. The `dashboard-server` cross-compiles as part of the normal build (`make dashboard-server` builds it standalone to verify).
 

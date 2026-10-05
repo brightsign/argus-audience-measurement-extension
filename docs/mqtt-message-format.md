@@ -1970,7 +1970,7 @@ client.loop_forever()
 
 ## Configuration Reference
 
-Key parameters affecting published data (see `configs/argus-config.json`):
+Key parameters affecting published data (see `configs/config.json`):
 
 ```json
 {

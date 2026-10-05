@@ -59,7 +59,7 @@ echo "  URL   : $RTSP_URL"
 echo "  Press Ctrl-C to stop"
 echo "=================================================="
 echo ""
-echo "  In argus-config.json set:"
+echo "  In config.json set:"
 echo '    "input_source": "rtsp"'
 echo "    \"rtsp_url\": \"${RTSP_URL}\""
 echo ""

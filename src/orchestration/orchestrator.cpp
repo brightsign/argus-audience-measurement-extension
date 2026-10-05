@@ -1136,7 +1136,7 @@ bool Orchestrator::recover_pipeline(int64_t now_ns_val) noexcept {
     // 2. Figure out what device we *should* try to use.
     //
     // If the pipeline was originally configured with an explicit network/file
-    // source (RTSP/HTTP/file, e.g. from argus-config.json), we must reconnect to
+    // source (RTSP/HTTP/file, e.g. from config.json), we must reconnect to
     // THAT source. Only USB/registry-driven camera setups should consult the
     // registry video-device on recovery. Previously we always queried the
     // registry, so an RTSP input whose stream briefly dropped would be

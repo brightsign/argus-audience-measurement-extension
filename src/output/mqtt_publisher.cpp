@@ -2,6 +2,7 @@
 #include "metrics/log_global.h"
 #include <chrono>
 #include <cmath>   // For std::sqrt
+#include <cctype>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -12,28 +13,33 @@
 
 using clk = std::chrono::steady_clock;
 
-// Helper: Read NPU load percentage from RK3568 kernel debug interface
+// Helper: Read NPU load percentage from the rknpu kernel debug interface.
+// The format is SoC-dependent:
+//   single-core (e.g. RK3568):      "NPU load: 42%"
+//   multi-core  (RK3576 / RK3588):  "NPU load:  Core0: 52%, Core1:  0%, Core2:  0%,"
+// Take the maximum of every "<num>%" on the line so a busy core is reflected
+// (a per-core parse that only looked at the first field reported 0 on RK3576).
 static float read_npu_load_percent() {
   std::ifstream f("/sys/kernel/debug/rknpu/load");
   if (!f.is_open()) return 0.0f;
-  
+
   std::string line;
   if (!std::getline(f, line)) return 0.0f;
-  
-  // Expected format: "NPU load: XX%"
-  auto colon_pos = line.find(':');
-  auto percent_pos = line.find('%');
-  
-  if (colon_pos != std::string::npos && 
-      percent_pos != std::string::npos && 
-      percent_pos > colon_pos) {
-    try {
-      return std::stof(line.substr(colon_pos + 1, percent_pos - colon_pos - 1));
-    } catch (...) {
-      return 0.0f;
+
+  float best = -1.0f;
+  for (size_t pos = 0; (pos = line.find('%', pos)) != std::string::npos; ++pos) {
+    size_t start = pos;  // walk back over the number preceding '%'
+    while (start > 0 && (std::isdigit(static_cast<unsigned char>(line[start - 1])) || line[start - 1] == '.')) {
+      --start;
+    }
+    if (start < pos) {
+      try {
+        float v = std::stof(line.substr(start, pos - start));
+        if (v > best) best = v;
+      } catch (...) {}
     }
   }
-  return 0.0f;
+  return best < 0.0f ? 0.0f : best;
 }
 
 MqttPublisher::MqttPublisher(const Cfg& cfg) noexcept : cfg_(cfg) {

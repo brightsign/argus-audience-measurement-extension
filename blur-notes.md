@@ -166,7 +166,7 @@ LG_INFO("frame_writer_async: face blur enabled (method=%s, intensity=%d)", ...);
 LG_INFO("frame_writer_async: person blur enabled (method=%s, intensity=%d)", ...);
 ```
 
-### 2. Configuration Changes (`configs/argus-config.json`)
+### 2. Configuration Changes (`configs/config.json`)
 
 #### Blur Settings (Lines 87-89)
 
@@ -544,7 +544,7 @@ if (blur_config_.enabled && !result.tracks.empty()) {
 }
 ```
 
-**In `configs/argus-config.json`:**
+**In `configs/config.json`:**
 ```json
 "blur_faces": false,
 "blur_method": "pixelate",

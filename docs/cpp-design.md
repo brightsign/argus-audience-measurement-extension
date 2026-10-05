@@ -1427,7 +1427,7 @@ done
 
 ### Configuration Files
 
-- `configs/argus-config.json` - Runtime configuration (input sources, models, publishers)
+- `configs/config.json` - Runtime configuration (input sources, models, publishers)
 - `CMakeLists.txt` - Build system, dependencies, cross-compilation
 - `Makefile` - Build orchestration wrapper
 

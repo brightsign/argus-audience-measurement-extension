@@ -326,7 +326,7 @@ def on_message(client, userdata, msg):
 
 ### Changing the MQTT Topic
 
-Edit `/storage/sd/configs/argus-config.json`:
+Edit `/storage/sd/configs/config.json`:
 
 ```json
 {

@@ -20,7 +20,7 @@
   const completedDwell = [];         // finalized dwell durations
   const funnel = { detected: 0, roi: 0, looked: 0, engaged: 0 }; // EMA-smoothed
   let heat = null, heatW = 48, heatH = 27;
-  let peak = 0, latest = null, frameW = 1280, frameH = 720;
+  let peak = 0, latest = null, frameW = 1280, frameH = 720, simMode = false;
 
   const el = (id) => document.getElementById(id);
   const tooltip = el("tooltip");
@@ -97,6 +97,7 @@
 
   // ---- Simulator ---------------------------------------------------------
   function startSim() {
+    simMode = true;
     setFeed("sim", "simulated");
     el("devLabel").textContent = "demo";
     const N = 6;
@@ -135,7 +136,8 @@
   function render() {
     drawKPIs();
     drawOverlay();
-    drawTimeline();
+    drawHistory("timelinePresent", "people", C.present, C.presentGlow, "Present");
+    drawHistory("timelineGazing", "gaze", C.gazing, C.gazingGlow, "Gazing");
     drawFunnel();
     drawDwell();
     drawHeatmap();
@@ -151,56 +153,38 @@
     el("kRate").textContent = people ? Math.round((gaze / people) * 100) + "%" : "0%";
     const confirmed = [...tracksById.values()];
     const avg = confirmed.length ? confirmed.reduce((s, t) => s + t.dwell, 0) / confirmed.length : 0;
-    el("kDwell").textContent = avg.toFixed(1) + "s";
+    el("kDwell").textContent = avg.toFixed(0) + "s";
     el("kPeak").textContent = peak;
     el("kNpu").textContent = Math.round(m.npu_load || 0) + "%";
-    el("kFps").textContent = (m.fps || 0) + " fps";
     el("fpsHint").textContent = (m.fps || 0) + " fps";
-    sparkline(el("sparkPeople"), "people", C.present);
-    sparkline(el("sparkGaze"), "gaze", C.gazing);
   }
 
-  function sparkline(host, key, color) {
-    let c = host.querySelector("canvas");
-    if (!c) { c = document.createElement("canvas"); c.style.width = "100%"; c.style.height = "100%"; host.appendChild(c); }
-    const { ctx, w, h } = fit(c);
-    ctx.clearRect(0, 0, w, h);
-    if (timeline.length < 2) return;
-    const max = Math.max(1, ...timeline.map((d) => d[key]));
-    ctx.beginPath();
-    timeline.forEach((d, i) => {
-      const x = (i / (timeline.length - 1)) * w, y = h - (d[key] / max) * (h - 2) - 1;
-      i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
-    });
-    ctx.strokeStyle = color; ctx.lineWidth = 1.5; ctx.stroke();
-  }
-
-  function drawTimeline() {
-    const c = el("timeline"); const { ctx, w, h } = fit(c);
+  // Single-series history chart (area + line) over the rolling window. Used for
+  // both "Present History" (key=people) and "Gazing History" (key=gaze).
+  function drawHistory(canvasId, key, color, glow, label) {
+    const c = el(canvasId); const { ctx, w, h } = fit(c);
     ctx.clearRect(0, 0, w, h);
     const padL = 28, padB = 16, padT = 8, plotW = w - padL - 6, plotH = h - padB - padT;
-    const max = Math.max(4, ...timeline.map((d) => d.people));
-    // grid + y labels
+    const max = Math.max(4, ...timeline.map((d) => d[key]));
     ctx.font = "11px system-ui"; ctx.textBaseline = "middle";
     for (let i = 0; i <= 4; i++) {
       const y = padT + (plotH * i) / 4, v = Math.round(max * (1 - i / 4));
       ctx.strokeStyle = C.grid; ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - 6, y); ctx.stroke();
       ctx.fillStyle = C.muted; ctx.textAlign = "right"; ctx.fillText(v, padL - 6, y);
     }
-    if (timeline.length < 2) return;
+    if (timeline.length < 2) { c._hit = null; return; }
     const now = performance.now();
-    const X = (t) => padL + (1 - (now - t) / WINDOW_MS) * plotW;
+    // Span the actual data range (oldest sample -> now), capped at the window, so
+    // the series fills the width from the start instead of bunching at the right;
+    // once WINDOW_MS of data exists it becomes a true rolling window.
+    const span = Math.max(1000, Math.min(WINDOW_MS, now - timeline[0].t));
+    const X = (t) => padL + (1 - (now - t) / span) * plotW;
     const Y = (v) => padT + plotH - (v / max) * plotH;
-    area(ctx, timeline, X, Y, (d) => d.people, C.present, 0.22, padT + plotH);
-    area(ctx, timeline, X, Y, (d) => d.gaze, C.gazing, 0.30, padT + plotH);
-    line(ctx, timeline, X, Y, (d) => d.people, C.presentGlow, 2);
-    line(ctx, timeline, X, Y, (d) => d.gaze, C.gazingGlow, 2);
-    // direct labels
+    area(ctx, timeline, X, Y, (d) => d[key], color, 0.28, padT + plotH);
+    line(ctx, timeline, X, Y, (d) => d[key], glow, 2);
     const last = timeline[timeline.length - 1];
-    ctx.textAlign = "left"; ctx.fillStyle = C.presentGlow; ctx.fillText(last.people, w - 24, Y(last.people));
-    ctx.fillStyle = C.gazingGlow; ctx.fillText(last.gaze, w - 24, Y(last.gaze));
-    // hover crosshair
-    c._hit = { padL, plotW, now, X };
+    ctx.textAlign = "left"; ctx.fillStyle = glow; ctx.fillText(last[key], w - 22, Y(last[key]));
+    c._hit = { X, key, label };
   }
 
   function area(ctx, data, X, Y, f, color, alpha, base) {
@@ -286,22 +270,29 @@
   }
 
   function drawOverlay() {
-    const img = el("video"), c = el("overlay"); const { ctx, w, h } = fit(c);
+    const c = el("overlay"); const { ctx, w, h } = fit(c);
     ctx.clearRect(0, 0, w, h);
+    // LIVE: the /video frame already has attention_demo's detection boxes baked in
+    // at full frame rate. Drawing our own boxes here (fed by 1 Hz MQTT) just makes a
+    // second, lagging box -- so the overlay only draws in SIMULATOR mode, where the
+    // video is blank and the sim boxes are the only visualization.
+    if (!simMode) return;
     const scale = Math.min(w / frameW, h / frameH);
     const ox = (w - frameW * scale) / 2, oy = (h - frameH * scale) / 2;
-    ctx.font = "11px system-ui"; ctx.textBaseline = "bottom";
-    for (const [id, t] of tracksById) {
+    for (const [, t] of tracksById) {
       if (!t.bbox) continue;
       const [x1, y1, x2, y2] = t.bbox;
       const rx = ox + x1 * scale, ry = oy + y1 * scale, rw = (x2 - x1) * scale, rh = (y2 - y1) * scale;
-      const hot = Math.min(1, t.dwell / 15);
-      ctx.strokeStyle = heatColor(0.2 + hot * 0.8); ctx.lineWidth = 2;
-      ctx.strokeRect(rx, ry, rw, rh);
-      const label = `#${id} · ${t.dwell.toFixed(0)}s`;
-      ctx.fillStyle = "rgba(8,12,20,0.75)"; const tw = ctx.measureText(label).width + 8;
-      ctx.fillRect(rx, ry - 15, tw, 15);
-      ctx.fillStyle = "#e8eef7"; ctx.fillText(label, rx + 4, ry - 2);
+      ctx.setLineDash([6, 5]); ctx.strokeStyle = "rgba(159,176,198,0.55)"; ctx.lineWidth = 1.5;
+      ctx.strokeRect(rx, ry, rw, rh); ctx.setLineDash([]);
+    }
+    {
+      const bw = 320, bh = 26, bx = (w - bw) / 2;
+      ctx.fillStyle = "rgba(192,127,30,0.92)"; roundRect(ctx, bx, 8, bw, bh, 6); ctx.fill();
+      ctx.fillStyle = "#0b0f17"; ctx.font = "600 13px system-ui";
+      ctx.textAlign = "center"; ctx.textBaseline = "middle";
+      ctx.fillText("SIMULATED DATA — no live feed", w / 2, 8 + bh / 2);
+      ctx.textAlign = "left";
     }
   }
 
@@ -313,14 +304,18 @@
   function showTip(x, y, html) { tooltip.innerHTML = html; tooltip.style.left = x + "px"; tooltip.style.top = y + "px"; tooltip.hidden = false; }
   function hideTip() { tooltip.hidden = true; }
 
-  el("timeline").addEventListener("mousemove", (e) => {
-    const c = el("timeline"), hit = c._hit; if (!hit || timeline.length < 2) return hideTip();
-    const r = c.getBoundingClientRect(), mx = e.clientX - r.left;
-    let best = timeline[0], bd = Infinity;
-    for (const d of timeline) { const dx = Math.abs(hit.X(d.t) - mx); if (dx < bd) { bd = dx; best = d; } }
-    showTip(e.clientX, e.clientY, `Present <b>${best.people}</b> · Gazing <b>${best.gaze}</b>`);
-  });
-  el("timeline").addEventListener("mouseleave", hideTip);
+  function historyHover(canvasId) {
+    el(canvasId).addEventListener("mousemove", (e) => {
+      const c = el(canvasId), hit = c._hit; if (!hit || timeline.length < 2) return hideTip();
+      const r = c.getBoundingClientRect(), mx = e.clientX - r.left;
+      let best = timeline[0], bd = Infinity;
+      for (const d of timeline) { const dx = Math.abs(hit.X(d.t) - mx); if (dx < bd) { bd = dx; best = d; } }
+      showTip(e.clientX, e.clientY, `${hit.label}: <b>${best[hit.key]}</b>`);
+    });
+    el(canvasId).addEventListener("mouseleave", hideTip);
+  }
+  historyHover("timelinePresent");
+  historyHover("timelineGazing");
 
   el("funnel").addEventListener("mousemove", (e) => {
     const c = el("funnel"), hit = c._hit; if (!hit) return hideTip();

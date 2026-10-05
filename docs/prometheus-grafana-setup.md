@@ -54,7 +54,7 @@ On BrightSign players, all configuration and data files must be stored under `/s
 │       └── argus/
 │           └── argus-analytics.json  # JSON - dashboard definition
 └── configs/
-    └── argus-config.json           # JSON - application config
+    └── config.json           # JSON - application config
 ```
 
 ## Configuration Files

@@ -107,10 +107,10 @@ Argus loads configuration from the first available source:
 |----------|--------|------|
 | 1 | CLI argument | `--config /path/to/config.json` |
 | 2 | Environment variable | `BSEXT_CONFIG=/path/to/config.json` |
-| 3 | SD card override | `/storage/sd/configs/argus-config.json` |
+| 3 | SD card override | `/storage/sd/configs/config.json` |
 | 4 | Package default | Built into extension |
 
-**Recommended approach**: Place your configuration at `/storage/sd/configs/argus-config.json` for easy modification without rebuilding the extension.
+**Recommended approach**: Place your configuration at `/storage/sd/configs/config.json` for easy modification without rebuilding the extension.
 
 ### Complete Configuration Schema
 
@@ -899,7 +899,7 @@ flowchart TB
 
 ### Example Fleet Configuration
 
-**Player: lobby-01** (`/storage/sd/configs/argus-config.json`):
+**Player: lobby-01** (`/storage/sd/configs/config.json`):
 ```json
 {
   "device_id": "lobby-01",
@@ -916,7 +916,7 @@ flowchart TB
 }
 ```
 
-**Player: entrance-main** (`/storage/sd/configs/argus-config.json`):
+**Player: entrance-main** (`/storage/sd/configs/config.json`):
 ```json
 {
   "device_id": "entrance-main",

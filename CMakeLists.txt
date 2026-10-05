@@ -413,7 +413,7 @@ add_custom_target(mosquitto_broker ALL
                 -DWITH_PERSISTENCE=ON \
                 -DWITH_DOCS=OFF \
                 -DWITH_TESTING=OFF \
-                -DWITH_WEBSOCKETS=OFF \
+                -DWITH_WEBSOCKETS=ON \
                 -DWITH_STRIP=ON && \
             echo 'Building mosquitto...' && \
             make -j\$(nproc) && \
@@ -527,8 +527,8 @@ install(FILES ${CMAKE_BINARY_DIR}/dashboard-server
 install(DIRECTORY ${CMAKE_SOURCE_DIR}/dashboard
         DESTINATION ./)
 
-# Install argus-config.json to the install directory
-install(FILES ${CMAKE_SOURCE_DIR}/configs/argus-config.json
+# Install config.json to the install directory
+install(FILES ${CMAKE_SOURCE_DIR}/configs/config.json
         DESTINATION ./configs
         PERMISSIONS OWNER_READ OWNER_WRITE
                    GROUP_READ
@@ -610,6 +610,16 @@ install(CODE "
     foreach(lib \${TBB_LIB_FILES})
         execute_process(COMMAND cp -L \${lib} \${CMAKE_INSTALL_PREFIX}/lib/)
     endforeach()
+
+    # Bundle attention_demo's remaining shared-library closure from the SDK sysroot
+    # (OpenCV image codecs: libtiff/libwebp/libjpeg/libpng and their deps; openssl
+    # for mosquitto; opencv_videoio backends). BrightSignOS does not ship these, so
+    # without this attention_demo dies at startup with e.g. 'libtiff.so.5: cannot
+    # open shared object file'. Core glibc/gcc and the glib/gstreamer stack (shipped
+    # by the ext-bundle) are excluded -- see scripts/bundle-extra-deps.sh.
+    message(STATUS \"Bundling extra shared-library closure (image codecs, openssl, ...)\")
+    execute_process(COMMAND bash ${CMAKE_SOURCE_DIR}/scripts/bundle-extra-deps.sh ${OECORE_TARGET_SYSROOT_ABS} \${CMAKE_INSTALL_PREFIX}/lib \${CMAKE_INSTALL_PREFIX}/attention_demo \${CMAKE_INSTALL_PREFIX}/bin/mosquitto)
+
     message(STATUS \"Bundling GStreamer runtime from: ${EXT_BUNDLE_TGZ}\")
   if(EXISTS \"${EXT_BUNDLE_TGZ}\")
     # Ensure destination dirs exist

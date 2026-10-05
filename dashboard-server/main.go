@@ -32,9 +32,35 @@ func main() {
 		wsPort   = flag.Int("ws-port", 9001, "mosquitto WebSocket port advertised to the dashboard")
 		wsPath   = flag.String("ws-path", "/", "mosquitto WebSocket path advertised to the dashboard")
 		topic    = flag.String("topic", "bs/argus/analytics", "MQTT analytics topic advertised to the dashboard")
+		config   = flag.String("config", "", "optional config.json; its dashboard.port / dashboard.ws_port override the flags")
 		debug    = flag.Bool("debug", false, "enable request logging")
 	)
 	flag.Parse()
+
+	// Let config.json (the surface users already edit) drive the ports.
+	// A present, non-zero value there overrides the corresponding flag/default.
+	if *config != "" {
+		if b, err := os.ReadFile(*config); err != nil {
+			log.Printf("dashboard-server: config %q not readable (%v); using flags", *config, err)
+		} else {
+			var c struct {
+				Dashboard struct {
+					Port   int `json:"port"`
+					WsPort int `json:"ws_port"`
+				} `json:"dashboard"`
+			}
+			if err := json.Unmarshal(b, &c); err != nil {
+				log.Printf("dashboard-server: config %q parse error (%v); using flags", *config, err)
+			} else {
+				if c.Dashboard.Port > 0 {
+					*port = c.Dashboard.Port
+				}
+				if c.Dashboard.WsPort > 0 {
+					*wsPort = c.Dashboard.WsPort
+				}
+			}
+		}
+	}
 
 	if _, err := os.Stat(*dir); err != nil {
 		log.Fatalf("dashboard dir %q not accessible: %v", *dir, err)

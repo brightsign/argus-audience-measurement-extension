@@ -20,54 +20,55 @@
     </div>
   </header>
 
-  <main class="grid">
-    <!-- Hero: live frame + overlay -->
-    <section class="panel hero" aria-label="Live view">
-      <div class="panel-head"><h2>Live</h2><span class="hint" id="fpsHint">— fps</span></div>
-      <div class="stage" id="stage">
-        <img id="video" alt="Live video stream" src="/video">
-        <canvas id="overlay"></canvas>
-      </div>
-    </section>
-
-    <!-- KPI tiles -->
-    <section class="kpis" aria-label="Key metrics">
-      <div class="tile"><span class="k-label">People now</span><span class="k-val" id="kPeople">0</span><span class="k-spark" id="sparkPeople"></span></div>
-      <div class="tile"><span class="k-label">Gazing now</span><span class="k-val amber" id="kGaze">0</span><span class="k-spark" id="sparkGaze"></span></div>
-      <div class="tile"><span class="k-label">Attention rate</span><span class="k-val" id="kRate">0%</span><span class="k-sub" id="kRateSub">looking / present</span></div>
-      <div class="tile"><span class="k-label">Avg dwell</span><span class="k-val" id="kDwell">0.0s</span><span class="k-sub">confirmed tracks</span></div>
-      <div class="tile"><span class="k-label">Peak today</span><span class="k-val" id="kPeak">0</span><span class="k-sub">max concurrent</span></div>
-      <div class="tile"><span class="k-label">NPU load</span><span class="k-val" id="kNpu">0%</span><span class="k-sub" id="kFps">0 fps</span></div>
-    </section>
-
-    <!-- Attention timeline -->
-    <section class="panel" aria-label="Attention over time">
-      <div class="panel-head">
-        <h2>Attention timeline</h2>
-        <div class="legend">
-          <span class="lg"><i class="sw present"></i>Present</span>
-          <span class="lg"><i class="sw gazing"></i>Gazing</span>
+  <main>
+    <!-- Primary view: video left, data right, matched height -->
+    <section class="stage-row">
+      <!-- Live frame + overlay -->
+      <section class="panel hero" aria-label="Live view">
+        <div class="panel-head"><h2>Live</h2><span class="hint" id="fpsHint">— fps</span></div>
+        <div class="stage" id="stage">
+          <img id="video" alt="Live video stream" src="/video">
+          <canvas id="overlay"></canvas>
         </div>
-      </div>
-      <canvas id="timeline" class="chart"></canvas>
+      </section>
+
+      <!-- Data column: 6 tiles + two history graphs, scaled to the video height -->
+      <section class="data-col">
+        <section class="kpis" aria-label="Key metrics">
+          <div class="tile"><span class="k-label">Present Now</span><span class="k-val" id="kPeople">0</span></div>
+          <div class="tile"><span class="k-label">Gazing Now</span><span class="k-val" id="kGaze">0</span></div>
+          <div class="tile"><span class="k-label">Attention Rate</span><span class="k-val" id="kRate">0%</span></div>
+          <div class="tile"><span class="k-label">Avg Dwell</span><span class="k-val" id="kDwell">0s</span></div>
+          <div class="tile"><span class="k-label">Peak Today</span><span class="k-val" id="kPeak">0</span></div>
+          <div class="tile"><span class="k-label">NPU Load</span><span class="k-val" id="kNpu">0%</span></div>
+        </section>
+
+        <section class="panel hist" aria-label="Presence history">
+          <div class="panel-head"><h2>Presence History</h2><span class="hint">last 60s</span></div>
+          <canvas id="timelinePresent" class="chart"></canvas>
+        </section>
+
+        <section class="panel hist" aria-label="Gaze history">
+          <div class="panel-head"><h2>Gaze History</h2><span class="hint">last 60s</span></div>
+          <canvas id="timelineGazing" class="chart"></canvas>
+        </section>
+      </section>
     </section>
 
-    <!-- Funnel -->
-    <section class="panel" aria-label="Attention funnel">
-      <div class="panel-head"><h2>Attention funnel</h2><span class="hint">live</span></div>
-      <canvas id="funnel" class="chart"></canvas>
-    </section>
-
-    <!-- Dwell histogram -->
-    <section class="panel" aria-label="Dwell distribution">
-      <div class="panel-head"><h2>Dwell distribution</h2><span class="hint" id="dwellN">0 visits</span></div>
-      <canvas id="dwell" class="chart"></canvas>
-    </section>
-
-    <!-- Floor heatmap -->
-    <section class="panel" aria-label="Position heatmap">
-      <div class="panel-head"><h2>Position heatmap</h2><span class="hint">where people linger</span></div>
-      <canvas id="heatmap" class="chart tall"></canvas>
+    <!-- Secondary band -->
+    <section class="secondary">
+      <section class="panel" aria-label="Attention funnel">
+        <div class="panel-head"><h2>Attention funnel</h2><span class="hint">live</span></div>
+        <canvas id="funnel" class="chart"></canvas>
+      </section>
+      <section class="panel" aria-label="Dwell distribution">
+        <div class="panel-head"><h2>Dwell distribution</h2><span class="hint" id="dwellN">0 visits</span></div>
+        <canvas id="dwell" class="chart"></canvas>
+      </section>
+      <section class="panel" aria-label="Position heatmap">
+        <div class="panel-head"><h2>Position heatmap</h2><span class="hint">where people linger</span></div>
+        <canvas id="heatmap" class="chart tall"></canvas>
+      </section>
     </section>
   </main>
 

@@ -298,7 +298,17 @@ run_dashboard_server() {
     SOC_NAME=$(get_soc_name)
     SOC_HOME=${SCRIPT_PATH}/${SOC_NAME}
 
+    # Mirror attention_demo's config precedence (SD override > packaged) so the
+    # dashboard port can be set in config.json's "dashboard" section; it overrides
+    # the -port passed here (from the registry/default). config.json is the
+    # standard name; argus-config.json is accepted as a legacy fallback.
+    local cfg=""
+    for c in /storage/sd/configs/config.json /storage/sd/configs/argus-config.json \
+             "${SOC_HOME}/configs/config.json" "${SOC_HOME}/configs/argus-config.json"; do
+        [ -f "$c" ] && { cfg="$c"; break; }
+    done
     local args="-port ${port} -dir ${SOC_HOME}/dashboard -upstream ${upstream} -ws-port ${ws_port}"
+    [ -n "$cfg" ] && args="${args} -config ${cfg}"
     if [ "$background" = "true" ]; then
         echo "Starting dashboard-server on port ${port}"
         start-stop-daemon --start --background --make-pidfile --pidfile ${DASHBOARD_SERVER_PIDFILE} \
@@ -306,6 +316,23 @@ run_dashboard_server() {
     else
         ${SOC_HOME}/dashboard-server ${args}
     fi
+}
+
+# Block until a local TCP port is listening (bounded). Used to avoid the
+# attention_demo-vs-mosquitto startup race (see do_start). BusyBox-friendly:
+# uses ss and integer sleeps only.
+wait_for_port() {
+    local port=$1 max=${2:-20} i=0
+    while [ $i -lt $max ]; do
+        if ss -ltn 2>/dev/null | grep -q ":${port} "; then
+            echo "Broker is listening on ${port} (after ${i}s)"
+            return 0
+        fi
+        i=$((i + 1))
+        sleep 1
+    done
+    echo "WARNING: port ${port} not listening after ${max}s; starting attention_demo anyway" >&2
+    return 1
 }
 
 run_mqtt_broker() {
@@ -482,8 +509,13 @@ do_start() {
     if [ "${MQTT_PORT}" != "0" ]; then
         echo "Starting MQTT broker on port ${MQTT_PORT} (ws ${MQTT_WS_PORT})"
         run_mqtt_broker true ${MQTT_PORT} ${MQTT_WS_PORT}
-    else
-        echo "MQTT broker is disabled (port set to 0)"
+        # Wait for the broker to actually be listening before starting
+        # attention_demo: its MQTT publisher makes a SINGLE connect attempt at
+        # startup and does not recover if the broker is not up yet. mosquitto now
+        # loads libwebsockets, so binding can take a moment -- without this wait
+        # attention_demo loses the race and never publishes (dashboard shows no
+        # data until the next restart that happens to win the race).
+        wait_for_port "${MQTT_PORT}" 20
     fi
 
     # Start the attention_demo process as a daemon

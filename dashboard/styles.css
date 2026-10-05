@@ -54,12 +54,8 @@ body {
 .feed-dot.sim  { background: var(--gazing); box-shadow: 0 0 10px rgba(242,178,76,0.7); }
 .feed-dot.down { background: #b3443f; }
 
-/* Grid layout */
-.grid {
-  display: grid; gap: var(--gap); padding: var(--gap);
-  grid-template-columns: repeat(12, 1fr);
-  grid-auto-rows: minmax(10px, auto);
-}
+/* Layout */
+main { padding: var(--gap); display: flex; flex-direction: column; gap: var(--gap); }
 .panel {
   background: linear-gradient(180deg, var(--panel), var(--panel-2));
   border: 1px solid var(--line); border-radius: var(--radius);
@@ -67,39 +63,55 @@ body {
 }
 .panel-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 10px; }
 .panel-head h2 { font-size: 13px; font-weight: 600; margin: 0; text-transform: uppercase; letter-spacing: 1px; color: var(--ink-2); }
-.hint, .k-sub { font-size: 11px; color: var(--muted); }
+.hint { font-size: 11px; color: var(--muted); }
 
-.hero { grid-column: span 7; grid-row: span 2; }
-.kpis { grid-column: span 5; display: grid; gap: var(--gap); grid-template-columns: repeat(3, 1fr); }
-.panel[aria-label="Attention over time"] { grid-column: span 5; }
-.panel[aria-label="Attention funnel"] { grid-column: span 7; }
-.panel[aria-label="Dwell distribution"] { grid-column: span 6; }
-.panel[aria-label="Position heatmap"] { grid-column: span 6; }
-
-@media (max-width: 1100px) {
-  .hero, .kpis, .panel[aria-label="Attention over time"],
-  .panel[aria-label="Attention funnel"], .panel[aria-label="Dwell distribution"],
-  .panel[aria-label="Position heatmap"] { grid-column: span 12; }
-  .hero { grid-row: auto; }
+/* Primary view: video left, data right, same height */
+.stage-row {
+  display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); gap: var(--gap);
+  height: calc(100vh - 92px); min-height: 460px;
 }
-@media (max-width: 560px) { .kpis { grid-template-columns: repeat(2, 1fr); } }
+.hero { display: flex; flex-direction: column; min-height: 0; }
+.hero .stage { flex: 1; min-height: 0; }
+
+/* Data column: KPI grid + two history graphs, flex-sized to the video height */
+.data-col { display: flex; flex-direction: column; gap: var(--gap); min-height: 0; }
+.kpis { flex: 1.15; min-height: 0; display: grid; gap: var(--gap); grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(2, 1fr); }
+.panel.hist { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.panel.hist .chart { flex: 1; height: auto; min-height: 0; }
+
+/* Secondary band */
+.secondary { display: grid; gap: var(--gap); grid-template-columns: repeat(12, 1fr); }
+.secondary .panel[aria-label="Attention funnel"] { grid-column: span 4; }
+.secondary .panel[aria-label="Dwell distribution"] { grid-column: span 4; }
+.secondary .panel[aria-label="Position heatmap"] { grid-column: span 4; }
+
+@media (max-width: 1000px) {
+  .stage-row { grid-template-columns: 1fr; height: auto; }
+  .hero .stage { min-height: 300px; }
+  .panel.hist .chart { height: 180px; flex: none; }
+  .secondary .panel { grid-column: 1 / span 12; }
+}
 
 /* Live stage */
-.stage { position: relative; width: 100%; height: 100%; min-height: 280px;
+.stage { position: relative; width: 100%; height: 100%; min-height: 240px;
   background: #000; border-radius: 10px; overflow: hidden; display: flex; }
 #video { width: 100%; height: 100%; object-fit: contain; display: block; }
 #overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 
-/* KPI tiles */
+/* KPI tiles -- big numbers scaled to the tile via container-query units */
 .tile {
   background: var(--panel-2); border: 1px solid var(--line); border-radius: 12px;
-  padding: 12px 14px; display: flex; flex-direction: column; gap: 2px; position: relative; overflow: hidden;
+  padding: 6px 10px; min-height: 0; overflow: hidden; container-type: size;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 2px;
 }
-.k-label { font-size: 11px; color: var(--ink-2); text-transform: uppercase; letter-spacing: 0.6px; }
-.k-val { font-size: 34px; font-weight: 700; line-height: 1.05; font-variant-numeric: tabular-nums; }
+.k-label { font-size: clamp(10px, 7cqh, 14px); color: var(--ink-2); text-transform: uppercase; letter-spacing: 0.8px; }
+.k-val {
+  font-weight: 750; line-height: 1; font-variant-numeric: tabular-nums;
+  width: 100%; white-space: nowrap;
+  /* Scale to the tile; clamp gives a floor/ceiling if cq units are indefinite. */
+  font-size: clamp(1.9rem, min(30cqw, 52cqh), 6rem);
+}
 .k-val.amber { color: var(--gazing-glow); }
-.k-sub { margin-top: 2px; }
-.k-spark { position: absolute; right: 0; bottom: 0; left: 0; height: 22px; opacity: 0.5; }
 
 /* Charts */
 .chart { width: 100%; height: 190px; display: block; }
