@@ -111,7 +111,7 @@ TEST_F(ConfigTest, LoadMinimalConfigWithDefaults) {
     // Verify defaults applied
     EXPECT_EQ(cfg.input_source, "rtsp");  // Default input source
     EXPECT_EQ(cfg.input_source_priority, "config");  // Default priority
-    EXPECT_EQ(cfg.log_level, "info");  // Default log level
+    EXPECT_EQ(cfg.log_level, "warn");  // Default log level (set to "warn" in f9139ea)
     EXPECT_FALSE(cfg.enable_frame_output);  // Default disabled
 }
 

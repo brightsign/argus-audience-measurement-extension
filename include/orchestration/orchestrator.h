@@ -100,6 +100,12 @@ private:
 
   // ---- threads ----
   void supervisor_loop() noexcept;      // monitors health + heartbeats, triggers recovery
+
+  // Run the person tracker once against the latest YOLOX detections in fusion_.
+  // Called every supervisor-loop iteration (~10 Hz) so association samples fast
+  // enough to follow a walking person, independent of the 1 Hz analytics publish.
+  // Supervisor-thread only (keeps the tracker single-threaded).
+  std::vector<TrackedBox> update_person_tracks(int64_t now_ns) noexcept;
   
   // New multi-model worker threads
   void capture_loop_threadfn() noexcept;     // Reads camera, fans out to mailboxes
@@ -185,7 +191,9 @@ private:
 
   // Person tracker with stable GUID assignment
   Tracker person_tracker_{TrackerConfig{
-    .iou_match_thresh    = 0.35f,       // IoU threshold for association
+    .tracker_core        = "byte",      // ByteTrack + Kalman: predicts motion across gaps, re-attaches the same ID
+    .byte_max_age        = 30,          // ~3s coast @ ~10 Hz tracker rate before a lost track is dropped (re-ID window)
+    .iou_match_thresh    = 0.35f,       // IoU threshold for association (legacy core only)
     .confirm_hits        = 2,           // Need 2 hits to confirm (faster blue box on entry)
     .max_missed          = 8,           // ~0.27s @ 30fps — survives brief occlusion without ghost
     .min_det_score       = 0.35f,       // Match external pre-filter threshold
@@ -205,6 +213,16 @@ private:
     .dir_decay_per_s     = 0.5f,        // V6.2: Confidence decay rate
     .low_score_thresh    = 0.80f        // V6.2: Dampen direction when score < 0.80
   }};
+
+  // Most recent tracker output, refreshed at ~10 Hz by update_person_tracks() and
+  // consumed by the 1 Hz analytics publish. Supervisor-thread only, so no lock.
+  std::vector<TrackedBox> latest_tracks_;
+
+  // enter/exit are one-shot flags the tracker raises on a single ~10 Hz update and
+  // then clears. Because publishing is only 1 Hz, latch them per track id across the
+  // publish window (bit0=enter, bit1=exit) so visitor/exit counters are not lost.
+  // Applied to the outgoing tracks and cleared once per publish. Supervisor-thread only.
+  std::unordered_map<int, uint8_t> enter_exit_latch_;
 
   // Emission cache to hold last non-empty tracks (prevents people:0 gaps)
   struct EmitCache {

@@ -536,7 +536,7 @@ do_start() {
 
         # Start the analytics dashboard server (proxies /video from the stream
         # server; serves the ./dashboard UI). Registry override; 0 disables.
-        DASHBOARD_PORT=8081
+        DASHBOARD_PORT=20300
         reg_dashboard_port=$(registry networking bs-argus-dashboard-port)
         if [ -n "${reg_dashboard_port}" ]; then
             DASHBOARD_PORT=${reg_dashboard_port}

@@ -205,25 +205,25 @@ Configure the port via the BrightSign registry key `networking.bs-image-stream-s
 
 ## Analytics Dashboard
 
-A live "mission-control" dashboard runs on the player at **`http://<PLAYER_IP>:8081`** by default. It visualizes the `analytics/v7.0` stream in real time: the live frame with per-track overlays, KPI tiles (people, gazing, attention rate, avg dwell, peak, NPU/FPS), an attention timeline (present vs. gazing), an attention funnel (detected → in-ROI → looked → engaged), a dwell-time distribution, and a position heatmap.
+A live "mission-control" dashboard runs on the player at **`http://<PLAYER_IP>:20300`** by default. It visualizes the `analytics/v7.0` stream in real time: the live frame with per-track overlays, KPI tiles (people, gazing, attention rate, avg dwell, peak, NPU/FPS), an attention timeline (present vs. gazing), an attention funnel (detected → in-ROI → looked → engaged), a dwell-time distribution, and a position heatmap.
 
 How it is wired:
 
 - A small **`dashboard-server`** (Go, in this repo under `dashboard-server/`) serves the static UI in `dashboard/` on its own port and reverse-proxies `/video` from the image streamer, so the frame is same-origin.
 - The browser receives analytics over **MQTT-WebSockets** directly from the bundled mosquitto broker (a `websockets` listener on port **9001**), using a vendored MQTT.js — no internet or CDN required.
-- If no broker is reachable, the dashboard falls back to a **built-in simulator** so it always renders; force it with `http://<PLAYER_IP>:8081/?sim=1`.
+- If no broker is reachable, the dashboard falls back to a **built-in simulator** so it always renders; force it with `http://<PLAYER_IP>:20300/?sim=1`.
 
 Configure the ports in **`config.json`** (the recommended, easiest place) — this overrides the registry/defaults:
 
 ```json
-"dashboard": { "port": 8081, "ws_port": 9001 }
+"dashboard": { "port": 20300, "ws_port": 9001 }
 ```
 
 Or via the BrightSign registry (set the value to `0` to disable a piece):
 
 | Registry key (`networking.*`) | Purpose | Default |
 |---|---|---|
-| `bs-argus-dashboard-port` | dashboard HTTP port | `8081` |
+| `bs-argus-dashboard-port` | dashboard HTTP port | `20300` |
 | `bs-mqtt-ws-port` | mosquitto WebSocket port | `9001` |
 | `bs-image-stream-server-port` | live-frame source (proxied by the dashboard) | `20200` |
 

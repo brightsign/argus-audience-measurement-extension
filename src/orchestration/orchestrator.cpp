@@ -537,6 +537,58 @@ void Orchestrator::stop_threads() noexcept {
           enable_yolo_model_ ? "true" : "false");
 }
 
+std::vector<TrackedBox> Orchestrator::update_person_tracks(int64_t now_ns) noexcept {
+  // Snapshot the latest YOLOX detections and frame height.
+  std::vector<Detection> yolo_dets;
+  float frame_h_f;
+  {
+    std::lock_guard<std::mutex> lk(fusion_.m);
+    yolo_dets = fusion_.yolo_dets;
+    frame_h_f = static_cast<float>(fusion_.frame_height > 0 ? fusion_.frame_height : 480);
+  }
+
+  // Filter to plausible person detections. A face is NOT required: a person facing
+  // away has no detectable face but must still be tracked and counted. Cheap
+  // size/score gates keep limb/hand false positives out.
+  std::vector<Detection> people;
+  people.reserve(yolo_dets.size());
+  for (const auto& det : yolo_dets) {
+    if (det.class_id != 0) continue;                           // person class only
+    if (det.score < 0.35f) continue;                           // catch partially-visible people
+    const int w = static_cast<int>(det.x1 - det.x0);
+    const int h = static_cast<int>(det.y1 - det.y0);
+    if (w * h < 1600) continue;                                // ~40x40 minimum area
+    if (static_cast<float>(h) < 0.12f * frame_h_f) continue;   // reject limb/hand slivers
+    people.push_back(det);
+  }
+
+  // Greedy NMS (IoU > 0.5) to drop duplicate boxes before tracking.
+  std::sort(people.begin(), people.end(),
+            [](const Detection& a, const Detection& b) { return a.score > b.score; });
+  std::vector<Detection> nms_filtered;
+  nms_filtered.reserve(people.size());
+  std::vector<bool> suppressed(people.size(), false);
+  for (size_t i = 0; i < people.size(); ++i) {
+    if (suppressed[i]) continue;
+    nms_filtered.push_back(people[i]);
+    for (size_t j = i + 1; j < people.size(); ++j) {
+      if (suppressed[j]) continue;
+      const float x0 = std::max(people[i].x0, people[j].x0);
+      const float y0 = std::max(people[i].y0, people[j].y0);
+      const float x1 = std::min(people[i].x1, people[j].x1);
+      const float y1 = std::min(people[i].y1, people[j].y1);
+      const float inter = std::max(0.f, x1 - x0) * std::max(0.f, y1 - y0);
+      const float area_i = (people[i].x1 - people[i].x0) * (people[i].y1 - people[i].y0);
+      const float area_j = (people[j].x1 - people[j].x0) * (people[j].y1 - people[j].y0);
+      const float uni = area_i + area_j - inter;
+      if (uni > 0 && (inter / uni) > 0.5f) suppressed[j] = true;
+    }
+  }
+
+  const double ts_s = now_ns * 1e-9;
+  return person_tracker_.update(nms_filtered, ts_s);
+}
+
 void Orchestrator::supervisor_loop() noexcept {
   // Use configured heartbeat timeout, or default based on input type
   // USB cameras are slow (5fps = 200ms per frame), RTSP should be faster
@@ -630,7 +682,20 @@ void Orchestrator::supervisor_loop() noexcept {
       recovery_backoff_ms = 250;  // Reset backoff when healthy
       last_recovery_attempt_ns = 0;
     }
-    
+
+    // Track at supervisor-loop cadence (~10 Hz), not just at publish time. At 1 Hz
+    // a walking person jumps past the tracker's association gates between updates
+    // and spawns a duplicate ID each second; 10 Hz keeps per-update motion small
+    // enough to stay matched. The 1 Hz publish below consumes latest_tracks_.
+    latest_tracks_ = update_person_tracks(now);
+
+    // Latch this tick's one-shot enter/exit flags so the 1 Hz publish below does
+    // not miss events that fired on an intermediate ~10 Hz update.
+    for (const auto& t : latest_tracks_) {
+      if (t.just_entered) enter_exit_latch_[t.id] |= 0x1;
+      if (t.just_exited)  enter_exit_latch_[t.id] |= 0x2;
+    }
+
     // Publish analytics results periodically (every second)
     static int64_t last_publish_ns = 0;
     static uint64_t last_publish_seq = 0;
@@ -650,8 +715,7 @@ void Orchestrator::supervisor_loop() noexcept {
       
       // Build PipelineResult from fusion state
       PipelineResult result{};
-      std::vector<Detection> yolo_dets_copy;  // Copy for tracker update
-      std::vector<TrackedBox> tracks;  // Tracking results
+      std::vector<TrackedBox> tracks;  // Tracking results (from latest_tracks_)
       
       // CRITICAL: Declare snapshot variables outside lock scope for use throughout iteration
       // This prevents race condition where faces are cleared between global count and matching
@@ -660,10 +724,7 @@ void Orchestrator::supervisor_loop() noexcept {
       
       {
         std::lock_guard<std::mutex> lk(fusion_.m);
-        
-        // Copy YOLOX detections for tracker
-        yolo_dets_copy = fusion_.yolo_dets;
-        
+
         // Count YOLOX person detections (class_id == 0 in COCO dataset)
         // Also check confidence score to filter out low-confidence detections
         // De-letterbox params to convert face dets (model/320x320) -> camera space
@@ -806,84 +867,23 @@ void Orchestrator::supervisor_loop() noexcept {
         result.frame_height = fusion_.frame_height; // V6.2: For normalized speed
       }
       
-      // Update person tracker with YOLOX detections (outside lock)
+      // Consume the tracks computed at ~10 Hz by update_person_tracks(). The scope
+      // block is kept so the gaze-association locals below keep their lifetime.
       {
-        // Filter person detections for tracker with enhanced thresholds
-        std::vector<Detection> people;
-        people.reserve(yolo_dets_copy.size());
-        for (const auto& det : yolo_dets_copy) {
-          // Apply stricter filtering: class, score, and area
-          if (det.class_id != 0) continue;  // Person only
-          if (det.score < 0.35f) continue;  // Lowered to catch partially-visible employees
-          
-          // Calculate bbox area
-          int w = static_cast<int>(det.x1 - det.x0);
-          int h = static_cast<int>(det.y1 - det.y0);
-          int area = w * h;
-          if (area < 1600) continue;  // ~40x40 minimum
+        tracks = latest_tracks_;
+        const double ts_s = now * 1e-9;  // seconds, for the emission-cache hold window below
 
-          // Reject limb/hand false positives: must be at least 12% of frame height.
-          const float frame_h_f = static_cast<float>(fusion_.frame_height > 0 ? fusion_.frame_height : 480);
-          if (static_cast<float>(h) < 0.12f * frame_h_f) continue;
-
-          // Reject if no face center lies inside this person bbox (face_dets_snapshot is
-          // already in camera space, built just above in the same iteration).
-          if (!face_dets_snapshot.empty()) {
-            bool found = false;
-            for (const auto& fd : face_dets_snapshot) {
-              const float fcx = (fd.x0 + fd.x1) * 0.5f;
-              const float fcy = (fd.y0 + fd.y1) * 0.5f;
-              if (fcx >= det.x0 && fcx <= det.x1 && fcy >= det.y0 && fcy <= det.y1) {
-                found = true; break;
-              }
-            }
-            if (!found) continue;
-          }
-
-          people.push_back(det);
-        }
-        
-        // Simple NMS to remove duplicate detections (IoU > 0.5)
-        // Sort by score descending
-        std::sort(people.begin(), people.end(), 
-                  [](const Detection& a, const Detection& b) { return a.score > b.score; });
-        
-        std::vector<Detection> nms_filtered;
-        nms_filtered.reserve(people.size());
-        std::vector<bool> suppressed(people.size(), false);
-        
-        for (size_t i = 0; i < people.size(); ++i) {
-          if (suppressed[i]) continue;
-          nms_filtered.push_back(people[i]);
-          
-          // Suppress overlapping boxes
-          for (size_t j = i + 1; j < people.size(); ++j) {
-            if (suppressed[j]) continue;
-            
-            // Calculate IoU
-            float x0 = std::max(people[i].x0, people[j].x0);
-            float y0 = std::max(people[i].y0, people[j].y0);
-            float x1 = std::min(people[i].x1, people[j].x1);
-            float y1 = std::min(people[i].y1, people[j].y1);
-            float inter_w = std::max(0.f, x1 - x0);
-            float inter_h = std::max(0.f, y1 - y0);
-            float inter = inter_w * inter_h;
-            
-            float area_i = (people[i].x1 - people[i].x0) * (people[i].y1 - people[i].y0);
-            float area_j = (people[j].x1 - people[j].x0) * (people[j].y1 - people[j].y0);
-            float uni = area_i + area_j - inter;
-            float iou = (uni > 0) ? (inter / uni) : 0.f;
-            
-            if (iou > 0.5f) {
-              suppressed[j] = true;
-            }
+        // Fold the latched enter/exit one-shots (accumulated at ~10 Hz) into the
+        // tracks being published, then clear the latch so each event is emitted once.
+        for (auto& t : tracks) {
+          const auto it = enter_exit_latch_.find(t.id);
+          if (it != enter_exit_latch_.end()) {
+            t.just_entered = t.just_entered || (it->second & 0x1);
+            t.just_exited  = t.just_exited  || (it->second & 0x2);
           }
         }
-        
-        // Update tracker with filtered detections
-        const double ts_s = now * 1e-9;  // Convert nanoseconds to seconds
-        tracks = person_tracker_.update(nms_filtered, ts_s);
-        
+        enter_exit_latch_.clear();
+
         // Associate face detections with person tracks for gaze data
         // Use snapshot captured earlier to ensure consistency with global count
         
