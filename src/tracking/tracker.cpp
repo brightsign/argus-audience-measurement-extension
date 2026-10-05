@@ -1305,8 +1305,11 @@ void Tracker::update_with_bytetrack(const std::vector<Detection>& dets, double t
     // Update behavior fields (deadband, velocity, direction, ROI, dwell)
     update_behavior_fields(t, ts, fps);
     
-    // Update state
-    if (!bt_tr.confirmed && t.hits >= cfg_.confirm_hits) {
+    // Promote to Confirmed once ByteTrack confirms the track (hits >= n_init) or it
+    // reaches confirm_hits. The previous `!bt_tr.confirmed` guard never fired: byte
+    // sets confirmed exactly when hits >= n_init, so with n_init == confirm_hits the
+    // track stayed Tentative forever and nothing was ever emitted.
+    if (bt_tr.confirmed || t.hits >= cfg_.confirm_hits) {
       t.state = ::TrackState::Confirmed;
     }
     
