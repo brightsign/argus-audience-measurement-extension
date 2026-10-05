@@ -272,11 +272,14 @@ reboot
 
 Building requires an **x86_64 Linux** machine (Ubuntu 20.04+ recommended) with Docker or Podman. The build cross-compiles ARM binaries for the BrightSign players — it cannot run on ARM, macOS, or Windows hosts.
 
-The heavy, box-level assets (the custom cross-compile SDK, the RKNN toolkit, and the compiled models) are **not** built in this repo. They are provisioned **once per build box** by the sibling [`brightsign-sdk-builder`](https://github.com/brightsign/brightsign-sdk-builder) repo into a shared cache, and this repo builds against that cache. Provision it once from a checkout parallel to this one:
+The heavy, box-level assets (the custom cross-compile SDK, the RKNN toolkit, and the compiled models) are **not** built in this repo. They are provisioned **once per build box** by the sibling [`brightsign-sdk-builder`](https://github.com/brightsign/brightsign-sdk-builder) repo into a shared cache, and this repo builds against that cache. Clone and build it once per build box:
 
 ```bash
-cd ../brightsign-sdk-builder && make build    # one-time per build box (downloads OS source, builds SDK; hours)
+git clone https://github.com/brightsign/brightsign-sdk-builder.git
+cd brightsign-sdk-builder && make build    # one-time per build box (downloads OS source, builds SDK; hours)
 ```
+
+The cache lives outside any single repo, so after that first build this and our other example extensions all reuse it — no per-repo SDK rebuild.
 
 Then, in this repo:
 
