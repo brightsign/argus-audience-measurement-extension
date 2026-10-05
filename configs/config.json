@@ -82,7 +82,7 @@
 
   "_comment_dashboard": "Analytics dashboard web server. 'port' is the HTTP port (http://<player>:<port>); 'ws_port' is the mosquitto WebSocket port the dashboard subscribes to. These override the networking.bs-argus-dashboard-port / bs-mqtt-ws-port registry keys.",
   "dashboard": {
-    "port": 8081,
+    "port": 20300,
     "ws_port": 9001
   },
 

@@ -26,7 +26,7 @@ import (
 
 func main() {
 	var (
-		port     = flag.Int("port", 8081, "HTTP port for the dashboard")
+		port     = flag.Int("port", 20300, "HTTP port for the dashboard")
 		dir      = flag.String("dir", "./dashboard", "directory of dashboard static files")
 		upstream = flag.String("upstream", "127.0.0.1:8080", "image-stream-server host:port for /video,/image,/health proxy")
 		wsPort   = flag.Int("ws-port", 9001, "mosquitto WebSocket port advertised to the dashboard")

@@ -208,7 +208,7 @@ std::string MqttPublisher::make_payload_locked() const {
     "{\"schema\":\"analytics/v7.0\","
     "\"ts\":%.2f,\"device\":\"%s\",\"stream\":\"%s\","
     "\"frame_w\":%d,\"frame_h\":%d,"
-    "\"model\":\"yolox_s\",\"fw_version\":\"7.0.0\","
+    "\"model\":\"yolox_s\",\"fw_version\":\"0.7.0\","
     "\"npu_load\":%.1f,"
     "\"people\":%d,\"people_confident\":%d,"
     "\"gaze\":%d,\"fps\":%d,"
