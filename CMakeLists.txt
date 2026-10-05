@@ -452,6 +452,19 @@ add_custom_target(argus_exporter ALL
   VERBATIM
 )
 
+# Build the in-repo dashboard-server (Go, stdlib only) for the player (arm64).
+# It serves the ./dashboard analytics UI on its own port.
+set(DASHBOARD_SERVER_SRC "${CMAKE_SOURCE_DIR}/dashboard-server")
+set(DASHBOARD_SERVER_BINARY "${CMAKE_BINARY_DIR}/dashboard-server-arm64")
+
+add_custom_target(dashboard_server ALL
+  COMMAND ${CMAKE_COMMAND} -E echo "Building dashboard-server (Go)..."
+  COMMAND bash ${CMAKE_SOURCE_DIR}/scripts/build-dashboard-server.sh ${DASHBOARD_SERVER_SRC} ${DASHBOARD_SERVER_BINARY} ${CMAKE_BINARY_DIR} arm64
+  WORKING_DIRECTORY ${CMAKE_BINARY_DIR}
+  COMMENT "Building dashboard-server"
+  VERBATIM
+)
+
 # Copy shared libs and models. Copy the Go binary only if it exists.
 if(HAVE_RGA)
   add_custom_command(TARGET attention_demo POST_BUILD
@@ -460,6 +473,7 @@ if(HAVE_RGA)
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/install/${SOC_DIR}/model $<TARGET_FILE_DIR:attention_demo>/model
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_BINARY_DIR}/image-stream-server $<TARGET_FILE_DIR:attention_demo>/image-stream-server || ${CMAKE_COMMAND} -E true
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_BINARY_DIR}/argus-exporter $<TARGET_FILE_DIR:attention_demo>/argus-exporter || ${CMAKE_COMMAND} -E true
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_BINARY_DIR}/dashboard-server $<TARGET_FILE_DIR:attention_demo>/dashboard-server || ${CMAKE_COMMAND} -E true
   COMMENT "Copying libraries and binaries to build directory"
   )
 else()
@@ -468,6 +482,7 @@ else()
     COMMAND ${CMAKE_COMMAND} -E copy_directory ${CMAKE_SOURCE_DIR}/install/${SOC_DIR}/model $<TARGET_FILE_DIR:attention_demo>/model
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_BINARY_DIR}/image-stream-server $<TARGET_FILE_DIR:attention_demo>/image-stream-server || ${CMAKE_COMMAND} -E true
     COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_BINARY_DIR}/argus-exporter $<TARGET_FILE_DIR:attention_demo>/argus-exporter || ${CMAKE_COMMAND} -E true
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_BINARY_DIR}/dashboard-server $<TARGET_FILE_DIR:attention_demo>/dashboard-server || ${CMAKE_COMMAND} -E true
   COMMENT "Copying libraries and binaries to build directory (no RGA)"
   )
 endif()
@@ -478,6 +493,7 @@ if(TARGET mosquitto_broker)
 endif()
 add_dependencies(attention_demo image_stream_server)
 add_dependencies(attention_demo argus_exporter)
+add_dependencies(attention_demo dashboard_server)
 
 # install target and libraries
 set(CMAKE_INSTALL_PREFIX ${CMAKE_SOURCE_DIR}/install/${SOC_DIR})
@@ -498,6 +514,18 @@ install(FILES ${CMAKE_BINARY_DIR}/argus-exporter
                    GROUP_READ GROUP_EXECUTE
                    WORLD_READ WORLD_EXECUTE
         OPTIONAL)
+
+# Install the dashboard-server binary from the copied location
+install(FILES ${CMAKE_BINARY_DIR}/dashboard-server
+        DESTINATION ./
+        PERMISSIONS OWNER_READ OWNER_WRITE OWNER_EXECUTE
+                   GROUP_READ GROUP_EXECUTE
+                   WORLD_READ WORLD_EXECUTE
+        OPTIONAL)
+
+# Install the dashboard static UI (served by dashboard-server)
+install(DIRECTORY ${CMAKE_SOURCE_DIR}/dashboard
+        DESTINATION ./)
 
 # Install argus-config.json to the install directory
 install(FILES ${CMAKE_SOURCE_DIR}/configs/argus-config.json

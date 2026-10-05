@@ -1,6 +1,7 @@
 backups/
 build/
 build_*/
+build_dashboard/
 install/
 model/
 staging/

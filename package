@@ -301,6 +301,21 @@ copy_binaries() {
             warn "argus-exporter not found in $source_dir"
         fi
 
+        # Copy dashboard-server binary (analytics dashboard web server)
+        if [[ -f "$source_dir/dashboard-server" ]]; then
+            cp "$source_dir/dashboard-server" "$package_soc_dir/"
+            chmod +x "$package_soc_dir/dashboard-server"
+        else
+            warn "dashboard-server not found in $source_dir"
+        fi
+
+        # Copy dashboard static UI (served by dashboard-server)
+        if [[ -d "$install_dir/dashboard" ]]; then
+            cp -r "$install_dir/dashboard" "$package_soc_dir/"
+        else
+            warn "dashboard/ not found in $install_dir"
+        fi
+
         # Copy mosquitto broker binary and utilities
         mkdir -p "$package_soc_dir/bin"
         if [[ -f "$install_dir/bin/mosquitto" ]]; then

@@ -23,6 +23,7 @@ PIDFILE="/var/run/${DAEMON_NAME}.pid"
 STREAM_SERVER_PIDFILE="/var/run/bsext-image-stream-server.pid"
 MQTT_BROKER_PIDFILE="/var/run/bsext-mosquitto.pid"
 ARGUS_EXPORTER_PIDFILE="/var/run/bsext-argus-exporter.pid"
+DASHBOARD_SERVER_PIDFILE="/var/run/bsext-dashboard-server.pid"
 
 # defaults -- these can be overridden by environment variables
 DISABLE_AUTO_START=false
@@ -286,26 +287,57 @@ run_argus_exporter() {
     fi
 }
 
+run_dashboard_server() {
+    echo "run_dashboard_server called with background=$1"
+    local background=$1
+    local port=$2          # dashboard HTTP port
+    local upstream=$3       # image-stream-server host:port for /video proxy
+    local ws_port=$4        # mosquitto websocket port advertised to the browser
+    echo "run_dashboard_server called with port=${port} upstream=${upstream} ws_port=${ws_port}"
+
+    SOC_NAME=$(get_soc_name)
+    SOC_HOME=${SCRIPT_PATH}/${SOC_NAME}
+
+    local args="-port ${port} -dir ${SOC_HOME}/dashboard -upstream ${upstream} -ws-port ${ws_port}"
+    if [ "$background" = "true" ]; then
+        echo "Starting dashboard-server on port ${port}"
+        start-stop-daemon --start --background --make-pidfile --pidfile ${DASHBOARD_SERVER_PIDFILE} \
+                          --exec ${SOC_HOME}/dashboard-server -- ${args}
+    else
+        ${SOC_HOME}/dashboard-server ${args}
+    fi
+}
+
 run_mqtt_broker() {
     echo "run_mqtt_broker called with background=$1"
     local background=$1
-    local port=${2:-1883}  # Default MQTT port
-    echo "run_mqtt_broker called with port=${port}"
-    
+    local port=${2:-1883}  # Default MQTT (TCP) port
+    local ws_port=${3:-9001}  # WebSocket listener for the browser dashboard (0 disables)
+    echo "run_mqtt_broker called with port=${port} ws_port=${ws_port}"
+
     SOC_NAME=$(get_soc_name)
     SOC_HOME=${SCRIPT_PATH}/${SOC_NAME}
-    
+
     # Create minimal mosquitto config if it doesn't exist
     local mqtt_conf="/tmp/mosquitto_${port}.conf"
     cat > ${mqtt_conf} <<EOF
 # Minimal mosquitto configuration for extension
 listener ${port} 0.0.0.0
+protocol mqtt
 allow_anonymous true
 persistence false
 log_dest stdout
 log_type error
 log_type warning
 EOF
+    # Second listener: MQTT over WebSockets so the browser dashboard can subscribe
+    # directly to analytics. Harmless if nothing connects.
+    if [ -n "${ws_port}" ] && [ "${ws_port}" != "0" ]; then
+        cat >> ${mqtt_conf} <<EOF
+listener ${ws_port} 0.0.0.0
+protocol websockets
+EOF
+    fi
     
     if [ "$background" = "true" ]; then
         # Run as a daemon in the background
@@ -415,9 +447,14 @@ do_start() {
         pkill -9 -f "argus-exporter" 2>/dev/null || true
         sleep 1
     fi
+    if pgrep -f "dashboard-server" >/dev/null 2>&1; then
+        echo "  Found existing dashboard-server process, killing it..."
+        pkill -9 -f "dashboard-server" 2>/dev/null || true
+        sleep 1
+    fi
 
     # Clean up stale PID files
-    rm -f ${PIDFILE} ${STREAM_SERVER_PIDFILE} ${MQTT_BROKER_PIDFILE} ${ARGUS_EXPORTER_PIDFILE} 2>/dev/null || true
+    rm -f ${PIDFILE} ${STREAM_SERVER_PIDFILE} ${MQTT_BROKER_PIDFILE} ${ARGUS_EXPORTER_PIDFILE} ${DASHBOARD_SERVER_PIDFILE} 2>/dev/null || true
 
     # Demo license: The C++ binary reads expires.json directly from the extension
     # directory (${SCRIPT_PATH}/expires.json) - no copy needed.
@@ -435,9 +472,16 @@ do_start() {
         MQTT_PORT=${reg_mqtt_port}
     fi
     
+    # WebSocket listener port for the browser dashboard (registry override; 0 disables).
+    MQTT_WS_PORT=9001
+    reg_mqtt_ws_port=$(registry networking bs-mqtt-ws-port)
+    if [ -n "${reg_mqtt_ws_port}" ]; then
+        MQTT_WS_PORT=${reg_mqtt_ws_port}
+    fi
+
     if [ "${MQTT_PORT}" != "0" ]; then
-        echo "Starting MQTT broker on port ${MQTT_PORT}"
-        run_mqtt_broker true ${MQTT_PORT}
+        echo "Starting MQTT broker on port ${MQTT_PORT} (ws ${MQTT_WS_PORT})"
+        run_mqtt_broker true ${MQTT_PORT} ${MQTT_WS_PORT}
     else
         echo "MQTT broker is disabled (port set to 0)"
     fi
@@ -457,6 +501,19 @@ do_start() {
     else
         # Start the image stream server process as a daemon
         run_stream_server true ${STREAM_SERVER_PORT}
+
+        # Start the analytics dashboard server (proxies /video from the stream
+        # server; serves the ./dashboard UI). Registry override; 0 disables.
+        DASHBOARD_PORT=8081
+        reg_dashboard_port=$(registry networking bs-argus-dashboard-port)
+        if [ -n "${reg_dashboard_port}" ]; then
+            DASHBOARD_PORT=${reg_dashboard_port}
+        fi
+        if [ "${DASHBOARD_PORT}" = "0" ]; then
+            echo "Dashboard server is disabled (port set to 0)"
+        else
+            run_dashboard_server true ${DASHBOARD_PORT} "127.0.0.1:${STREAM_SERVER_PORT}" ${MQTT_WS_PORT}
+        fi
     fi
 
     # Start argus-exporter (Prometheus metrics exporter)
@@ -531,6 +588,16 @@ do_stop() {
             ps | grep "attention_demo" | grep -v grep || true
         fi
     done
+
+    # Stop dashboard-server
+    echo "Stopping dashboard-server..."
+    pkill -9 -f "dashboard-server" 2>/dev/null || true
+    killall -9 dashboard-server 2>/dev/null || true
+    if [ -f "${DASHBOARD_SERVER_PIDFILE}" ]; then
+        local dpid=$(cat ${DASHBOARD_SERVER_PIDFILE} 2>/dev/null)
+        if [ -n "$dpid" ]; then kill -9 $dpid 2>/dev/null || true; pkill -9 -P $dpid 2>/dev/null || true; fi
+        rm -f ${DASHBOARD_SERVER_PIDFILE}
+    fi
 
     # Stop image-stream-server (ALWAYS kill by name to handle all instances)
     echo "Stopping image-stream-server..."

@@ -53,8 +53,8 @@ DOCS_MD := $(DOCS_DIR)/argus-api-integration-guide.md \
 DOCS_PDF := $(DOCS_MD:.md=.pdf)
 
 .PHONY: help build build-demo build-update build-demo-update build-gst-plugins \
-	fetch-sdk build-models sync-models package package-demo copy cache-info cache-clean \
-	clean clean-all run-tests test install-tools build-docs pdf
+	fetch-sdk build-models sync-models package package-demo copy dashboard-server \
+	cache-info cache-clean clean clean-all run-tests test install-tools build-docs pdf
 
 help:                ## Print available targets
 	@echo "Argus Audience Measurement Extension -- build targets"
@@ -90,6 +90,9 @@ build-demo-update:   ## Demo build, forcing auxiliary sources to re-pull
 build-gst-plugins:   ## (Optional) Build GStreamer MP4 plugins from the cached OE tree
 	bash scripts/build-gst-isomp4-plugin.sh
 
+dashboard-server:    ## Cross-compile the in-repo dashboard-server (arm64) to verify it builds
+	bash scripts/build-dashboard-server.sh dashboard-server $(CURDIR)/build_dashboard/dashboard-server-arm64 $(CURDIR)/build_dashboard arm64
+
 package: build       ## Build all SoCs (which syncs models) and create the extension zips (production)
 	./package
 
@@ -111,12 +114,14 @@ copy:                ## scp the newest ext zip + install-on-player.sh to the pla
 	zip="$(ZIP)"; [ -n "$$zip" ] || zip=$$(ls -t argus-ext-*.zip argus-demo-ext-*.zip 2>/dev/null | head -n1); \
 	if [ -z "$$zip" ]; then echo "No ext zip found -- run 'make package' first"; exit 1; fi; \
 	echo "Copying $$zip + install-on-player.sh -> $(BS_USER)@$$BS_PLAYER:$(BS_DEST)"; \
-	sshpass -p "$$BS_PASSWORD" scp -p -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$$zip" install-on-player.sh "$(BS_USER)@$$BS_PLAYER:$(BS_DEST)"; \
+	sshpass -p "$$BS_PASSWORD" scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "$$zip" install-on-player.sh "$(BS_USER)@$$BS_PLAYER:$(BS_DEST)" && \
 	echo "Copied. On the player's root Linux shell, run:  sh $(BS_DEST)install-on-player.sh"
-	@# NOTE: no `scp -O`. The player's SSH login is the BrightSign REPL, not a Unix
-	@# shell; legacy SCP (-O) runs `scp -t` through that REPL and fails with
-	@# "Unknown command: -c scp -t". Default scp uses the SFTP subsystem, which
-	@# dropbear serves independently of the REPL, so it works.
+	@# NOTE: no `scp -O` and no `scp -p`.
+	@#  -O: the player's SSH login is the BrightSign REPL, not a Unix shell; legacy
+	@#      SCP runs `scp -t` through that REPL -> "Unknown command: -c scp -t".
+	@#      Default scp uses the SFTP subsystem, which dropbear serves independently.
+	@#  -p: /storage/sd is a FAT-type mount with no Unix mode/mtime; preserving
+	@#      attributes makes scp fsetstat fail with "remote fsetstat: Permission denied".
 
 cache-info:          ## Show the resolved shared-cache location and what is present
 	@echo "ARGUS_CACHE_DIR : $(if $(ARGUS_CACHE_DIR),$(ARGUS_CACHE_DIR) (override),(unset -> default))"
@@ -139,6 +144,7 @@ clean:               ## Remove this repo's build artifacts (leaves the shared ca
 	rm -f *.pdf docs/*.pdf
 	rm -f *.zip
 	rm -f install-on-player.sh
+	rm -rf build_dashboard
 
 clean-all: clean     ## Also remove install/ and generated docs (leaves the shared cache)
 	rm -rf install
