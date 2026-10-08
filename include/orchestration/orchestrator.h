@@ -155,6 +155,14 @@ private:
   // ---- Frame sequencing ----
   std::atomic<uint64_t> frame_seq_{0};
 
+  // ---- File-playback source position (file input only) ----
+  // Written by the capture thread for each decoded frame; read by the supervisor
+  // thread when it builds the ~1 Hz analytics PipelineResult. has_src_position_
+  // stays false for live camera/RTSP, so those messages omit the fields.
+  std::atomic<int64_t> latest_src_frame_{0};
+  std::atomic<double>  latest_src_pts_ms_{0.0};
+  std::atomic<bool>    has_src_position_{false};
+
   // ---- Fusion state: shared analytics result from both models ----
   struct FusionState {
     std::mutex m;

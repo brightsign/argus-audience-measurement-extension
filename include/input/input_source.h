@@ -24,6 +24,13 @@ struct FrameView {
   int orig_width{0};     // Original camera width (e.g., 1280)
   int orig_height{0};    // Original camera height (e.g., 720)
   //ColorLayout fmt{ColorLayout::NV12};
+
+  // File-playback source position. Set only by FileInputSource so an external
+  // test harness can map an analytics message to an exact frame of a known clip.
+  // Live camera (USB/V4L2) and RTSP sources leave has_source_position=false.
+  int64_t source_frame_index{0};   // 0-based index within the current playback pass
+  double  source_pts_ms{0.0};      // media timestamp (ms); 0 means unavailable
+  bool    has_source_position{false};
 };
 
 struct CaptureFrame {

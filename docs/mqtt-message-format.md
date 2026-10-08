@@ -16,7 +16,7 @@ The Argus analytics system publishes real-time tracking data via MQTT to the top
 
 ```json
 {
-  "schema": "analytics/v7.0",
+  "schema": "analytics/v7.1",
   "ts": 164.68,
   "device": "XS-156",
   "stream": "rtsp://192.168.0.203:8554/live",
@@ -126,6 +126,16 @@ The Argus analytics system publishes real-time tracking data via MQTT to the top
     "gaze": { "type": "integer", "minimum": 0 },
     "gaze_conf": { "type": "number", "minimum": 0, "maximum": 1 },
     "fps": { "type": "integer", "minimum": 0 },
+    "src_frame": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Optional. File-playback mode only. 0-based index of the most-recently-decoded source frame reflected by this message, counting every decoded frame and resetting on loop. Absent for live camera / RTSP."
+    },
+    "src_pts_ms": {
+      "type": "number",
+      "minimum": 0,
+      "description": "Optional. File-playback mode only. Media timestamp (ms) of that frame. Best-effort; absent when the decoder cannot provide it."
+    },
     "roi": {
       "type": "object",
       "properties": {
@@ -242,7 +252,7 @@ The Argus analytics system publishes real-time tracking data via MQTT to the top
 **Schema version identifier**
 
 - **Format:** `"analytics/v{major}.{minor}"`
-- **Current:** `"analytics/v7.0"`
+- **Current:** `"analytics/v7.1"`
 - **Purpose:** Allows consumers to detect schema changes and handle compatibility
 
 ### Client Compatibility & Fallback Behavior
@@ -280,7 +290,11 @@ if (parseInt(major) > 7) {
 
 ### Version History & Breaking Changes
 
-**v7.0 (Current) - ByteTrack Era**
+**v7.1 (Current) - File-Playback Source Position**
+
+- [x] __NEW:__ Added optional `src_frame` and `src_pts_ms` top-level fields, present only in file-playback mode, for aligning analytics messages to a known clip. Additive and backward-compatible: live camera / RTSP output is unchanged, and the fields are not in the `required` set.
+
+**v7.0 - ByteTrack Era**
 
 - [x] **BREAKING:** Changed from IoU-based to ByteTrack tracking (IDs more stable)
 - [x] **BREAKING:** `speed` now from Kalman Filter velocity (not bbox deltas)
@@ -424,6 +438,27 @@ if (parseInt(major) > 7) {
    - Calculate frame diagonal for speed normalization
    - Validate bbox coordinates
    - ROI boundary calculations
+
+### `src_frame` (integer, optional — file playback only)
+
+**Source frame index within the clip**
+
+- **Description:** 0-based index of the most-recently-decoded source frame reflected by this message. Counts **every** decoded frame (including frames whose detection was skipped), so it tracks true clip position, and resets to 0 each time the clip loops.
+- **Type:** Integer
+- **When Present:** Only when the input source is a video **file**. Omitted entirely for live camera (USB/V4L2) and RTSP sources.
+- **Example:** `1832` = this message reflects frame 1832 of the current playback pass
+- **Usage:**
+   - Align each analytics message to an exact frame of a known, labeled test video
+   - Immune to wall-clock drift from non-real-time playback, frame skipping, and startup warmup
+
+### `src_pts_ms` (number, optional — file playback only)
+
+**Media timestamp of the source frame**
+
+- **Description:** Media timestamp (milliseconds) of the frame identified by `src_frame`.
+- **Type:** Floating-point number
+- **When Present:** Best-effort. Present only in file-playback mode **and** only when the decoder can report the position; omitted when unavailable.
+- **Example:** `61066.7` = 61.0667 seconds into the clip
 
 ### `model` (string)
 
@@ -1271,7 +1306,7 @@ A track will show `speed: 0.0, dir: "?"` (stationary) if **any** of these condit
 
 ```json
 {
-  "schema": "analytics/v7.0",
+  "schema": "analytics/v7.1",
   "ts": 120.45,
   "device": "XS-156",
   "stream": "/dev/video0",
@@ -1311,7 +1346,7 @@ A track will show `speed: 0.0, dir: "?"` (stationary) if **any** of these condit
 
 ```json
 {
-  "schema": "analytics/v7.0",
+  "schema": "analytics/v7.1",
   "ts": 450.67,
   "device": "XS-156",
   "stream": "/dev/video0",
@@ -1367,7 +1402,7 @@ A track will show `speed: 0.0, dir: "?"` (stationary) if **any** of these condit
 
 ```json
 {
-  "schema": "analytics/v7.0",
+  "schema": "analytics/v7.1",
   "ts": 650.12,
   "device": "XS-156",
   "stream": "/dev/video0",
@@ -1423,7 +1458,7 @@ A track will show `speed: 0.0, dir: "?"` (stationary) if **any** of these condit
 
 ```json
 {
-  "schema": "analytics/v7.0",
+  "schema": "analytics/v7.1",
   "ts": 955.23,
   "device": "XS-156",
   "stream": "/dev/video0",
@@ -1514,7 +1549,7 @@ A track will show `speed: 0.0, dir: "?"` (stationary) if **any** of these condit
 
 ```json
 {
-  "schema": "analytics/v7.0",
+  "schema": "analytics/v7.1",
   "ts": 1024.56,
   "device": "XS-156",
   "stream": "/dev/video0",

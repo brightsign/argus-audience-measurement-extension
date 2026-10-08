@@ -1,0 +1,110 @@
+{
+  "_comment": "FILE PLAYBACK TEST CONFIG - Run against a recorded video file instead of a live camera. Useful for offline testing/tuning without hardware.",
+
+  "_comment_input_source": "Select 'rtsp', 'usb', or 'file' for your input source",
+  "input_source": "file",
+
+  "_comment_device_id": "Device identifier for MQTT messages. Leave empty to auto-detect from MAC address",
+  "device_id": "file-playback-test",
+
+  "input": {
+    "rtsp_url": "rtsp://192.168.0.203:8554/live",
+    "usb_device": "/dev/video0",
+    "_comment_file_path": "Point this at the video on the player. /storage/sd is the SD card.",
+    "file_path": "/storage/sd/000921246-shopping-area.mov",
+
+    "usb": {
+      "width": 640,
+      "height": 480,
+      "fps": 30
+    },
+    "rtsp": {
+      "latency_ms": 100
+    },
+    "file": {
+      "_comment_loop": "Loop the clip forever so the test keeps running after the file ends",
+      "loop": true
+    }
+  },
+
+  "input_source_priority": "config",
+
+  "primary_model": {
+    "name": "retinaface",
+    "model_path": "model/retinaface.rknn",
+    "input_size": [320, 320],
+    "npu_core": 0,
+    "norm": {
+      "mean": [123.675, 116.28, 103.53],
+      "std":  [58.395, 57.12, 57.375]
+    },
+    "conf_threshold": 0.3,
+    "nms_threshold": 0.45
+  },
+
+  "secondary_models": [
+    {
+      "name": "yolox",
+      "model_path": "model/yolox_s.rknn",
+      "input_size": [640, 640],
+      "npu_core": 0,
+      "norm": {
+        "mean": [0, 0, 0],
+        "std": [1, 1, 1]
+      },
+      "conf_threshold": 0.5,
+      "nms_threshold": 0.45
+    }
+  ],
+
+  "processing": {
+    "th": { "score": 0.5, "iou": 0.45 },
+    "nms_max_dets": 100
+  },
+
+  "runtime": {
+    "target_fps": 30,
+    "heartbeat_ms": 1000,
+    "face_skip_frames": 0,
+    "yolo_skip_frames": 0
+  },
+
+  "publishers": [
+    {
+      "kind": "mqtt",
+      "mqtt": {
+        "host": "localhost",
+        "port": 1883,
+        "topic": "bs/argus/analytics",
+        "qos": 0,
+        "retain": false,
+        "period_ms": 1000
+      }
+    }
+  ],
+
+  "dashboard": {
+    "port": 20300,
+    "ws_port": 9001
+  },
+
+  "_comment_log_level": "debug for testing - see every detection and PERF line",
+  "log_level": "debug",
+  "log_dir": "/tmp",
+  "log_json": true,
+  "log_performance": true,
+
+  "_comment_frame_output": "Write annotated frames to output_dir so you can inspect detections from the recorded clip",
+  "enable_frame_output": true,
+  "output_dir": "/tmp",
+
+  "blur_faces": false,
+  "blur_method": "gaussian",
+  "blur_intensity": 71,
+
+  "_comment_flip": "Recorded files are usually already oriented correctly; no mirror needed",
+  "flip_horizontal": false,
+
+  "test_face_only": false,
+  "test_yolo_only": false
+}

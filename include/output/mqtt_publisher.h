@@ -36,6 +36,15 @@ public:
   bool publish_result(const PipelineResult& r) noexcept override;
   bool publish_telemetry(const TelemetrySnapshot& t) noexcept override;
 
+  // Build the optional file-playback source-position JSON fragment (with a leading
+  // comma) for an analytics message: ,"src_frame":<int>[,"src_pts_ms":<number>].
+  // Returns an empty string for non-file sources (has_source_position=false).
+  // Static and public so the conditional serialization can be unit-tested without
+  // a broker.
+  static std::string format_source_position(bool has_source_position,
+                                            int64_t source_frame_index,
+                                            double source_pts_ms);
+
 private:
   void tick_publish() noexcept;
   std::string make_payload_locked() const;
@@ -55,6 +64,9 @@ private:
   int      frames_accum_{0};
   int      frame_width_{640};   // V6.2: For normalized speed
   int      frame_height_{480};  // V6.2: For normalized speed
+  int64_t  source_frame_index_{0};     // File-playback: latest decoded source frame index
+  double   source_pts_ms_{0.0};        // File-playback: media timestamp (ms); 0 = unavailable
+  bool     has_source_position_{false};// true only for file input
   uint64_t last_ts_ns_{0};
   std::vector<TrackedBox> tracks_;  // Person tracks with stable IDs
   

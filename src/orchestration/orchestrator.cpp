@@ -866,6 +866,11 @@ void Orchestrator::supervisor_loop() noexcept {
         result.frame_width = fusion_.frame_width;   // V6.2: For normalized speed
         result.frame_height = fusion_.frame_height; // V6.2: For normalized speed
       }
+
+      // File-playback source position (file input only; omitted for live/RTSP).
+      result.has_source_position = has_src_position_.load(std::memory_order_relaxed);
+      result.source_frame_index  = latest_src_frame_.load(std::memory_order_relaxed);
+      result.source_pts_ms       = latest_src_pts_ms_.load(std::memory_order_relaxed);
       
       // Consume the tracks computed at ~10 Hz by update_person_tracks(). The scope
       // block is kept so the gaze-association locals below keep their lifetime.
@@ -1385,6 +1390,16 @@ void Orchestrator::capture_loop_threadfn() noexcept {
 
         // Healthy frame received
         source_health_.onFrameOk(camView.pts_ns);
+
+        // File-playback: remember the clip position of the latest decoded frame so
+        // the periodic analytics publish can report where in the clip it is. The
+        // flag rides on the frame (set only by FileInputSource), so live camera and
+        // RTSP sources leave it false and their messages omit the fields.
+        has_src_position_.store(camView.has_source_position, std::memory_order_relaxed);
+        if (camView.has_source_position) {
+            latest_src_frame_.store(camView.source_frame_index, std::memory_order_relaxed);
+            latest_src_pts_ms_.store(camView.source_pts_ms, std::memory_order_relaxed);
+        }
 
         // Wrap into SharedFrame (zero-copy, just wrap the buffer)
         auto sf = std::make_shared<SharedFrame>();

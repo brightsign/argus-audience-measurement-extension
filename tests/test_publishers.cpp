@@ -15,6 +15,8 @@
 #include <gtest/gtest.h>
 #include "config/publisher_config.h"
 #include "config/config_common.h"
+#include "output/mqtt_publisher.h"
+#include "pipeline/pipeline_types.h"
 #include <string>
 #include <cstring>
 
@@ -200,6 +202,55 @@ TEST_F(PublisherTest, MqttMessageSchemaVersion) {
     EXPECT_NE(v_pos, std::string::npos);
     std::string version = schema_v7.substr(v_pos + 1);
     EXPECT_EQ(version, "7.0");
+}
+
+// ============================================================================
+// TC-062: File-playback source position serialization (src_frame / src_pts_ms)
+// ============================================================================
+
+TEST_F(PublisherTest, SrcFrameEmittedForFileInput) {
+    // A file-mode result (has_source_position = true) must serialize src_frame
+    // with the exact index and, when the pts is available, src_pts_ms.
+    PipelineResult r{};
+    r.has_source_position = true;
+    r.source_frame_index = 1832;
+    r.source_pts_ms = 61066.7;
+
+    const std::string frag = MqttPublisher::format_source_position(
+        r.has_source_position, r.source_frame_index, r.source_pts_ms);
+
+    EXPECT_NE(frag.find("\"src_frame\":1832"), std::string::npos)
+        << "File-mode message must carry the exact source frame index";
+    EXPECT_NE(frag.find("\"src_pts_ms\":61066.7"), std::string::npos)
+        << "Available media timestamp must be serialized";
+    // Leading comma lets the fragment splice between the header object and tracks.
+    EXPECT_EQ(frag.front(), ',') << "Fragment must begin with a separator comma";
+}
+
+TEST_F(PublisherTest, SrcFrameOmittedForNonFileInput) {
+    // A live camera / RTSP result (has_source_position = false) must omit both
+    // fields entirely so existing consumers are unaffected.
+    PipelineResult r{};
+    r.has_source_position = false;
+    r.source_frame_index = 999;   // Must be ignored when flag is false
+    r.source_pts_ms = 1234.5;
+
+    const std::string frag = MqttPublisher::format_source_position(
+        r.has_source_position, r.source_frame_index, r.source_pts_ms);
+
+    EXPECT_TRUE(frag.empty()) << "Non-file sources must emit neither field";
+}
+
+TEST_F(PublisherTest, SrcPtsOmittedWhenUnavailable) {
+    // Best-effort pts: when the decoder reports 0 (unavailable), src_frame is still
+    // emitted but src_pts_ms is dropped.
+    const std::string frag = MqttPublisher::format_source_position(
+        /*has_source_position=*/true, /*source_frame_index=*/0, /*source_pts_ms=*/0.0);
+
+    EXPECT_NE(frag.find("\"src_frame\":0"), std::string::npos)
+        << "src_frame must be present even for the first frame (index 0)";
+    EXPECT_EQ(frag.find("src_pts_ms"), std::string::npos)
+        << "Unavailable pts (0) must be omitted";
 }
 
 // ============================================================================

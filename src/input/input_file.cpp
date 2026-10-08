@@ -519,7 +519,12 @@ FetchStatus FileInputSource::tryFetch(FrameView& out) noexcept {
   // Fill FrameView
   auto now_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
       std::chrono::steady_clock::now().time_since_epoch()).count();
-  
+
+  // Media position of the frame just decoded. Best-effort: CAP_PROP_POS_MSEC is
+  // backend-inconsistent, so treat a non-positive value as unavailable.
+  const int CAP_PROP_POS_MSEC = 0;
+  const double pos_ms = p_->cap.get(CAP_PROP_POS_MSEC);
+
   out.fmt     = PixelFormat::BGR24;
   out.width   = bgr.cols;
   out.height  = bgr.rows;
@@ -530,7 +535,14 @@ FetchStatus FileInputSource::tryFetch(FrameView& out) noexcept {
   out.plane0  = p_->scratch_bgr.data();
   out.plane1  = nullptr;
   out.pts_ns  = now_ns;
-  
+
+  // Clip position of this frame. frame_count is the number of frames emitted so
+  // far in the current playback pass (reset to 0 on loop), so it is the 0-based
+  // index of the frame being emitted now, before the increment below.
+  out.source_frame_index  = static_cast<int64_t>(p_->frame_count);
+  out.source_pts_ms       = (pos_ms > 0.0) ? pos_ms : 0.0;
+  out.has_source_position = true;
+
   p_->frames_ok.fetch_add(1, std::memory_order_relaxed);
   p_->last_ok_ns.store(now_ns, std::memory_order_relaxed);
   p_->frame_count++;

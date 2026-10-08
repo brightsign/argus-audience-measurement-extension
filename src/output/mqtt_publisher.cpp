@@ -162,7 +162,10 @@ bool MqttPublisher::publish_result(const PipelineResult& r) noexcept {
   frames_accum_ = r.fps;  // Store actual FPS in frames_accum_ for use in payload
   frame_width_  = r.frame_width;   // V6.2: Store for normalized speed
   frame_height_ = r.frame_height;  // V6.2: Store for normalized speed
-  
+  source_frame_index_  = r.source_frame_index;   // File-playback source position
+  source_pts_ms_       = r.source_pts_ms;
+  has_source_position_ = r.has_source_position;
+
   // V7.0: Update health metrics from pipeline data (immediate, not waiting for telemetry)
   detector_fps_ = float(r.fps);  // Detector FPS ~= pipeline FPS
   tracker_fps_ = float(r.fps);   // Tracker FPS ~= pipeline FPS
@@ -184,8 +187,23 @@ bool MqttPublisher::publish_telemetry(const TelemetrySnapshot& t) noexcept {
   return true;
 }
 
+std::string MqttPublisher::format_source_position(bool has_source_position,
+                                                  int64_t source_frame_index,
+                                                  double source_pts_ms) {
+  if (!has_source_position) return std::string();
+  char buf[96];
+  if (source_pts_ms > 0.0) {
+    std::snprintf(buf, sizeof(buf), ",\"src_frame\":%lld,\"src_pts_ms\":%.1f",
+                  static_cast<long long>(source_frame_index), source_pts_ms);
+  } else {
+    std::snprintf(buf, sizeof(buf), ",\"src_frame\":%lld",
+                  static_cast<long long>(source_frame_index));
+  }
+  return std::string(buf);
+}
+
 std::string MqttPublisher::make_payload_locked() const {
-  // Build v7.0 JSON with full schema
+  // Build v7.1 JSON with full schema
   const int fps = frames_accum_;
   const double ts_s = last_ts_ns_ * 1e-9;  // Convert ns to seconds
   
@@ -205,7 +223,7 @@ std::string MqttPublisher::make_payload_locked() const {
   // V7.0: Full schema with metadata + scene counts
   char header[1024];
   std::snprintf(header, sizeof(header),
-    "{\"schema\":\"analytics/v7.0\","
+    "{\"schema\":\"analytics/v7.1\","
     "\"ts\":%.2f,\"device\":\"%s\",\"stream\":\"%s\","
     "\"frame_w\":%d,\"frame_h\":%d,"
     "\"model\":\"yolox_s\",\"fw_version\":\"0.7.0\","
@@ -214,8 +232,7 @@ std::string MqttPublisher::make_payload_locked() const {
     "\"gaze\":%d,\"fps\":%d,"
     "\"scene\":{\"person_count\":%d},"
     "\"roi\":{\"type\":\"border\",\"border_frac\":0.30,\"rect\":[%d,%d,%d,%d]},"
-    "\"health\":{\"detector_fps\":%.1f,\"tracker_fps\":%.1f,\"queue_latency_ms\":0,\"dropped_frames\":%d,\"last_model_reload_ts\":%.1f},"
-    "\"tracks\":[",
+    "\"health\":{\"detector_fps\":%.1f,\"tracker_fps\":%.1f,\"queue_latency_ms\":0,\"dropped_frames\":%d,\"last_model_reload_ts\":%.1f}",
     ts_s,
     cfg_.device_id.c_str(),
     cfg_.stream_id.c_str(),
@@ -229,7 +246,12 @@ std::string MqttPublisher::make_payload_locked() const {
     int(frame_width_ * 0.70f), int(frame_height_ * 0.70f),
     detector_fps_, tracker_fps_, dropped_frames_, last_model_reload_ts_);
   payload_buffer_ += header;
-  
+
+  // File-playback source position (additive, file input only). Inserted before the
+  // tracks array so the message stays valid JSON when the fields are absent.
+  payload_buffer_ += format_source_position(has_source_position_, source_frame_index_, source_pts_ms_);
+  payload_buffer_ += ",\"tracks\":[";
+
   // Add each track with v7.0 fields
   for (size_t i = 0; i < tracks_.size(); ++i) {
     const auto& t = tracks_[i];

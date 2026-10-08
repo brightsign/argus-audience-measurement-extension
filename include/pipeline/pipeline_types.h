@@ -74,7 +74,13 @@ struct PipelineResult {
   int fps{0};               // Actual frame processing rate
   int frame_width{0};       // V6.2: Frame width for normalized speed
   int frame_height{0};      // V6.2: Frame height for normalized speed
-  
+
+  // File-playback source position (file input only; omitted for live camera/RTSP).
+  // Lets an external harness align each analytics message to a clip frame.
+  int64_t source_frame_index{0};  // 0-based index of the latest decoded source frame
+  double  source_pts_ms{0.0};     // media timestamp (ms); 0 means unavailable
+  bool    has_source_position{false};  // true only for file input
+
   // Ensure proper default construction/destruction
   PipelineResult() = default;
   ~PipelineResult() = default;
