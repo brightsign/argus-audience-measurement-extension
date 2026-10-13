@@ -5,6 +5,9 @@ build_dashboard/
 install/
 model/
 staging/
+downloads/
+toolkit/
+toolkit
 argus-ext*.zip
 argus-dev*.zip
 argus-demo-ext*.zip
@@ -20,7 +23,7 @@ bin/
 
 # The SDK, RKNN toolkit, OS source, and compiled models are no longer produced
 # in this repo -- they live in the shared build cache provisioned by
-# ../brightsign-sdk-builder (default ../argus-build-cache, override ARGUS_CACHE_DIR).
+# ../brightsign-sdk-builder (default ../argus-build-cache, override BS_CACHE_DIR).
 
 # Stray runtime logs pulled from devices
 gaze.log

@@ -8,29 +8,37 @@ FORCE_UPDATE ?=
 export DEMO_MODE FORCE_UPDATE
 
 # Optional path to a BrightSign cobra toolchain installer, used only by the
-# fetch-sdk fallback. Normally the SDK is provisioned by ../brightsign-sdk-builder.
+# fetch-sdk fallback. Normally the SDK is provisioned by brightsign-sdk-builder.
 SDK_INSTALLER ?=
+
+# When the cache is configured but has no SDK, fetch-sdk auto-builds it from
+# source via the brightsign-sdk-builder repo (a long, Docker-based OS build).
+# SDK_AUTO_BUILD=0 disables that and prints manual instructions instead;
+# SDK_BUILDER_DIR overrides where the builder checkout is found (default: a
+# sibling of this repo, then a sibling of the cache).
+SDK_AUTO_BUILD ?= 1
+SDK_BUILDER_DIR ?=
 
 # Optional local, untracked cache location. When this repo is not checked out
 # parallel to brightsign-sdk-builder (so the default ../argus-build-cache does not
 # resolve), drop a `cache.env` next to this Makefile with, e.g.:
-#     ARGUS_CACHE_DIR := /home/you/src/.../argus-all/argus-build-cache
-# It is git-ignored and overridden by a command-line ARGUS_CACHE_DIR=...
+#     BS_CACHE_DIR := /home/you/src/.../argus-all/argus-build-cache
+# It is git-ignored and overridden by a command-line BS_CACHE_DIR=...
 -include cache.env
 
 # Shared build cache (SDK + RKNN toolkit + compiled models) lives OUTSIDE this
 # repo and is provisioned once per build box by the brightsign-sdk-builder repo.
 # scripts/lib/cache.sh is the single source of truth. Override the location with
-# ARGUS_CACHE_DIR (default ../argus-build-cache). ARGUS_CACHE_DIR is forwarded
+# BS_CACHE_DIR (default ../argus-build-cache). BS_CACHE_DIR is forwarded
 # explicitly so a command-line override reaches $(shell ...), then exported so the
 # recipe scripts (which source cache.sh themselves) resolve the same location.
-CACHE_SH := ARGUS_CACHE_DIR='$(ARGUS_CACHE_DIR)' bash scripts/lib/cache.sh print
+CACHE_SH := BS_CACHE_DIR='$(BS_CACHE_DIR)' bash scripts/lib/cache.sh print
 CACHE_DIR := $(shell $(CACHE_SH) cache)
 SDK_DIR := $(shell $(CACHE_SH) sdk)
 SDK_ENV := $(shell $(CACHE_SH) sdk-env)
 TOOLKIT_DIR := $(shell $(CACHE_SH) toolkit)
 MODELS_DIR := $(shell $(CACHE_SH) models)
-export ARGUS_CACHE_DIR
+export BS_CACHE_DIR
 
 # Pandoc options for PDF generation with Mermaid support.
 PANDOC_OPTS := -F mermaid-filter --pdf-engine=xelatex \
@@ -64,8 +72,8 @@ help:                ## Print available targets
 	@echo "The SDK, RKNN toolkit, and models come from the shared cache provisioned by"
 	@echo "../brightsign-sdk-builder. Run 'make cache-info' to see the resolved location."
 
-fetch-sdk:           ## Detect the cross-compile SDK in the shared cache (provisioned by ../brightsign-sdk-builder)
-	bash scripts/fetch-sdk.sh $(SDK_INSTALLER)
+fetch-sdk:           ## Ensure the SDK is in the cache; auto-build it from source if the cache is empty (SDK_AUTO_BUILD=0 to disable)
+	SDK_AUTO_BUILD='$(SDK_AUTO_BUILD)' SDK_BUILDER_DIR='$(SDK_BUILDER_DIR)' bash scripts/fetch-sdk.sh $(SDK_INSTALLER)
 
 build-models:        ## Compile the RKNN models (per SoC) into the shared cache (needs docker + the cached toolkit)
 	bash scripts/build-models.sh "$(MODELS_DIR)"
@@ -124,7 +132,7 @@ copy:                ## scp the newest ext zip + install-on-player.sh to the pla
 	@#      attributes makes scp fsetstat fail with "remote fsetstat: Permission denied".
 
 cache-info:          ## Show the resolved shared-cache location and what is present
-	@echo "ARGUS_CACHE_DIR : $(if $(ARGUS_CACHE_DIR),$(ARGUS_CACHE_DIR) (override),(unset -> default))"
+	@echo "BS_CACHE_DIR : $(if $(BS_CACHE_DIR),$(BS_CACHE_DIR) (override),(unset -> default))"
 	@echo "cache   : $(CACHE_DIR)"
 	@echo "sdk     : $(SDK_DIR)  [$(if $(wildcard $(SDK_ENV)),present,absent)]"
 	@echo "toolkit : $(TOOLKIT_DIR)  [$(if $(wildcard $(TOOLKIT_DIR)),present,absent)]"

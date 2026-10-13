@@ -35,6 +35,28 @@ sdk_is_self_consistent() {
     grep -q "SDKTARGETSYSROOT=${SDK_DIR}/sysroots/aarch64-oe-linux" "${ENV_SCRIPT}"
 }
 
+# Locate the brightsign-sdk-builder checkout that provisions this cache, so a
+# missing SDK can be built automatically. Tries, in order: an explicit
+# SDK_BUILDER_DIR override, a sibling of this repo, and a sibling of the cache
+# (the builder commonly lives next to the cache it fills, not next to this repo).
+# On success sets SDK_BUILDER_DIR to the resolved absolute path.
+locate_sdk_builder() {
+    local candidates=(
+        "${SDK_BUILDER_DIR:-}"
+        "${REPO_ROOT}/../brightsign-sdk-builder"
+        "$(dirname "${CACHE_DIR}")/brightsign-sdk-builder"
+    )
+    local d
+    for d in "${candidates[@]}"; do
+        [ -n "${d}" ] || continue
+        if [ -f "${d}/Makefile" ]; then
+            SDK_BUILDER_DIR="$(cd "${d}" && pwd)"
+            return 0
+        fi
+    done
+    return 1
+}
+
 if sdk_is_self_consistent; then
     echo "SDK already installed and self-consistent at ${SDK_DIR}"
     exit 0
@@ -64,16 +86,54 @@ if [ -z "${INSTALLER}" ]; then
 fi
 
 if [ -z "${INSTALLER}" ] || [ ! -f "${INSTALLER}" ]; then
+    # No prebuilt installer on hand. Unless disabled, build the SDK from source via
+    # the brightsign-sdk-builder repo straight into THIS cache, so `make build`
+    # auto-provisions a missing SDK instead of just stopping. This is a one-time,
+    # Docker-based BrightSign OS build: Docker + network + ~25GB, and it takes
+    # HOURS. Set SDK_AUTO_BUILD=0 to get the manual instructions instead.
+    if [ "${SDK_AUTO_BUILD:-1}" != "0" ] && locate_sdk_builder; then
+        cat <<EOF
+================================================================================
+No SDK in the cache and no installer on hand -- building it from source.
+    builder : ${SDK_BUILDER_DIR}
+    cache   : ${CACHE_DIR}
+This is a one-time BrightSign OS SDK build (Docker + network + ~25GB; HOURS).
+Set SDK_AUTO_BUILD=0 to skip auto-build and get manual instructions instead.
+Press Ctrl-C now to abort.
+================================================================================
+EOF
+        # The builder resolves its cache from ARGUS_CACHE_DIR (its own variable,
+        # separate repo); pass the absolute cache path this repo resolved -- and
+        # BS_CACHE_DIR too, for forward-compatibility -- so it fills THIS cache.
+        if [ "${SDK_BUILD_DRY_RUN:-0}" = "1" ]; then
+            echo "[dry-run] make -C ${SDK_BUILDER_DIR} build ARGUS_CACHE_DIR=${CACHE_DIR} BS_CACHE_DIR=${CACHE_DIR}"
+            exit 0
+        fi
+        make -C "${SDK_BUILDER_DIR}" build \
+            ARGUS_CACHE_DIR="${CACHE_DIR}" BS_CACHE_DIR="${CACHE_DIR}"
+        if ! sdk_is_self_consistent; then
+            echo "ERROR: builder ran but ${SDK_DIR} is still not a self-consistent SDK." >&2
+            echo "Review the brightsign-sdk-builder output above for the failure." >&2
+            exit 1
+        fi
+        echo "SDK built and self-consistent at ${SDK_DIR}"
+        exit 0
+    fi
+
     cat <<EOF
 No cross-compile SDK found in the shared cache, and no toolchain installer on hand.
 
 The SDK is provisioned once per build box by the brightsign-sdk-builder repo,
 which downloads the BrightSign OS source, builds the custom SDK, and installs it
-into the shared cache this repo reads. From a checkout parallel to this one:
+into the shared cache this repo reads. Normally this build auto-runs it; it was
+skipped because SDK_AUTO_BUILD=0 or the builder repo was not found.
 
-    cd ../brightsign-sdk-builder && make build
+Build it yourself from the builder checkout:
 
-That populates ${SDK_DIR}. Then re-run this build.
+    make -C /path/to/brightsign-sdk-builder build ARGUS_CACHE_DIR=${CACHE_DIR}
+
+That populates ${SDK_DIR}. Then re-run this build. Point auto-build at a
+non-standard builder location with SDK_BUILDER_DIR=/path/to/brightsign-sdk-builder.
 
 Alternatively, if you already have a brightsign-x86_64-cobra-toolchain-*.sh
 installer, install from it directly:

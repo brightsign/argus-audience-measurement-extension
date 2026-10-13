@@ -6,7 +6,7 @@
 # repo) and reused. This repo (argus-audience-measurement-extension) is a
 # consumer: it reads the cache, it does not provision it.
 #
-# Override the location with ARGUS_CACHE_DIR (absolute recommended; a relative
+# Override the location with BS_CACHE_DIR (absolute recommended; a relative
 # value is resolved against the repo root). The default sits parallel to the
 # repo so it is "next to" the checkout, not inside it, and every sibling
 # checkout agrees on it.
@@ -22,10 +22,10 @@
 _cache_lib_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 REPO_ROOT="${REPO_ROOT:-$(cd "${_cache_lib_dir}/../.." && pwd)}"
 
-if [ -n "${ARGUS_CACHE_DIR:-}" ]; then
-    case "${ARGUS_CACHE_DIR}" in
-        /*) CACHE_DIR="${ARGUS_CACHE_DIR}" ;;
-        *)  CACHE_DIR="${REPO_ROOT}/${ARGUS_CACHE_DIR}" ;;
+if [ -n "${BS_CACHE_DIR:-}" ]; then
+    case "${BS_CACHE_DIR}" in
+        /*) CACHE_DIR="${BS_CACHE_DIR}" ;;
+        *)  CACHE_DIR="${REPO_ROOT}/${BS_CACHE_DIR}" ;;
     esac
 else
     CACHE_DIR="${REPO_ROOT}/../argus-build-cache"

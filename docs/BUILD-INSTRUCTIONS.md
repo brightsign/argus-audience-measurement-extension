@@ -32,11 +32,11 @@ The SDK, toolkit, and container images are expensive (~hours, ~25GB) and identic
 cd ../brightsign-sdk-builder && make build
 ```
 
-The cache defaults to `../argus-build-cache` (parallel to the repo). Override the location with `ARGUS_CACHE_DIR` (use the same value for the builder and this repo if they are not siblings):
+The cache defaults to `../argus-build-cache` (parallel to the repo). Override the location with `BS_CACHE_DIR` (use the same value for the builder and this repo if they are not siblings):
 
 ```bash
 make cache-info                                        # resolved cache + what is present
-make cache-info ARGUS_CACHE_DIR=/srv/argus-build-cache # against a custom location
+make cache-info BS_CACHE_DIR=/srv/argus-build-cache # against a custom location
 ```
 
 ### Container Runtime
@@ -86,7 +86,7 @@ make package          # production
 make package-demo     # with demo expiration-date enforcement
 ```
 
-If this repo is not checked out alongside `brightsign-sdk-builder`, pass `ARGUS_CACHE_DIR=/path/to/argus-build-cache` to every `make` call (or export it).
+If this repo is not checked out alongside `brightsign-sdk-builder`, pass `BS_CACHE_DIR=/path/to/argus-build-cache` to every `make` call (or export it).
 
 ### Build Output
 
@@ -218,7 +218,7 @@ No cross-compile SDK found in the shared cache ...
 ```bash
 cd ../brightsign-sdk-builder && make build
 ```
-If this repo is not parallel to the builder, make sure both resolve the same cache (`make cache-info`, and pass `ARGUS_CACHE_DIR` consistently).
+If this repo is not parallel to the builder, make sure both resolve the same cache (`make cache-info`, and pass `BS_CACHE_DIR` consistently).
 
 ### Models Missing
 

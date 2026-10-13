@@ -10,6 +10,19 @@ Argus is a **machine vision application** that analyzes live video from a camera
 
 Transform your BrightSign digital signage player into an intelligent audience measurement system. Understand not just *who* is in front of your display, but *how* they're engaging with it.
 
+> ## Building from source? Read [docs/PRE-REQS.md](docs/PRE-REQS.md) first
+>
+> This repo does **not** contain the cross-compile SDK, the RKNN toolkit, or the
+> compiled models. They live in a **shared build cache outside the repo**, built
+> once per box by the sibling [`brightsign-sdk-builder`](https://github.com/brightsign/brightsign-sdk-builder)
+> repo and reused. **[docs/PRE-REQS.md](docs/PRE-REQS.md)** explains the SDK, how to
+> populate the cache, and how to point this repo at it via `cache.env`.
+>
+> On a box that already has the cache: set `BS_CACHE_DIR` in `cache.env`, run
+> `make cache-info`, then `make package`.
+>
+> *(Installing the prebuilt extension instead? Skip to [Quick Start](#quick-start).)*
+
 ## The Name "Argus"
 
 In Greek mythology, Argus Panoptes ("all-seeing") was a giant with a hundred eyes who served as an ever-watchful guardian. The name fits an audience measurement system that uses computer vision to observe and understand how people engage with digital displays.
@@ -272,27 +285,52 @@ reboot
 
 Building requires an **x86_64 Linux** machine (Ubuntu 20.04+ recommended) with Docker or Podman. The build cross-compiles ARM binaries for the BrightSign players — it cannot run on ARM, macOS, or Windows hosts.
 
-The heavy, box-level assets (the custom cross-compile SDK, the RKNN toolkit, and the compiled models) are **not** built in this repo. They are provisioned **once per build box** by the sibling [`brightsign-sdk-builder`](https://github.com/brightsign/brightsign-sdk-builder) repo into a shared cache, and this repo builds against that cache. Provision it once from a checkout parallel to this one:
+The heavy, box-level assets — the custom cross-compile **SDK**, the **RKNN toolkit**, and the compiled **models** — are **not** built in this repo. They live in a **shared build cache outside the repo** (`sdk/`, `toolkit/`, `models/`), provisioned **once per build box** by the sibling [`brightsign-sdk-builder`](https://github.com/brightsign/brightsign-sdk-builder) repo and reused by every BrightSign NPU project. The first-time setup is: **(1)** build the SDK into the cache, **(2)** compile the models into the cache, **(3)** point this repo at the cache, then **(4)** build. See **[docs/PRE-REQS.md](docs/PRE-REQS.md)** for the full version with a diagram, supported targets, and troubleshooting.
+
+#### Step 1 — Download and compile the SDK into the cache (once per build box)
+
+The SDK is produced by the `brightsign-sdk-builder` repo, which downloads the BrightSign OS source and cross-compiles the cobra toolchain straight into the shared cache. Check it out **parallel** to this repo and build it:
 
 ```bash
-cd ../brightsign-sdk-builder && make build    # one-time per build box (downloads OS source, builds SDK; hours)
+cd ..
+git clone https://github.com/brightsign/brightsign-sdk-builder.git
+cd brightsign-sdk-builder
+make build        # downloads OS source, builds the SDK into ../argus-build-cache/sdk (network + ~25 GB; HOURS)
 ```
 
-Then, in this repo:
+This fills `../argus-build-cache/sdk/` (default location, parallel to both repos).
+
+> **Or let this repo do it for you.** If the cache is configured but has no SDK, `make build`/`make package` in **this** repo auto-runs the builder for you (it is a dependency of the build). To provision explicitly or disable the auto-build, see [docs/PRE-REQS.md § Phase 1](docs/PRE-REQS.md#phase-1--populate-the-shared-cache-once-per-build-box). Either way the SDK is a one-time, hours-long build.
+
+#### Step 2 — Compile the RKNN models into the cache (needs Docker)
+
+```bash
+# in this repo
+make build-models   # compiles RetinaFace + YOLOX per SoC into ../argus-build-cache/models/<SOC>/
+```
+
+Idempotent — a no-op once the models are present. Unlike the SDK, model compilation is **not** auto-run by `make build`; run it once here.
+
+#### Step 3 — Configure this repo to point at the cache
+
+If this repo is checked out parallel to `brightsign-sdk-builder`, the default cache (`../argus-build-cache`) resolves automatically and this step is optional. Otherwise, tell the repo where the cache lives:
+
+```bash
+cp cache.env.example cache.env
+# edit cache.env:  BS_CACHE_DIR := /abs/path/to/argus-build-cache
+make cache-info     # show the resolved cache and whether sdk / toolkit / models are present
+```
+
+`cache.env` is git-ignored. A command-line override always wins: `make package BS_CACHE_DIR=/path/to/argus-build-cache`.
+
+#### Step 4 — Build the packages
 
 ```bash
 make package        # cross-compile all SoCs, sync models from the cache, and produce the zips (production)
 make package-demo   # same, with demo expiration-date enforcement
 ```
 
-`make build` cross-compiles only; `make package` adds model sync and runs `./package` to produce the two zips in the project root. Demo builds include a `demo` prefix in the filenames (e.g., `argus-demo-dev-*.zip`).
-
-The shared cache defaults to `../argus-build-cache` (parallel to the repo). If this repo is not checked out alongside `brightsign-sdk-builder`, point both at the same cache with `ARGUS_CACHE_DIR`:
-
-```bash
-make cache-info ARGUS_CACHE_DIR=/path/to/argus-build-cache   # show the resolved cache and what is present
-make package    ARGUS_CACHE_DIR=/path/to/argus-build-cache
-```
+`make build` cross-compiles only (it depends on `fetch-sdk` + `sync-models`, so a missing SDK or models stops the build with an actionable message); `make package` adds model sync and runs `./package` to produce the two zips in the project root. Demo builds include a `demo` prefix in the filenames (e.g., `argus-demo-dev-*.zip`).
 
 See **[Build & Installation Guide](docs/BUILD-INSTRUCTIONS.md)** for full details on prerequisites, the shared cache, and incremental builds.
 
@@ -366,6 +404,7 @@ Argus uses ByteTrack to maintain stable person IDs across frames. Each tracked p
 
 | Document | Description |
 |----------|-------------|
+| **[Prerequisites (SDK & build cache)](docs/PRE-REQS.md)** | SDK, shared cache, and `cache.env` setup — read before building |
 | **[Build & Installation](docs/BUILD-INSTRUCTIONS.md)** | Building, deploying, and installing |
 | **[Configuration Reference](docs/CONFIGURATION.md)** | All configuration options |
 | **[MQTT Integration](docs/INTEGRATION-MQTT.md)** | Real-time data via MQTT |
