@@ -17,7 +17,7 @@ set -euo pipefail
 #     scripts/runall.sh --clean    # remove this repo's build artifacts + optional cache/images
 #     scripts/runall.sh --help
 #
-# Honors DEMO_MODE / FORCE_UPDATE / ARGUS_CACHE_DIR from the environment, which
+# Honors DEMO_MODE / FORCE_UPDATE / BS_CACHE_DIR from the environment, which
 # are passed through to make.
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
@@ -50,7 +50,7 @@ Usage:
     scripts/runall.sh --clean    # remove this repo's build artifacts + optional cache/images
     scripts/runall.sh --help
 
-Honors DEMO_MODE / FORCE_UPDATE / ARGUS_CACHE_DIR from the environment.
+Honors DEMO_MODE / FORCE_UPDATE / BS_CACHE_DIR from the environment.
 EOF
             exit 0 ;;
         *) err "Unknown option: ${arg}"; exit 1 ;;
