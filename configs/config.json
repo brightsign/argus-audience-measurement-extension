@@ -4,7 +4,21 @@
   
   "_comment_device_id": "Device identifier for MQTT messages. Leave empty to auto-detect from MAC address",
   "device_id": "",
-  
+
+  "_comment_visual_memory": "Optional frame storage (libvisualmemory). OFF by default; requires building with -DENABLE_VISUAL_MEMORY=ON.",
+  "visual_memory": {
+    "enabled": true,
+    "storage_root": "/storage/sd/visual-memory",
+    "sample_interval_ms": 5000,
+    "stored_width": 640,
+    "stored_height": 360,
+    "jpeg_quality": 75,
+    "max_pending_frames": 4,
+    "max_storage_bytes": 4000000000,
+    "retention_hours": 48,
+    "vector_search_enabled": false
+  },
+
   "input": {
     "rtsp_url": "rtsp://192.168.0.203:8554/live",
     "usb_device": "/dev/video0",

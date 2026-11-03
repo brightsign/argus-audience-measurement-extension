@@ -60,7 +60,7 @@ build_soc() {
     fi
     ( cd "${REPO_ROOT}/${build_dir}" && \
         cmake .. -DOECORE_TARGET_SYSROOT="${OECORE_TARGET_SYSROOT}" \
-                 -DTARGET_SOC="${soc}" -DBUILD_TESTS=OFF ${DEMO_CMAKE_FLAG} && \
+                 -DTARGET_SOC="${soc}" -DBUILD_TESTS=OFF ${DEMO_CMAKE_FLAG} ${EXTRA_CMAKE_FLAGS:-} && \
         make && \
         make install )
 }

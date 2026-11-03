@@ -55,6 +55,32 @@ bool load_from_file(const std::string& path, AppConfig& out, bool /*strict*/, ch
     if (j.contains("test_yolo_only") && j["test_yolo_only"].is_boolean()) {
       out.test_yolo_only = j["test_yolo_only"].get<bool>();
     }
+
+    // Parse optional Visual Memory frame-storage section (OFF by default).
+    if (j.contains("visual_memory") && j["visual_memory"].is_object()) {
+      const auto& vm = j["visual_memory"];
+      auto& o = out.visual_memory;
+      if (vm.contains("enabled") && vm["enabled"].is_boolean())
+        o.enabled = vm["enabled"].get<bool>();
+      if (vm.contains("storage_root") && vm["storage_root"].is_string())
+        o.storage_root = vm["storage_root"].get<std::string>();
+      if (vm.contains("sample_interval_ms") && vm["sample_interval_ms"].is_number())
+        o.sample_interval_ms = vm["sample_interval_ms"].get<int64_t>();
+      if (vm.contains("stored_width") && vm["stored_width"].is_number())
+        o.stored_width = vm["stored_width"].get<int>();
+      if (vm.contains("stored_height") && vm["stored_height"].is_number())
+        o.stored_height = vm["stored_height"].get<int>();
+      if (vm.contains("jpeg_quality") && vm["jpeg_quality"].is_number())
+        o.jpeg_quality = vm["jpeg_quality"].get<int>();
+      if (vm.contains("max_pending_frames") && vm["max_pending_frames"].is_number())
+        o.max_pending_frames = vm["max_pending_frames"].get<size_t>();
+      if (vm.contains("max_storage_bytes") && vm["max_storage_bytes"].is_number())
+        o.max_storage_bytes = vm["max_storage_bytes"].get<uint64_t>();
+      if (vm.contains("retention_hours") && vm["retention_hours"].is_number())
+        o.retention_hours = vm["retention_hours"].get<int>();
+      if (vm.contains("vector_search_enabled") && vm["vector_search_enabled"].is_boolean())
+        o.vector_search_enabled = vm["vector_search_enabled"].get<bool>();
+    }
     
     // Parse other config sections as before (minimal for now)
     if (j.contains("primary_model")) {

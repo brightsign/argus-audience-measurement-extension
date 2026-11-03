@@ -7,6 +7,7 @@
 #include "config/publisher_config.h"
 #include "config/runtime_settings.h"
 #include "input/input_factory.h"   // reuse your InputConfig (RTSP/USB/File + options)
+#include "integrations/visual_memory_options.h"
 
 #include <string>
 #include <vector>
@@ -67,6 +68,9 @@ struct AppConfig {
   // resize, pre/infer/post (NPU), visualization, frame-write, and total per-frame ms.
   // Useful for diagnosing CPU load on weaker SoCs (e.g. LS5/RK3568).
   bool        log_performance{false};
+
+  // Optional Visual Memory frame storage (OFF by default). See docs.
+  argus::VisualMemoryOptions visual_memory{};
 
   // Validate composite config (no throws). Returns true if ok.
   bool validate(char* err, size_t err_sz) const noexcept;

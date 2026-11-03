@@ -19,6 +19,11 @@
 #include "config/publisher_config.h"
 #include "output/publisher_v2.h"
 #include "tracking/tracker.h"
+#include "integrations/visual_memory_options.h"
+
+#ifdef ARGUS_VISUAL_MEMORY
+namespace argus { class VisualMemoryAdapter; }
+#endif
 
 // Optional: describe how to build the pipeline
 struct PipelineConfig {
@@ -57,6 +62,9 @@ struct PipelineConfig {
 
   // Publishers configuration
   std::vector<PublisherConfig> publishers; // MQTT, UDP, File publishers
+
+  // Optional Visual Memory frame storage (OFF by default).
+  argus::VisualMemoryOptions visual_memory;
 };
 
 enum class OrchestratorState : uint8_t {
@@ -196,6 +204,11 @@ private:
   
   // Publishers for analytics (MQTT, UDP, etc.)
   std::vector<PublisherPtr> publishers_;
+
+  // Optional Visual Memory adapter (created once in start(); inert if disabled).
+#ifdef ARGUS_VISUAL_MEMORY
+  std::unique_ptr<argus::VisualMemoryAdapter> visual_memory_;
+#endif
 
   // Person tracker with stable GUID assignment
   Tracker person_tracker_{TrackerConfig{

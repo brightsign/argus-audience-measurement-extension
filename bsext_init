@@ -137,8 +137,8 @@ run_attention_demo() {
     # NOTE: DO NOT pass config.json as argument - let app use its own search logic:
     #   1. CLI: --config <path>
     #   2. ENV: $BSEXT_CONFIG  
-    #   3. SD:  /storage/sd/configs/config.json (writable override)
-    #   4. PKG: ${SOC_HOME}/configs/config.json (read-only default)
+    #   3. SD:  /storage/sd/configs/argus-config.json (preferred) or config.json (writable override)
+    #   4. PKG: ${SOC_HOME}/configs/argus-config.json (preferred) or config.json (read-only default)
     CMD_ARGS="${SOC_HOME}/model/RetinaFace.rknn"
     echo "Using Model: RetinaFace.rknn"
     echo "Config will be auto-detected (priority: SD card > package default)"
@@ -299,12 +299,12 @@ run_dashboard_server() {
     SOC_HOME=${SCRIPT_PATH}/${SOC_NAME}
 
     # Mirror attention_demo's config precedence (SD override > packaged) so the
-    # dashboard port can be set in config.json's "dashboard" section; it overrides
-    # the -port passed here (from the registry/default). config.json is the
-    # standard name; argus-config.json is accepted as a legacy fallback.
+    # dashboard port can be set in the config's "dashboard" section; it overrides
+    # the -port passed here (from the registry/default). argus-config.json is the
+    # preferred name; config.json is accepted as a fallback.
     local cfg=""
-    for c in /storage/sd/configs/config.json /storage/sd/configs/argus-config.json \
-             "${SOC_HOME}/configs/config.json" "${SOC_HOME}/configs/argus-config.json"; do
+    for c in /storage/sd/configs/argus-config.json /storage/sd/configs/config.json \
+             "${SOC_HOME}/configs/argus-config.json" "${SOC_HOME}/configs/config.json"; do
         [ -f "$c" ] && { cfg="$c"; break; }
     done
     local args="-port ${port} -dir ${SOC_HOME}/dashboard -upstream ${upstream} -ws-port ${ws_port}"

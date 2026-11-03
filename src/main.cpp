@@ -457,6 +457,23 @@ int main(int argc, char** argv) {
     // Configure device ID (for MQTT messages)
     pc.device_id = appcfg.device_id;
 
+    // Configure optional Visual Memory frame storage (OFF by default).
+    pc.visual_memory = appcfg.visual_memory;
+    pc.visual_memory.device_id = appcfg.device_id;
+    if (!effective_input.file_path.empty()) {
+        pc.visual_memory.source_type = "file";
+        pc.visual_memory.source_id   = "file:" + effective_input.file_path;
+    } else if (!effective_input.rtsp_url.empty()) {
+        pc.visual_memory.source_type = "rtsp";
+        pc.visual_memory.source_id   = effective_input.rtsp_url;
+    } else if (!effective_input.usb_device.empty()) {
+        pc.visual_memory.source_type = "usb";
+        pc.visual_memory.source_id   = effective_input.usb_device;
+    } else {
+        pc.visual_memory.source_type = "unknown";
+        pc.visual_memory.source_id   = "unknown";
+    }
+
     // Configure frame output (optional)
     pc.enable_frame_output = appcfg.enable_frame_output;
     pc.output_dir = appcfg.output_dir;
