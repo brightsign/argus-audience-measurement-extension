@@ -511,3 +511,40 @@ Benchmark **baseline Argus**, **Stage 1 enabled**, and **Stage 2 enabled** using
 - [BrightSign remote snapshot REST endpoint](https://docs.brightsign.biz/develop/rdws-other-endpoints)
 
 *All resource budgets and performance targets in this document are engineering estimates until measured on the deployed XT5 hardware. The RAM/SD snapshot is device-specific.*
+
+---
+
+## 17. Stage 2 as implemented and measured (XT5 / RK3588, BrightSignOS 9.1.139)
+
+Implementation: `libs/visual-memory` (see its `README.md`, `STAGE2_RESULTS.md`, `BACKLOG.md`, `models/README.md`).
+Stage 2 is optional and **disabled by default** (`visual_memory.enabled=false`, `vector_search_enabled=false`,
+`embedding.enabled=false` in the committed `configs/config.json`; compile-time `-DENABLE_VISUAL_EMBEDDINGS=ON` is also required).
+
+**Design as built.** Stage 1 worker inserts the frame row, then enqueues `(id, path, time, source)` (no pixels) to a separate
+bounded Stage 2 queue. One embedding worker reads the JPEG, decodes, applies preprocessing `pp1`, runs MobileNetV2 (FP16, RKNN C API,
+loaded once, serialised), L2-normalises/validates and writes the vector plus a status row in one SQLite transaction (sqlite-vec `vec0`,
+FP32, one table per model identity). Search runs on the caller's thread over the same connection. JPEG and embedding retention are
+independent: an expired JPEG keeps its row (`image_available=0`) while a vector exists.
+
+**Measured (3 alternating 10-minute pairs, same camera and detectors, 5 s cadence):**
+
+| | Stage 1 | Stage 1 + 2 | delta |
+|---|---|---|---|
+| FPS | 29.05 | 29.04 | none |
+| RSS mean / peak | 69.5 / 73.3 MiB | 86.6 / 90.4 MiB | **+17.1 MiB** (target ≤ 256) |
+| CPU mean (100 % = 1 core) | 48.6 % | 50.9 % | +2.3 pp (≈ +0.3 % of the 8-core SoC) |
+| NPU core 0 mean | 79.5 % | 79.2 % | none (cores 1–2 idle) |
+
+* FP16 vs ONNX FP32 on device (101 images): cosine mean 0.99999 (min 0.99993), top-5 overlap 0.998, top-1 1.00.
+* NPU inference p50/p99 5.9/5.9 ms idle (6.3/≈7 ms live); preprocessing 10.9 ms idle (p95 ≈ 52 ms under load); JPEG decode 1.6 ms.
+* Storage: ≈ 27 kB per 480x360 JPEG, ≈ 5.1 kB per 1280-d FP32 vector (+ vec0 chunk overhead; 5.6 kB/vector total in the DB).
+* Exact search, on the device SD card: 100 → 0.74 ms, 1,000 → 5.1 ms, 10,000 → 41 ms (p99 67 ms), ≈ 4 µs/vector. **Not ANN.**
+  Time/source filters do not reduce the scan (metadata is evaluated per row). 120k vectors ≈ 0.5 s per query.
+* Capture thread never blocked: Stage 2 queue max depth 1, 0 drops, hook sample p99 < 1 ms with Stage 2 on or off.
+* Vector insert on SD: p50 25–28 ms, p99 ≈ 0.95 s (worker thread only; Stage 1 DB writes show the same commit tail).
+
+**Config in effect on a player.** Argus reads `/storage/sd/configs/argus-config.json` first; `config.json` is used only if that file is
+missing (see `docs/CONFIGURATION.md`). On the test XT5 the effective file is `argus-config.json` (Visual Memory currently `enabled:false`);
+the `config.json` beside it (`enabled:true`) is shadowed and has no effect.
+
+**Open items:** `libs/visual-memory/BACKLOG.md` (VM-1 … VM-8). Proof-of-play is out of scope for Stage 2.

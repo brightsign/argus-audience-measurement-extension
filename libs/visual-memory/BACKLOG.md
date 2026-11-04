@@ -1,0 +1,14 @@
+# libvisualmemory backlog (known, deliberately deferred)
+
+Status as of Stage 2 finalisation. IDs are stable; reference them in commits/issues.
+
+| ID | Item | Why it matters / evidence | Proposed work |
+|---|---|---|---|
+| VM-1 | **FAT32 directory limit / hourly partitioning** (Stage 1) | The real store on the XT5 SD card (FAT32) held 17,539 JPEGs in one day directory in earlier testing; FAT32 directory lookups/creates slow down and have hard entry limits. | Partition `frames/YYYY/MM/DD/HH/<source>/`; keep the relative-path column so old rows stay valid; test migration + retention across the new layout. |
+| VM-2 | **Write-failure logging / health** | Stage 1/2 count `write_fail`, `db_fail`, `perm_fail` etc. but there is no dedicated rate-limited log line or exposed health flag when storage is failing (ENOSPC, EIO, SD removed). | Rate-limited WARN with errno + path; export failure counters via the existing metrics endpoint; add a degraded flag. |
+| VM-3 | **sqlite-vec v0.1.6 leak** | `vec0_free()` does not free the metadata-chunk-name strings: 2 small allocations per vec0 table per connection (ASan). One-off per connection, not per query. | Track upstream; re-check on upgrade; if upgrading is not possible patch via a documented local patch file (vendored source is currently unmodified). |
+| VM-4 | **Search scaling** | vec0 is an exact scan, ≈4 µs/vector on the XT5 (10k: 41 ms p50, 68 ms with a time window - metadata filters do not reduce the scan). 7 days at 5 s cadence is ≈120k vectors/source ≈ 0.5 s per query while holding the DB mutex. | Time-partitioned vec0 tables (drop whole partitions for retention and search only relevant ones), bound queries by default time range, or an ANN index above ~100k vectors; move queries to a read-only connection. |
+| VM-5 | **Preprocessing optimisation** | pp1 resize is scalar C++: ≈10.9 ms idle, p95 ≈52 ms under detector load - larger than the 5.9 ms inference. Not a problem at 5 s cadence. | NEON separable resize or RGA/libyuv-assisted downscale, validated against `reference_embedder.py` (numerics must not change pp1). |
+| VM-6 | INT8 retrieval quality | top-5 overlap 0.86 vs ONNX on device; 41-image calibration set. INT8 is **not enabled**. | Only revisit with a representative calibration set and a retrieval-based acceptance test. |
+| VM-7 | Model licensing / distribution | ImageNet-trained weights; commercial terms unresolved; binaries kept out of git. | Legal sign-off or replace the model (new `model_version`); publish binaries to the artifact store (see `models/README.md`). |
+| VM-8 | SD commit-latency tail | vec insert p99 ≈ 0.95 s, max ≈ 1.2 s on SD (worker thread only; capture is not blocked; Stage 1 DB writes show the same tail). | Group commits / WAL experiments on the target card; keep off the capture path. |
