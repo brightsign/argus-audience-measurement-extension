@@ -1,0 +1,10 @@
+sqlite-vec v0.1.6 (amalgamation, unmodified)
+source:  https://github.com/asg017/sqlite-vec/releases/download/v0.1.6/sqlite-vec-0.1.6-amalgamation.zip
+zip sha256:        0664b8c3c3fa5c53d0c9182de20c5206cce74038bdfbcd77e37366e988d11dba
+sqlite-vec.c sha256: SEE BELOW (verify with sha256sum)
+licence: MIT OR Apache-2.0 (LICENSE-MIT, LICENSE-APACHE)
+Compiled as a static C dependency with -DSQLITE_CORE and registered explicitly via sqlite3_vec_init().
+Build-only compatibility shim for SQLite 3.26.0 headers: -DSQLITE_INNOCUOUS=0 (SQLITE_INNOCUOUS was added in 3.31.0;
+it is only a security hint passed to sqlite3_create_function_v2). The source file is NOT modified.
+aea2ff1524ab80ccd1d51c698b09a74403c2d6ef00949d2a083661b4660881fe  sqlite-vec.c
+ee9f4ad2fd66e285f8c1c60d9174b6b21ae960704c0ec6a93e8bea01ae240420  sqlite-vec.h
