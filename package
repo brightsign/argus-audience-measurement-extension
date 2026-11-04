@@ -295,6 +295,16 @@ copy_binaries() {
             fi
         done
 
+        # Visual Memory dashboard API (only present in -DENABLE_VISUAL_MEMORY=ON builds)
+        for _vma in "$source_dir/vm_api_server" "$build_dir/vm_api_server"; do
+            if [[ -f "$_vma" ]]; then
+                cp "$_vma" "$package_soc_dir/vm_api_server"
+                chmod +x "$package_soc_dir/vm_api_server"
+                log "  -> packaged vm_api_server from $_vma"
+                break
+            fi
+        done
+
         # Copy image stream server binary
         if [[ -f "$source_dir/image-stream-server" ]]; then
             cp "$source_dir/image-stream-server" "$package_soc_dir/"

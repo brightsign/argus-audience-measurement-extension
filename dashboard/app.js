@@ -134,6 +134,9 @@
   }
 
   function render() {
+    // Other dashboard tabs hide the audience view (display:none => 0x0 canvases);
+    // keep ingesting data but skip drawing until the view is shown again.
+    if (document.body.dataset.view && document.body.dataset.view !== "audience") { requestAnimationFrame(render); return; }
     drawKPIs();
     drawOverlay();
     drawHistory("timelinePresent", "people", C.present, C.presentGlow, "Present");
@@ -297,7 +300,7 @@
   }
 
   // ---- helpers -----------------------------------------------------------
-  function roundRect(ctx, x, y, w, h, r) { r = Math.min(r, h / 2, w / 2); ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); }
+  function roundRect(ctx, x, y, w, h, r) { r = Math.max(0, Math.min(r, h / 2, w / 2)); ctx.beginPath(); ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r); ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath(); }
   function hexA(hex, a) { const n = parseInt(hex.slice(1), 16); return `rgba(${(n>>16)&255},${(n>>8)&255},${n&255},${a})`; }
 
   // ---- tooltips ----------------------------------------------------------

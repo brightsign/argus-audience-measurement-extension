@@ -24,6 +24,7 @@ STREAM_SERVER_PIDFILE="/var/run/bsext-image-stream-server.pid"
 MQTT_BROKER_PIDFILE="/var/run/bsext-mosquitto.pid"
 ARGUS_EXPORTER_PIDFILE="/var/run/bsext-argus-exporter.pid"
 DASHBOARD_SERVER_PIDFILE="/var/run/bsext-dashboard-server.pid"
+VM_API_SERVER_PIDFILE="/var/run/bsext-vm-api-server.pid"
 
 # defaults -- these can be overridden by environment variables
 DISABLE_AUTO_START=false
@@ -318,6 +319,25 @@ run_dashboard_server() {
     fi
 }
 
+# Visual Memory dashboard API (read-only, loopback :20310; dashboard-server proxies /api/vm/ to it).
+# Only started when the binary is packaged (ENABLE_VISUAL_MEMORY build). It reads the SAME active config
+# as Argus (SD argus-config.json > SD config.json > packaged) and stays idle -- no DB open, no model load --
+# unless visual_memory.enabled is true there.
+run_vm_api_server() {
+    SOC_NAME=$(get_soc_name)
+    SOC_HOME=${SCRIPT_PATH}/${SOC_NAME}
+    [ -x "${SOC_HOME}/vm_api_server" ] || return 0
+    local cfg=""
+    for c in /storage/sd/configs/argus-config.json /storage/sd/configs/config.json \
+             "${SOC_HOME}/configs/argus-config.json" "${SOC_HOME}/configs/config.json"; do
+        [ -f "$c" ] && { cfg="$c"; break; }
+    done
+    [ -n "$cfg" ] || return 0
+    echo "Starting vm_api_server (config ${cfg})"
+    start-stop-daemon --start --background --make-pidfile --pidfile ${VM_API_SERVER_PIDFILE} \
+                      --exec ${SOC_HOME}/vm_api_server -- --config "${cfg}" --base-dir "${SOC_HOME}" --port 20310
+}
+
 # Block until a local TCP port is listening (bounded). Used to avoid the
 # attention_demo-vs-mosquitto startup race (see do_start). BusyBox-friendly:
 # uses ss and integer sleeps only.
@@ -481,7 +501,7 @@ do_start() {
     fi
 
     # Clean up stale PID files
-    rm -f ${PIDFILE} ${STREAM_SERVER_PIDFILE} ${MQTT_BROKER_PIDFILE} ${ARGUS_EXPORTER_PIDFILE} ${DASHBOARD_SERVER_PIDFILE} 2>/dev/null || true
+    rm -f ${PIDFILE} ${STREAM_SERVER_PIDFILE} ${MQTT_BROKER_PIDFILE} ${ARGUS_EXPORTER_PIDFILE} ${DASHBOARD_SERVER_PIDFILE} ${VM_API_SERVER_PIDFILE} 2>/dev/null || true
 
     # Demo license: The C++ binary reads expires.json directly from the extension
     # directory (${SCRIPT_PATH}/expires.json) - no copy needed.
@@ -545,6 +565,7 @@ do_start() {
             echo "Dashboard server is disabled (port set to 0)"
         else
             run_dashboard_server true ${DASHBOARD_PORT} "127.0.0.1:${STREAM_SERVER_PORT}" ${MQTT_WS_PORT}
+            run_vm_api_server
         fi
     fi
 
@@ -630,6 +651,10 @@ do_stop() {
         if [ -n "$dpid" ]; then kill -9 $dpid 2>/dev/null || true; pkill -9 -P $dpid 2>/dev/null || true; fi
         rm -f ${DASHBOARD_SERVER_PIDFILE}
     fi
+
+    # Stop vm_api_server (Visual Memory dashboard API)
+    killall -TERM vm_api_server 2>/dev/null || true
+    rm -f ${VM_API_SERVER_PIDFILE}
 
     # Stop image-stream-server (ALWAYS kill by name to handle all instances)
     echo "Stopping image-stream-server..."

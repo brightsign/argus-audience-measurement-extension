@@ -7,8 +7,15 @@
 #include "rknn_embedding_provider.h"
 #endif
 
+#include <3rdparty/nlohmann/json.hpp>
+
 #include <algorithm>
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
+
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -52,7 +59,54 @@ struct VisualMemoryAdapter::Impl {
     std::vector<uint32_t> hook_us;
     uint64_t gate_calls = 0, gate_ns_sum = 0, gate_ns_max = 0;
     int64_t  last_perf_log_ms = 0;
+
+    // Runtime snapshot for the dashboard API (vm_api_server). Written by its OWN thread every 5 s —
+    // never from the capture thread — to tmpfs via atomic rename. Reads only lock-free/cached counters.
+    std::thread             status_thr;
+    std::mutex              status_mu;
+    std::condition_variable status_cv;
+    bool                    status_stop = false;
 };
+
+namespace {
+constexpr const char* kStatusFile = "/tmp/argus_vm_status.json";
+
+void write_status_snapshot(visualmemory::VisualMemory& vm,
+                           const std::shared_ptr<visualmemory::EmbeddingProvider>& provider) {
+    using nlohmann::json;
+    const auto s = vm.stats();
+    json j;
+    j["written_utc_ms"] = now_utc_ms();
+    j["stage1"] = {{"samples_seen", s.samples_seen}, {"accepted", s.accepted}, {"encoded", s.encoded},
+                   {"dropped_queue_full", s.dropped_queue_full}, {"dropped_invalid", s.dropped_invalid},
+                   {"jpeg_write_failures", s.jpeg_write_failures}, {"database_failures", s.database_failures},
+                   {"retention_deletions", s.retention_deletions}, {"queue_depth", s.queue_depth},
+                   {"max_queue_depth", s.max_queue_depth}, {"bytes_on_disk", s.bytes_on_disk}};
+    if (provider) {
+        const auto e = vm.embedding_stats();
+        j["stage2"] = {{"status", e.status}, {"backend", e.backend}, {"embedded", e.embedded},
+                       {"vectors_stored", e.vectors_stored}, {"vector_bytes", e.vector_bytes},
+                       {"queue_depth", e.queue_depth}, {"max_queue_depth", e.max_queue_depth},
+                       {"dropped_queue_full", e.dropped_queue_full}, {"inference_failures", e.inference_failures},
+                       {"invalid_vectors", e.invalid_vectors}, {"decode_failures", e.decode_failures},
+                       {"permanent_failures", e.failed_permanent}, {"db_failures", e.db_failures}};
+        const auto sp = provider->spec();
+        j["model"] = {{"name", sp.model_name}, {"version", sp.model_version}, {"preprocessing", sp.preprocessing},
+                      {"dimension", sp.dimension}, {"sha256", sp.model_sha256}, {"dtype", sp.dtype}, {"metric", sp.metric},
+                      {"provider_ready", provider->ready()}};
+    } else {
+        j["stage2"] = nullptr;
+        j["model"] = nullptr;
+    }
+    const std::string tmp = std::string(kStatusFile) + ".tmp";
+    if (FILE* f = std::fopen(tmp.c_str(), "w")) {
+        const std::string body = j.dump();
+        std::fwrite(body.data(), 1, body.size(), f);
+        std::fclose(f);
+        std::rename(tmp.c_str(), kStatusFile);
+    }
+}
+} // namespace
 
 VisualMemoryAdapter::VisualMemoryAdapter(VisualMemoryOptions opt)
     : opt_(std::move(opt)), impl_(std::make_unique<Impl>()) {}
@@ -125,6 +179,15 @@ bool VisualMemoryAdapter::start() {
         else
             LG_WARN("visual_memory: stage2 inactive: %s (frame storage continues)", es.status.c_str());
     }
+    impl_->status_thr = std::thread([this] {
+        std::unique_lock<std::mutex> lk(impl_->status_mu);
+        while (!impl_->status_stop) {
+            lk.unlock();
+            if (impl_->vm) write_status_snapshot(*impl_->vm, impl_->provider);
+            lk.lock();
+            impl_->status_cv.wait_for(lk, std::chrono::seconds(5), [this] { return impl_->status_stop; });
+        }
+    });
     LG_INFO("visual_memory: enabled root='%s' interval=%lldms %dx%d q=%d retention=%dh",
             opt_.storage_root.c_str(), (long long)opt_.sample_interval_ms,
             opt_.stored_width, opt_.stored_height, opt_.jpeg_quality, opt_.retention_hours);
@@ -132,6 +195,11 @@ bool VisualMemoryAdapter::start() {
 }
 
 void VisualMemoryAdapter::stop() {
+    if (impl_ && impl_->status_thr.joinable()) {
+        { std::lock_guard<std::mutex> lk(impl_->status_mu); impl_->status_stop = true; }
+        impl_->status_cv.notify_all();
+        impl_->status_thr.join();
+    }
     if (impl_ && impl_->vm) {
         impl_->vm->stop();
         impl_->vm.reset();

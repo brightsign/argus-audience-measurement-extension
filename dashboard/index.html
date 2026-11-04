@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Argus Audience</title>
 <link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="vm.css">
 </head>
 <body>
   <header class="topbar">
@@ -12,6 +13,13 @@
       <span class="dot-logo" aria-hidden="true"></span>
       <h1>Argus <span class="muted">Audience Measurement</span></h1>
     </div>
+    <nav class="tabs" id="tabs" aria-label="Dashboard sections">
+      <a href="#audience" data-tab="audience">Audience Measurement</a>
+      <a href="#memory" data-tab="memory">Visual Memory</a>
+      <a href="#search" data-tab="search">Visual Search</a>
+      <a href="#pop" data-tab="pop">Proof of Play <span class="badge-preview">preview</span></a>
+    </nav>
+    <a class="vm-pill vm-grey" id="vmPill" href="#memory" title="Visual Memory status"><span class="vm-pill-dot"></span><span id="vmPillText">VM: …</span></a>
     <div class="status" id="status">
       <span class="feed-dot" id="feedDot"></span>
       <span id="feedLabel">connecting…</span>
@@ -20,7 +28,7 @@
     </div>
   </header>
 
-  <main>
+  <main id="view-audience" class="view" data-view="audience">
     <!-- Primary view: video left, data right, matched height -->
     <section class="stage-row">
       <!-- Live frame + overlay -->
@@ -72,9 +80,23 @@
     </section>
   </main>
 
+  <main id="view-memory" class="view vm-view" data-view="memory" hidden></main>
+  <main id="view-search" class="view vm-view" data-view="search" hidden></main>
+  <main id="view-pop" class="view vm-view" data-view="pop" hidden>
+    <section class="panel pop-panel">
+      <div class="panel-head"><h2>Proof of Play</h2><span class="badge-preview">PREVIEW / EXPERIMENTAL</span></div>
+      <p class="pop-lead"><b>Not implemented yet.</b> This page is a placeholder. No Proof of Play data is collected, stored or shown here.</p>
+      <p>Proof of Play is intended to show evidence of what a screen actually played. That evidence must come from the
+         player's own playback path (for example a capture of the playback output or the player's playback log).</p>
+      <p><b>The audience USB camera is never used as playback evidence.</b> It looks at the audience, not at the screen
+         content, and Visual Memory frames from it must not be presented as proof that any content played.</p>
+    </section>
+  </main>
+
   <div class="tooltip" id="tooltip" hidden></div>
 
   <script src="vendor/mqtt.min.js"></script>
   <script src="app.js"></script>
+  <script src="vm.js"></script>
 </body>
 </html>

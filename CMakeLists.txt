@@ -274,7 +274,20 @@ if(ENABLE_VISUAL_MEMORY)
         list(APPEND VM_LINK_LIB visualmemory_rknn)
         message(STATUS "Visual Memory Stage 2 ENABLED (RKNN embeddings, sqlite-vec=${ENABLE_SQLITE_VEC})")
     endif()
-    message(STATUS "Visual Memory ENABLED - linking libvisualmemory")
+    # Dashboard API: read-only HTTP/JSON adapter over libvisualmemory's VisualMemoryReader. A separate
+    # process (never on the capture thread); the dashboard-server proxies /api/vm/* to it (loopback only).
+    find_package(Threads REQUIRED)
+    add_executable(vm_api_server src/tools/vm_api_server.cpp)
+    add_executable(vm_ingest_dir src/tools/vm_ingest_dir.cpp)   # dev/demo tool, not packaged
+    target_link_libraries(vm_ingest_dir PRIVATE ${VM_LINK_LIB} Threads::Threads)
+    if(ENABLE_VISUAL_EMBEDDINGS)
+        target_compile_definitions(vm_ingest_dir PRIVATE ARGUS_VISUAL_EMBEDDINGS=1)
+    endif()
+    target_link_libraries(vm_api_server PRIVATE ${VM_LINK_LIB} Threads::Threads)
+    if(ENABLE_VISUAL_EMBEDDINGS)
+        target_compile_definitions(vm_api_server PRIVATE ARGUS_VISUAL_EMBEDDINGS=1)
+    endif()
+    message(STATUS "Visual Memory ENABLED - linking libvisualmemory (+ vm_api_server)")
 else()
     message(STATUS "Visual Memory DISABLED (default)")
 endif()
@@ -562,7 +575,8 @@ install(FILES ${CMAKE_BINARY_DIR}/dashboard-server
 
 # Install the dashboard static UI (served by dashboard-server)
 install(DIRECTORY ${CMAKE_SOURCE_DIR}/dashboard
-        DESTINATION ./)
+        DESTINATION ./
+        PATTERN "dev" EXCLUDE)       # dev/ holds the UI mock API: never packaged
 
 # Install config.json to the install directory
 install(FILES ${CMAKE_SOURCE_DIR}/configs/config.json
