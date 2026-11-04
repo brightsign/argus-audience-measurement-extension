@@ -80,6 +80,20 @@ bool load_from_file(const std::string& path, AppConfig& out, bool /*strict*/, ch
         o.retention_hours = vm["retention_hours"].get<int>();
       if (vm.contains("vector_search_enabled") && vm["vector_search_enabled"].is_boolean())
         o.vector_search_enabled = vm["vector_search_enabled"].get<bool>();
+      if (vm.contains("embedding") && vm["embedding"].is_object()) {
+        const auto& em = vm["embedding"];
+        auto& e = o.embedding;
+        if (em.contains("enabled") && em["enabled"].is_boolean()) e.enabled = em["enabled"].get<bool>();
+        if (em.contains("backend") && em["backend"].is_string()) e.backend = em["backend"].get<std::string>();
+        if (em.contains("model_path") && em["model_path"].is_string()) e.model_path = em["model_path"].get<std::string>();
+        if (em.contains("max_pending") && em["max_pending"].is_number()) e.max_pending = em["max_pending"].get<size_t>();
+        if (em.contains("retention_days") && em["retention_days"].is_number()) e.retention_days = em["retention_days"].get<int>();
+        if (em.contains("backfill_on_startup") && em["backfill_on_startup"].is_boolean())
+          e.backfill_on_startup = em["backfill_on_startup"].get<bool>();
+        if (em.contains("npu_core") && em["npu_core"].is_number()) e.npu_core = em["npu_core"].get<int>();
+        if (em.contains("prefer_sqlite_vec") && em["prefer_sqlite_vec"].is_boolean())
+          e.prefer_sqlite_vec = em["prefer_sqlite_vec"].get<bool>();
+      }
     }
     
     // Parse other config sections as before (minimal for now)

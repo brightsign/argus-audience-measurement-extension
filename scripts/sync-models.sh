@@ -37,4 +37,16 @@ Some SoC models are missing from the cache. Compile them with:
 EOF
 fi
 
+# Visual Memory Stage 2 embedding model (MobileNetV2 feature extractor). Converted for RK3588 only
+# (see libs/visual-memory/models/README.md); other SoCs need their own conversion, so they are skipped.
+VM_MODELS="${VM_MODELS_DIR:-${REPO_ROOT}/libs/visual-memory/models}"   # binaries are not in git: see libs/visual-memory/models/README.md
+if [ -f "${VM_MODELS}/mobilenet_embedder_fp16.rknn" ]; then
+    dest="${REPO_ROOT}/install/RK3588/model/visual_memory"
+    mkdir -p "${dest}"
+    cp "${VM_MODELS}/mobilenet_embedder_fp16.rknn" "${dest}/mobilenet_embedder.rknn"   # default: FP16 reference
+    [ -f "${VM_MODELS}/mobilenet_embedder_int8.rknn" ] && cp "${VM_MODELS}/mobilenet_embedder_int8.rknn" "${dest}/"
+    cp "${VM_MODELS}/mobilenet_embedder.json" "${dest}/" 2>/dev/null || true
+    echo "  synced Visual Memory embedding model -> install/RK3588/model/visual_memory"
+fi
+
 echo "==> Model sync complete"
