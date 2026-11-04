@@ -120,6 +120,8 @@ add_library(visualmemory STATIC
     src/jpeg_decoder.cpp
     src/vector_store.cpp
     src/embedding_worker.cpp
+    src/search_core.cpp
+    src/reader.cpp
 )
 add_library(visualmemory::visualmemory ALIAS visualmemory)
 

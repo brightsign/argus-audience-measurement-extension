@@ -9,6 +9,7 @@
 #include "sha256.h"
 #include "jpeg_decoder.h"
 #include "sqlite_store.h"
+#include "search_core.h"
 #include "vector_store.h"
 #include "visualmemory/latency_ring.h"
 
@@ -301,66 +302,8 @@ std::vector<SearchResult> VisualMemory::search_similar(const std::vector<float>&
         st = fail_status(SearchStatus::Code::NotEnabled, "embeddings not active: " + impl_->embed_status);
         return done();
     }
-    const detail::ModelInfo& m = impl_->model;
-    if (query_space) {
-        const EmbeddingSpec& a = *query_space; const EmbeddingSpec& b = m.spec;
-        if (a.model_name != b.model_name || a.model_version != b.model_version ||
-            a.model_sha256 != b.model_sha256 || a.preprocessing != b.preprocessing ||
-            a.dimension != b.dimension || a.dtype != b.dtype || a.metric != b.metric) {
-            st = fail_status(SearchStatus::Code::ModelMismatch,
-                             "query embedding space " + a.model_name + "/" + a.model_version + "/" +
-                             a.preprocessing + " != stored " + b.model_name + "/" + b.model_version + "/" +
-                             b.preprocessing);
-            return done();
-        }
-    }
-    std::vector<float> q = embedding;
-    const detail::VecCheck vc = detail::l2_normalize(q, m.spec.dimension);
-    if (vc == detail::VecCheck::BadDimension) {
-        st = fail_status(SearchStatus::Code::DimensionMismatch,
-                         "query dimension " + std::to_string(embedding.size()) + " != stored " +
-                         std::to_string(m.spec.dimension));
-        return done();
-    }
-    if (vc != detail::VecCheck::Ok) {
-        st = fail_status(SearchStatus::Code::InvalidVector, std::string("invalid query vector: ") + detail::to_string(vc));
-        return done();
-    }
-    if (o.top_k < 1) { st = fail_status(SearchStatus::Code::InvalidArgument, "top_k must be >= 1"); return done(); }
-    if (o.has_min_similarity && !std::isfinite(o.min_similarity)) {
-        st = fail_status(SearchStatus::Code::InvalidArgument, "min_similarity not finite");
-        return done();
-    }
-    const int k = std::min(o.top_k, 100);
-    const int kq = o.require_image ? std::min(k * 4, 400) : k;   // over-fetch when post-filtering
-
-    std::vector<detail::KnnHit> hits;
-    std::string err;
-    if (!impl_->vs->knn(m, q.data(), kq, o.start_utc_ms, o.end_utc_ms, o.source_id, hits, &st.candidates_scanned, err)) {
-        st = fail_status(SearchStatus::Code::DatabaseError, err);
-        return done();
-    }
-    for (const auto& h : hits) {
-        const float sim = 1.0f - h.distance;
-        if (o.has_min_similarity && sim < o.min_similarity) continue;
-        FrameInfo fi;
-        if (!impl_->db.get_by_id(h.frame_id, fi)) continue;     // vector without a frame row: skip
-        SearchResult r;
-        r.frame_id = fi.id; r.metadata = fi.metadata; r.relative_jpeg_path = fi.relative_jpeg_path;
-        r.image_available = fi.image_available;
-        r.absolute_path = impl_->files ? impl_->files->absolute(fi.relative_jpeg_path) : std::string{};
-        std::error_code ec;
-        r.image_exists = fi.image_available && !r.absolute_path.empty() &&
-                         std::filesystem::exists(r.absolute_path, ec);
-        r.model_id = m.model_id; r.similarity = sim; r.distance = h.distance;
-        if (o.require_image && !r.image_exists) continue;
-        results.push_back(std::move(r));
-        if (static_cast<int>(results.size()) >= k) break;
-    }
-    std::stable_sort(results.begin(), results.end(), [](const SearchResult& a, const SearchResult& b) {
-        return a.similarity != b.similarity ? a.similarity > b.similarity : a.frame_id < b.frame_id; });
-    st.code = SearchStatus::Code::Ok;
-    impl_->ew->note_search(steady_now_ns() - t0);
+    results = detail::search_core(impl_->db, *impl_->vs, impl_->files.get(), impl_->model, embedding, o, st, query_space);
+    if (st.ok()) impl_->ew->note_search(steady_now_ns() - t0);
     return done();
 }
 

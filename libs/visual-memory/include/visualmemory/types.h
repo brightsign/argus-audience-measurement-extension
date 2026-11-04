@@ -134,7 +134,8 @@ struct SearchResult {
 
 struct SearchStatus {
     enum class Code { Ok, NotEnabled, DimensionMismatch, InvalidVector, ModelMismatch,
-                      ProviderFailed, InvalidArgument, DatabaseError };
+                      ProviderFailed, InvalidArgument, DatabaseError,
+                      Cancelled /* interrupted via cancel_search() / deadline */ };
     Code        code = Code::Ok;
     std::string message;
     uint64_t    candidates_scanned = 0;           // rows the vector scan considered (0 if backend can't tell)

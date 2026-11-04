@@ -76,6 +76,12 @@ public:
              const std::string& source_id, std::vector<KnnHit>& out, uint64_t* scanned,
              std::string& err);
 
+    // Read-side helpers (dashboard / reader).
+    struct EmbeddingRow { int64_t model_id = 0; int status = 0; int64_t created_utc_ms = 0; std::string error; };
+    std::vector<EmbeddingRow> frame_embeddings(int64_t frame_id);
+    // The stored (already L2-normalised) vector of a frame for this model; false if none.
+    bool get_vector(const ModelInfo& m, int64_t frame_id, std::vector<float>& out);
+    uint64_t count_failed(const ModelInfo& m);   // status=2 rows of this model
     uint64_t count(const ModelInfo& m);        // status=1 rows of this model
     uint64_t total_vector_bytes();             // sum over all models (dimension*4 per ok row)
     std::vector<ModelInfo> models();

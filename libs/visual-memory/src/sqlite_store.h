@@ -50,6 +50,11 @@ public:
 
     // Open (creating if needed), apply pragmas and run migrations.
     bool open(const std::string& db_path, std::string& err);
+    // Read-only open for a second process (dashboard API): no writes, no migration. Fails if the
+    // schema is older than this library expects.
+    bool open_readonly(const std::string& db_path, int busy_timeout_ms, std::string& err);
+    // Abort the statement currently running on any thread (sqlite3_interrupt). Thread-safe.
+    void interrupt();
     void close();
 
     // Insert one row. Returns the new rowid, or -1 on failure.

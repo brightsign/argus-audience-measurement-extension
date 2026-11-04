@@ -154,6 +154,54 @@ bool SqliteStore::open(const std::string& db_path, std::string& err) {
     return true;
 }
 
+bool SqliteStore::open_readonly(const std::string& db_path, int busy_timeout_ms, std::string& err) {
+    std::lock_guard<std::mutex> lk(m_);
+    // Read-only: no pragmas that write, no migration, no journal creation. A writer (the Argus
+    // process) owns schema upgrades; an older schema is reported, never modified.
+    if (sqlite3_open_v2(db_path.c_str(), &db_, SQLITE_OPEN_READONLY, nullptr) != SQLITE_OK) {
+        err = db_ ? sqlite3_errmsg(db_) : "sqlite3_open_v2 failed";
+        if (db_) { sqlite3_close(db_); db_ = nullptr; }
+        return false;
+    }
+    sqlite3_busy_timeout(db_, busy_timeout_ms);
+#ifdef VM_HAVE_SQLITE_VEC
+    {
+        char* vec_err = nullptr;
+        if (sqlite3_vec_init(db_, &vec_err, nullptr) == SQLITE_OK) {
+            vec_available_ = true;
+            sqlite3_stmt* vs = nullptr;
+            if (sqlite3_prepare_v2(db_, "SELECT vec_version();", -1, &vs, nullptr) == SQLITE_OK) {
+                if (sqlite3_step(vs) == SQLITE_ROW && sqlite3_column_text(vs, 0))
+                    vec_version_ = reinterpret_cast<const char*>(sqlite3_column_text(vs, 0));
+                sqlite3_finalize(vs);
+            }
+        }
+        sqlite3_free(vec_err);
+    }
+#endif
+    int version = 0;
+    sqlite3_stmt* st = nullptr;
+    if (sqlite3_prepare_v2(db_, "PRAGMA user_version;", -1, &st, nullptr) == SQLITE_OK) {
+        if (sqlite3_step(st) == SQLITE_ROW) version = sqlite3_column_int(st, 0);
+        sqlite3_finalize(st);
+    } else { err = sqlite3_errmsg(db_); sqlite3_close(db_); db_ = nullptr; return false; }
+    if (version < kSchemaVersion) {
+        err = "schema version " + std::to_string(version) + " < " + std::to_string(kSchemaVersion) +
+              " (the writer must migrate it first)";
+        sqlite3_close(db_); db_ = nullptr;
+        return false;
+    }
+    schema_version_ = version;
+    return true;
+}
+
+void SqliteStore::interrupt() {
+    // Deliberately NOT under m_: sqlite3_interrupt is thread-safe and must be able to abort a
+    // statement running on another thread while that thread holds m_.
+    sqlite3* d = db_;
+    if (d) sqlite3_interrupt(d);
+}
+
 void SqliteStore::close() {
     std::lock_guard<std::mutex> lk(m_);
     if (db_) { sqlite3_close(db_); db_ = nullptr; }

@@ -368,6 +368,55 @@ uint64_t VectorStore::count(const ModelInfo& m) {
     });
 }
 
+uint64_t VectorStore::count_failed(const ModelInfo& m) {
+    return db_.with_db([&](sqlite3* db) -> uint64_t {
+        if (!db) return 0;
+        Stmt q(db, "SELECT COUNT(*) FROM frame_embeddings WHERE model_id=? AND status=2;");
+        if (!q) return 0;
+        sqlite3_bind_int64(q.s, 1, m.model_id);
+        return sqlite3_step(q.s) == SQLITE_ROW ? static_cast<uint64_t>(sqlite3_column_int64(q.s, 0)) : 0;
+    });
+}
+
+std::vector<VectorStore::EmbeddingRow> VectorStore::frame_embeddings(int64_t frame_id) {
+    std::vector<EmbeddingRow> out;
+    db_.with_db([&](sqlite3* db) -> int {
+        if (!db) return 0;
+        Stmt q(db, "SELECT model_id,status,created_utc_ms,COALESCE(error,'') FROM frame_embeddings "
+                   "WHERE frame_id=? ORDER BY model_id;");
+        if (!q) return 0;
+        sqlite3_bind_int64(q.s, 1, frame_id);
+        while (sqlite3_step(q.s) == SQLITE_ROW) {
+            EmbeddingRow r; r.model_id = sqlite3_column_int64(q.s, 0); r.status = sqlite3_column_int(q.s, 1);
+            r.created_utc_ms = sqlite3_column_int64(q.s, 2); r.error = text(q.s, 3);
+            out.push_back(std::move(r));
+        }
+        return 0;
+    });
+    return out;
+}
+
+bool VectorStore::get_vector(const ModelInfo& m, int64_t frame_id, std::vector<float>& out) {
+    out.clear();
+    const size_t dim = static_cast<size_t>(m.spec.dimension);
+    return db_.with_db([&](sqlite3* db) -> bool {
+        if (!db) return false;
+        const std::string sql = m.backend == "vec0"
+            ? "SELECT embedding FROM " + vec_table(m.model_id) + " WHERE rowid=?;"
+            : "SELECT embedding FROM " + blob_table(m.model_id) + " WHERE frame_id=?;";
+        Stmt q(db, sql);
+        if (!q) return false;
+        sqlite3_bind_int64(q.s, 1, frame_id);
+        if (sqlite3_step(q.s) != SQLITE_ROW) return false;
+        if (sqlite3_column_bytes(q.s, 0) != static_cast<int>(dim * sizeof(float))) return false;
+        const void* b = sqlite3_column_blob(q.s, 0);
+        if (!b) return false;
+        out.resize(dim);
+        std::memcpy(out.data(), b, dim * sizeof(float));
+        return true;
+    });
+}
+
 uint64_t VectorStore::total_vector_bytes() {
     return db_.with_db([&](sqlite3* db) -> uint64_t {
         if (!db) return 0;
