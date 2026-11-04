@@ -12,6 +12,9 @@ add_executable(visualmemory_tests
     test_sqlite_store.cpp
     test_retention.cpp
     test_visual_memory.cpp
+    test_preprocess.cpp
+    test_vector_store.cpp
+    test_embedding_pipeline.cpp
 )
 
 target_include_directories(visualmemory_tests PRIVATE

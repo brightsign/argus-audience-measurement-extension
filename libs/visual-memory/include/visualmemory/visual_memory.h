@@ -10,6 +10,7 @@
 #ifndef VISUALMEMORY_VISUAL_MEMORY_H
 #define VISUALMEMORY_VISUAL_MEMORY_H
 
+#include "visualmemory/embedding_provider.h"
 #include "visualmemory/types.h"
 
 #include <memory>
@@ -47,6 +48,40 @@ public:
 
     // Resolve a FrameInfo::relative_jpeg_path to an absolute filesystem path.
     std::string absolute_path(const std::string& relative_jpeg_path) const;
+
+    // ---- Stage 2 (optional; inert unless Config::embedding.enabled) -------------
+    // Inject the embedding provider (RKNN, mock, ...). Must be called BEFORE start().
+    // The library never owns device resources: the caller shuts the provider down.
+    void set_embedding_provider(std::shared_ptr<EmbeddingProvider> provider);
+
+    // True when a ready provider is registered and the embedding worker is running.
+    bool embeddings_active() const;
+
+    // Exact top-K cosine search over stored embeddings. `embedding` is validated
+    // (dimension, NaN/Inf, zero norm) and L2-normalised internally. `query_space`
+    // (optional) is checked against the active model identity so vectors from a
+    // different model/preprocessing version are rejected (ModelMismatch). Results are
+    // sorted by similarity (descending). Executes on the CALLER's thread; cost is
+    // O(N*d) over the rows passing the time/source filter (see README "Scaling").
+    std::vector<SearchResult> search_similar(const std::vector<float>& embedding,
+                                             const SearchOptions& options,
+                                             SearchStatus* status = nullptr,
+                                             const EmbeddingSpec* query_space = nullptr);
+
+    // Embed `image` (RGB24/BGR24) with the registered provider, then search.
+    std::vector<SearchResult> search_by_image(const ImageView& image, const SearchOptions& options,
+                                              SearchStatus* status = nullptr);
+    // Decode a JPEG (bounded), embed, then search.
+    std::vector<SearchResult> search_by_jpeg(const std::vector<uint8_t>& jpeg,
+                                             const SearchOptions& options,
+                                             SearchStatus* status = nullptr);
+
+    // Bounded, resumable, idempotent backfill: embed up to `max_frames` stored JPEGs that
+    // have no vector for the active model (newest first). Returns vectors stored.
+    // `deadline_ms` > 0 caps wall time. Safe to call repeatedly or after a crash.
+    size_t backfill_embeddings(size_t max_frames, int64_t deadline_ms = 0);
+
+    EmbeddingStats embedding_stats() const;
 
     // Snapshot of counters.
     Stats stats() const;

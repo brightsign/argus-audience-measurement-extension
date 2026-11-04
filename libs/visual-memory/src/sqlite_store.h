@@ -65,14 +65,38 @@ public:
     std::vector<EvictCandidate> select_older_than(int64_t cutoff_utc_ms, int limit);
     bool    delete_by_id(int64_t id);
 
-    uint64_t total_jpeg_bytes();
+    // Stage 2: the JPEG expired but an embedding is kept — keep the metadata row,
+    // flag the image unavailable so quota/retention no longer count or revisit it.
+    bool    mark_image_unavailable(int64_t id);
+    // One frame row (id = frames.id). Returns false if absent.
+    bool    get_by_id(int64_t id, FrameInfo& out);
+
+    uint64_t total_jpeg_bytes();     // only frames whose JPEG is still available
     int64_t  row_count();
+
+    // Stage 2 support ------------------------------------------------------
+    // True if sqlite-vec was compiled in and registered on this connection.
+    bool        vec_available() const { return vec_available_; }
+    std::string vec_version() const { return vec_version_; }
+    std::string sqlite_version() const;
+    int         schema_version() const { return schema_version_; }
+
+    // Run fn(sqlite3*) while holding the store mutex (used by VectorStore so
+    // every SQL statement on the single connection stays serialised).
+    template <class F>
+    auto with_db(F&& fn) {
+        std::lock_guard<std::mutex> lk(m_);
+        return fn(db_);
+    }
 
 private:
     bool exec(const char* sql, std::string& err);
 
     sqlite3*           db_ = nullptr;
     mutable std::mutex m_;
+    bool               vec_available_ = false;
+    std::string        vec_version_;
+    int                schema_version_ = 0;
 };
 
 } // namespace visualmemory::detail
