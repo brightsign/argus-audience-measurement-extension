@@ -161,6 +161,15 @@ bool load_from_file(const std::string& path, AppConfig& out, bool /*strict*/, ch
         if (usb.contains("width"))  out.input.usb.width  = usb["width"];
         if (usb.contains("height")) out.input.usb.height = usb["height"];
         if (usb.contains("fps"))    out.input.usb.fps    = usb["fps"];
+        // Optional V4L2 exposure_auto_priority (0 or 1). Absent/null => leave the camera untouched.
+        if (usb.contains("exposure_auto_priority") && !usb["exposure_auto_priority"].is_null()) {
+          const auto& v = usb["exposure_auto_priority"];
+          int val = -1;
+          if (v.is_boolean()) val = v.get<bool>() ? 1 : 0;
+          else if (v.is_number_integer()) val = v.get<int>();
+          if (val == 0 || val == 1) out.input.usb.exposure_auto_priority = val;
+          else std::fprintf(stderr, "config: input.usb.exposure_auto_priority must be 0 or 1; ignoring (camera left unchanged)\n");
+        }
       }
     }
     

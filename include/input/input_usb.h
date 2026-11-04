@@ -4,6 +4,7 @@
 #include <vector>
 #include <cstdint>
 #include <cstddef>
+#include <chrono>
 #include <opencv2/opencv.hpp>
 #include "input/input_source.h"
 
@@ -59,6 +60,15 @@ private:
   int              pref_w_{0};
   int              pref_h_{0};
   double           pref_fps_{0.0};
+  int              pref_exp_prio_{-1};   // -1 unset, 0 or 1 (V4L2 exposure_auto_priority)
+  double           neg_fps_{0.0};        // frame rate the driver agreed to
+  // Delivery-rate monitor (touched only from tryFetch's thread)
+  std::chrono::steady_clock::time_point win_start_{};
+  uint32_t         win_frames_{0};
+  uint32_t         win_count_{0};
+  bool             win_low_{false};
+  void apply_exposure_auto_priority() noexcept;
+  void note_delivered_frame() noexcept;
   std::vector<uint8_t> scratch_bgr_;
 
   std::atomic<bool>     stopping_{false};    // NEW: for graceful shutdown

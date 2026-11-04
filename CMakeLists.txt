@@ -334,6 +334,7 @@ add_executable(attention_demo
         src/input/input_from_registry.cpp
         src/input/input_rtsp.cpp
         src/input/input_usb.cpp
+        src/input/v4l2_controls.cpp
         src/input/media_probe.cpp
         src/input/registry_helper.cpp
         # Common utilities

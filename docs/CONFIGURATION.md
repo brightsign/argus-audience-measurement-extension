@@ -125,6 +125,7 @@ flowchart TD
 | `input.usb.width` | integer | `640` | Capture width |
 | `input.usb.height` | integer | `480` | Capture height |
 | `input.usb.fps` | integer | `30` | Target frame rate |
+| `input.usb.exposure_auto_priority` | `0` / `1` / unset | unset | Optional V4L2 `exposure_auto_priority` control (USB cameras only). `0` keeps the frame rate constant in dim light; `1` lets the camera lower its frame rate to lengthen exposure. Unset (default) leaves the camera exactly as found. Invalid values are ignored with a warning; cameras without the control are left unchanged (logged). Not applied to RTSP or file inputs. The setting is re-applied at every start (a UVC camera resets it on power-up). With `log_level: "info"` the log shows `requested`, `previous` and `actual` values plus the measured camera delivery rate (a WARN is logged when delivery falls below 80 % of the negotiated rate). |
 
 #### Video File (Testing)
 

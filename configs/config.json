@@ -37,7 +37,8 @@
     "usb": {
       "width": 640,
       "height": 480,
-      "fps": 30
+      "fps": 30,
+      "_comment_exposure_auto_priority": "Optional V4L2 exposure_auto_priority for USB cameras: 0 = keep the frame rate constant in dim light, 1 = let the camera lower fps to lengthen exposure. Omit to leave the camera as found. Ignored with a log message if the camera lacks the control. Not used for RTSP/file inputs."
     },
     "rtsp": {
       "latency_ms": 100

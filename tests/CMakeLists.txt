@@ -32,6 +32,7 @@ list(REMOVE_ITEM TEST_SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/test_runtime_tracker.
 set(TEST_DEPENDENCIES
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/util/util.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/config/configuration.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/../src/input/v4l2_controls.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/config/model_spec.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/config/processing_params.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/../src/config/publisher_config.cpp
