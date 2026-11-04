@@ -472,9 +472,12 @@
           h("td", { text: fmtInt(e.dimension) }), h("td", null, h("span", { class: "vm-badge " + (e.status === "ok" ? "ok" : "bad"), text: e.status || DASH })),
           h("td", null, tsEl(e.created_utc_ms)), h("td", { text: e.error || "" })))))) : h("p", { class: "muted", text: "No embedding records for this frame." });
       const find = h("button", { class: "vm-btn primary", type: "button", text: "Find similar", onclick: () => { m.close(); location.hash = "#search?frame=" + f.id; } });
+      const objOn = !!(VMUI.objects && S.status && S.status.objects && S.status.objects.enabled) && f.image_available !== false && f.image_exists !== false;
+      const selObj = objOn ? h("button", { class: "vm-btn", type: "button", text: "Select Object", title: "Draw a box around an object in this frame to search for or index it",
+        onclick: () => VMUI.objects.openSelector({ id: f.id, width: f.width, height: f.height, capture_utc_ms: f.capture_utc_ms, source_id: f.source_id, image_available: f.image_available, image_exists: f.image_exists }, m) }) : null;
       body.append(h("div", { class: "vm-detail" },
         h("div", null, h("div", { class: "vm-bigimg" }, frameImage(f, "image", 0, true)),
-          h("div", { class: "vm-row", style: "margin-top:10px" }, find, h("a", { class: "vm-btn", href: `${API}/frames/${f.id}/image`, target: "_blank", rel: "noopener", style: f.image_available === false || f.image_exists === false ? "display:none" : "text-decoration:none", text: "Open full image" }))),
+          h("div", { class: "vm-row", style: "margin-top:10px" }, find, selObj, h("a", { class: "vm-btn", href: `${API}/frames/${f.id}/image`, target: "_blank", rel: "noopener", style: f.image_available === false || f.image_exists === false ? "display:none" : "text-decoration:none", text: "Open full image" }))),
         h("div", null, dl)),
         h("h3", { style: "margin-top:16px", text: "Embedding records" }), tbl);
     })();
@@ -626,12 +629,27 @@
           h("div", { class: "vm-row" }, h("label", { class: "inline" }, E.minOn, "Minimum similarity (off by default)"), E.minSim),
           h("div", { class: "vm-row" }, E.run, E.cancel, E.spin, E.runMsg)))));
 
-    root.append(h("div", { class: "vm-stack" },
-      h("div", { class: "vm-note", text: SEARCH_NOTE }), E.avail, E.fs, E.results));
+    E.full = h("div", { class: "vm-stack" }, h("div", { class: "vm-note", text: SEARCH_NOTE }), E.avail, E.fs, E.results);
+    E.objSlot = h("div", { hidden: true });
+    E.modeFull = h("button", { class: "vm-btn on", type: "button", text: "Full frame search", onclick: () => setSearchMode("frame") });
+    E.modeObj = h("button", { class: "vm-btn", type: "button", text: "Object search", onclick: () => setSearchMode("objects") });
+    root.append(h("div", { class: "vm-stack" }, h("div", { class: "vm-row", role: "group", "aria-label": "Search mode" }, E.modeFull, E.modeObj), E.full, E.objSlot));
     renderRef();
     onStatus(() => { updateRunBtn(); });
     tz.subs.push(() => refreshTs(root));
     document.addEventListener("vm-authed", updateRunBtn);
+  }
+
+  let searchMode = "frame";
+  function setSearchMode(mode) {
+    searchMode = mode;                                   // the requested mode survives until objects.js has registered
+    if (currentView !== "search") { location.hash = "#search"; }
+    buildSearch();
+    const E = searchEls, obj = mode === "objects" && !!VMUI.objects;
+    E.full.hidden = obj; E.objSlot.hidden = !obj;
+    E.modeFull.classList.toggle("on", !obj); E.modeObj.classList.toggle("on", obj);
+    E.modeFull.setAttribute("aria-pressed", String(!obj)); E.modeObj.setAttribute("aria-pressed", String(obj));
+    if (obj) VMUI.objects.mountSearch(E.objSlot);
   }
 
   function openPicker() {
@@ -748,12 +766,21 @@
     if (view === "memory") { initMemory(); memGallery.load(); renderMemStatus(); }
     if (view === "search") {
       initSearch();
-      const fid = new URLSearchParams(qs || "").get("frame");
-      if (fid) { setFrameRef(Number(fid)); history.replaceState(null, "", "#search"); }
+      const prm = new URLSearchParams(qs || "");
+      const fid = prm.get("frame");
+      if (fid) { setSearchMode("frame"); setFrameRef(Number(fid)); history.replaceState(null, "", "#search"); }
+      else if (prm.get("mode") === "objects") { setSearchMode("objects"); history.replaceState(null, "", "#search"); }
+      else setSearchMode(searchMode);
     }
     if (view === "audience") window.dispatchEvent(new Event("resize"));
     window.scrollTo(0, 0);
   }
+  const VMUI = window.VMUI = {
+    h, api, openModal, frameImage, loadImg, tsEl, otherZone, fmtInt, fmtBytes, isNum, DASH, API, S, clear, errorMessage, authBox,
+    makeTimeFilter, sourceSelect, makeGallery, openDetail, onStatus, pollStatus, refreshTs, tzSubscribe: (f) => tz.subs.push(f),
+    showSearchMode: (m) => setSearchMode(m), objects: null,
+    registerObjects(o) { VMUI.objects = o; if (SR.built) setSearchMode(searchMode); },
+  };
   window.addEventListener("hashchange", route);
   onStatus(renderPill);
   tz.subs.push(() => { });

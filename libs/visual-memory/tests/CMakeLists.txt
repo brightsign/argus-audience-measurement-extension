@@ -16,6 +16,7 @@ add_executable(visualmemory_tests
     test_vector_store.cpp
     test_embedding_pipeline.cpp
     test_reader.cpp
+    test_object_index.cpp
 )
 
 target_include_directories(visualmemory_tests PRIVATE

@@ -26,6 +26,13 @@
       "backfill_on_startup": false,
       "npu_core": -1,
       "prefer_sqlite_vec": true
+    },
+    "_comment_objects": "D4 Object Search (manual region-of-interest indexing in the dashboard, served by vm_api_server). OFF by default. Needs Stage 2 embeddings. Regions live in <storage_root>/objects.db; retention follows the time a region was indexed.",
+    "objects": {
+      "enabled": false,
+      "max_regions": 10000,
+      "retention_days": 30,
+      "min_roi_px": 16
     }
   },
 

@@ -111,6 +111,28 @@ Response (both):
 Searches are exact brute-force scans (not ANN) bounded by `top_k<=50` and a server-side deadline (default 10 s)
 that interrupts the SQLite query; closing the connection cancels a running search.
 
+## D4 Object search endpoints (optional; `visual_memory.objects.enabled`, off by default)
+Manually selected rectangles ("regions") of stored frames are embedded with the same MobileNetV2 model and kept in a
+**separate** index (`<storage_root>/objects.db`); object vectors are never compared with full-frame vectors. Coordinates
+are pixels of the **stored JPEG** (`frames/{id}` → `width`/`height`), origin top-left. When the feature is off every
+object route answers `503 {"error":"not_enabled"}`; `GET /api/vm/status` carries an `objects` block
+(`enabled`, `available`, `regions`, `vector_bytes`, `db_bytes`, `max_regions`, `models`).
+
+| Route | Body / query | Result |
+|---|---|---|
+| `POST /api/vm/objects` | JSON `{frame_id,x,y,w,h,label?}` (≤ 16 KiB) | `201 {"status":"indexed","region":{…}}`; re-indexing the same frame/ROI/model → `200 {"status":"duplicate"}` with the same `region_id` (a new label updates the old one). `400 invalid_roi` (outside the image, below `min_roi_px`, negative…), `404 not_found` (frame), `410 image_unavailable` (JPEG expired), `429 busy`, `503 provider_failed` |
+| `GET /api/vm/objects` | `limit` (1..100), `offset`, `label`, `source`, `frame_id`, `start`, `end` | `{"total","objects":[region…]}` newest first |
+| `GET /api/vm/objects/{id}` | – | region + `image_available`/`image_exists` of the parent frame |
+| `GET /api/vm/objects/{id}/image?max=240` | `max` 32..640 | JPEG crop **regenerated** from the stored frame (no crop file is stored). `410` if the frame JPEG expired, `404 image_missing` |
+| `POST /api/vm/objects/search` | JSON: `{region_id}` **or** `{frame_id,x,y,w,h}`, plus `top_k` (1..50), `label`, `source`, `start`, `end`, `min_similarity?`, `require_image?` | `{"label","query","index_regions","status":{code,message,elapsed_ms,candidates_scanned,empty_index?},"results":[{rank,region_id,frame_id,bbox:{x,y,w,h},image_width,image_height,label,capture_utc_ms,source_id,similarity,distance,image_available,image_exists}]}` sorted by cosine similarity. `status.code` as for frame search; `model_mismatch` (400) when the index was built with a different model/preprocessing |
+| `GET /api/vm/frames/{id}/crop?x&y&w&h&max=240` | – | preview crop of a stored frame (any rectangle inside the image); the frame is never modified |
+
+A region search (`region_id`) uses the stored vector (no inference) and excludes the query region. ROI searches use the
+NPU and share the one-at-a-time guard with indexing (`429 busy`). The deadline/disconnect watchdog of frame search
+applies. Scores are cosine similarities of image embeddings, **not identification probabilities**. The proxy accepts
+POST only on `/api/vm/search/*`, `/api/vm/objects` and `/api/vm/objects/search` (same-origin required; object bodies are
+capped at 16 KiB). No route accepts a filesystem path.
+
 ## Proxy-level responses (dashboard-server, before the request reaches `vm_api_server`)
 `401 unauthorized` (token configured, missing/wrong), `403 forbidden` (POST with missing/foreign Origin/Referer),
 `405 method_not_allowed`, `413 too_large` (body > 8 MiB), `502 vm_api_unavailable` (API process down).

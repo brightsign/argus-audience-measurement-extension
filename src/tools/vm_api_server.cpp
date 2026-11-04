@@ -10,6 +10,7 @@
 #include <3rdparty/nlohmann/json.hpp>
 
 #include "visualmemory/mock_embedding_provider.h"
+#include "visualmemory/object_index.h"
 #include "visualmemory/reader.h"
 #ifdef ARGUS_VISUAL_EMBEDDINGS
 #include "rknn_embedding_provider.h"
@@ -34,6 +35,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <map>
 #include <mutex>
 #include <sstream>
@@ -76,6 +78,10 @@ struct Cfg {
     int         idle_unload_s = 120;
     int64_t     sample_interval_ms = 5000;    // visual_memory.sample_interval_ms (library default)
     int         stored_width = 640, stored_height = 360, jpeg_quality = 75;
+    bool        objects_enabled = false;      // visual_memory.objects.enabled (D4 manual-ROI object search; off by default)
+    uint64_t    objects_max_regions = 10000;
+    int         objects_retention_days = 30;
+    int         objects_min_roi_px = 16;
     std::string config_path;
     std::string read_error;
 };
@@ -101,6 +107,11 @@ Cfg load_cfg(const std::string& path) {
         c.backend = e.value("backend", std::string("rknn"));
         c.model_path = e.value("model_path", std::string("model/visual_memory/mobilenet_embedder.rknn"));
         c.embedding_retention_days = e.value("retention_days", 0);
+        const json ob = vm.value("objects", json::object());
+        c.objects_enabled = ob.value("enabled", false);
+        c.objects_max_regions = ob.value("max_regions", static_cast<uint64_t>(10000));
+        c.objects_retention_days = ob.value("retention_days", 30);
+        c.objects_min_roi_px = std::max(8, std::min(256, ob.value("min_roi_px", 16)));
         const json a = vm.value("api", json::object());
         c.npu_core = a.value("npu_core", 1);
         c.search_timeout_ms = std::max(1000, std::min(60000, a.value("search_timeout_ms", 10000)));
@@ -137,7 +148,7 @@ std::string url_decode(const std::string& s) {
 
 const char* reason(int s) {
     switch (s) { case 200: return "OK"; case 400: return "Bad Request"; case 404: return "Not Found"; case 405: return "Method Not Allowed";
-        case 410: return "Gone"; case 413: return "Payload Too Large"; case 429: return "Too Many Requests"; case 500: return "Internal Server Error";
+        case 201: return "Created"; case 410: return "Gone"; case 413: return "Payload Too Large"; case 429: return "Too Many Requests"; case 500: return "Internal Server Error";
         case 503: return "Service Unavailable"; case 504: return "Gateway Timeout"; default: return "Status"; }
 }
 
@@ -254,6 +265,28 @@ struct App {
     std::unique_ptr<VisualMemoryReader> reader;
     int64_t last_open_try_ms = 0;
     std::string open_err;
+
+    std::mutex obj_mu;
+    std::unique_ptr<ObjectIndex> objects;
+    int64_t last_obj_try_ms = 0;
+    std::string obj_err;
+    // Lazily opens <storage_root>/objects.db (own file; visual_memory.db stays read-only here).
+    ObjectIndex* get_objects(std::string* why = nullptr) {
+        std::lock_guard<std::mutex> lk(obj_mu);
+        if (!cfg.configured || !cfg.objects_enabled) { if (why) *why = "object search is not enabled (visual_memory.objects.enabled)"; return nullptr; }
+        if (objects && objects->is_open()) return objects.get();
+        const int64_t t = steady_ms();
+        if (!objects || t - last_obj_try_ms >= 2000) {
+            last_obj_try_ms = t;
+            ObjectIndexConfig oc; oc.root_directory = cfg.storage_root; oc.min_roi_px = cfg.objects_min_roi_px;
+            auto o = std::make_unique<ObjectIndex>(oc);
+            std::string e;
+            if (o->open(e)) { objects = std::move(o); obj_err.clear(); }
+            else { obj_err = e; objects.reset(); }
+        }
+        if (!objects && why) *why = "object index unavailable: " + obj_err;
+        return objects.get();
+    }
 
     std::mutex prov_mu;
     std::shared_ptr<EmbeddingProvider> provider;
@@ -398,6 +431,7 @@ Response handle_status(App& a) {
     if (!a.cfg.read_error.empty()) errors.push_back(a.cfg.read_error);
     if (!a.cfg.configured) {
         for (const char* k : {"runtime", "model", "store", "search", "sampling", "capture"}) out[k] = nullptr;
+        out["objects"] = {{"enabled", false}};
         out["errors"] = errors;
         return jok(out);
     }
@@ -464,6 +498,19 @@ Response handle_status(App& a) {
         if (cs.ok) out["capture"] = {{"fps", cs.fps}, {"dropped_frames", cs.dropped}, {"width", cs.width}, {"height", cs.height},
                                      {"source", "argus metrics"}};
         else out["capture"] = nullptr;
+    }
+    {
+        json ob = {{"enabled", a.cfg.configured && a.cfg.objects_enabled}};
+        if (a.cfg.configured && a.cfg.objects_enabled) {
+            std::string w; ObjectIndex* oi = a.get_objects(&w);
+            if (oi) { const ObjectIndexSummary os = oi->summary();
+                ob["available"] = true; ob["regions"] = os.regions; ob["vector_bytes"] = os.vector_bytes; ob["db_bytes"] = os.db_bytes;
+                ob["schema_version"] = os.schema_version; ob["max_regions"] = a.cfg.objects_max_regions;
+                ob["oldest_utc_ms"] = os.oldest_capture_utc_ms; ob["newest_utc_ms"] = os.newest_capture_utc_ms;
+                ob["models"] = json::array(); for (auto& m : os.models) ob["models"].push_back(model_json(m)); }
+            else { ob["available"] = false; ob["reason"] = w; }
+        }
+        out["objects"] = ob;
     }
     out["store"] = store;
     out["model"] = model;
@@ -656,6 +703,239 @@ Response handle_search(App& a, const Request& rq, int fd, bool by_frame) {
     return r;
 }
 
+
+// ---------------------------------------------------------------- D4: object regions (manual ROI)
+const char* kObjLabel = "Object-region similarity (MobileNetV2 embedding of a manually selected crop). Scores are cosine similarities, not identification probabilities.";
+
+json region_json(const ObjectRegion& r) {
+    return {{"region_id", r.region_id}, {"frame_id", r.frame_id}, {"source_id", r.source_id}, {"capture_utc_ms", r.capture_utc_ms},
+            {"bbox", {{"x", r.roi.x}, {"y", r.roi.y}, {"w", r.roi.w}, {"h", r.roi.h}}},
+            {"image_width", r.image_width}, {"image_height", r.image_height}, {"label", r.label}, {"created_utc_ms", r.created_utc_ms},
+            {"crop_stored", r.has_crop_file}};
+}
+json hit_json(const ObjectHit& h, int rank) {
+    json j = region_json(h.region);
+    j["rank"] = rank; j["similarity"] = h.similarity; j["distance"] = h.distance;
+    j["image_available"] = h.image_available; j["image_exists"] = h.image_exists;
+    return j;
+}
+
+bool body_json(const Request& rq, json& j, std::string& why) {
+    if (rq.body.empty() || rq.body.size() > 16 * 1024) { why = "JSON body required (max 16 KiB)"; return false; }
+    j = json::parse(rq.body, nullptr, false);
+    if (j.is_discarded() || !j.is_object()) { why = "body must be a JSON object"; return false; }
+    return true;
+}
+bool get_int(const json& j, const char* k, int64_t& v) {
+    if (!j.contains(k)) return false;
+    const json& x = j[k];
+    if (x.is_number_integer()) { v = x.get<int64_t>(); return true; }
+    if (x.is_number_float()) { const double d = x.get<double>(); if (std::isfinite(d) && std::floor(d) == d && std::fabs(d) < 1e9) { v = static_cast<int64_t>(d); return true; } }
+    return false;
+}
+bool get_roi(const json& j, Roi& r, std::string& why) {
+    int64_t x, y, w, h;
+    if (!get_int(j, "x", x) || !get_int(j, "y", y) || !get_int(j, "w", w) || !get_int(j, "h", h)) { why = "x, y, w, h (integers) required"; return false; }
+    if (std::llabs(x) > 100000 || std::llabs(y) > 100000 || std::llabs(w) > 100000 || std::llabs(h) > 100000) { why = "rectangle out of range"; return false; }
+    r = {static_cast<int>(x), static_cast<int>(y), static_cast<int>(w), static_cast<int>(h)};
+    return true;
+}
+
+// Runs fn() with the deadline + client-disconnect watchdog used by the full-frame search.
+template <class F> int run_watched(App& a, int fd, const std::function<void()>& cancel, F&& fn) {
+    int wake[2] = {-1, -1};
+    if (::pipe(wake) != 0) { fn(); return 0; }
+    std::atomic<bool> done{false}; std::atomic<int> why{0};
+    std::thread wd([&] {
+        const int64_t t0 = steady_ms();
+        while (!done.load()) {
+            pollfd p[2] = {{fd, POLLRDHUP, 0}, {wake[0], POLLIN, 0}};
+            const int n = ::poll(p, 2, 100);
+            if (n > 0 && (p[1].revents & POLLIN)) return;
+            if (n > 0 && (p[0].revents & (POLLRDHUP | POLLHUP | POLLERR))) { why = 2; cancel(); return; }
+            if (steady_ms() - t0 > a.cfg.search_timeout_ms) { why = 1; cancel(); return; }
+        }
+    });
+    fn();
+    done = true; { const char c = 1; (void)!::write(wake[1], &c, 1); }
+    wd.join(); ::close(wake[0]); ::close(wake[1]);
+    return why.load();
+}
+
+struct NpuGuard {
+    App& a; bool held = false;
+    explicit NpuGuard(App& app) : a(app) { bool e = false; held = a.searching.compare_exchange_strong(e, true); }
+    ~NpuGuard() { if (held) { a.last_search_ms = steady_ms(); a.searching = false; } }
+};
+
+Response objects_gate(App& a, ObjectIndex*& oi, VisualMemoryReader*& rd) {
+    std::string why;
+    if (!a.cfg.configured) return jerr(503, "not_enabled", "visual memory is not configured");
+    if (!a.cfg.objects_enabled) return jerr(503, "not_enabled", "object search is not enabled (visual_memory.objects.enabled)");
+    rd = a.get_reader(&why); if (!rd) return jerr(503, "store_unavailable", why);
+    oi = a.get_objects(&why); if (!oi) return jerr(503, "store_unavailable", why);
+    return Response{200, "", "", ""};
+}
+
+Response handle_frame_crop(App& a, int64_t id, const Request& rq) {
+    std::string why; VisualMemoryReader* rd = a.get_reader(&why);
+    if (!rd) return jerr(503, "store_unavailable", why);
+    int64_t x, y, w, h, mx = 240;
+    auto q = [&](const char* k, int64_t& v) { return rq.query.count(k) && parse_i64(rq.query.at(k), v); };
+    if (!q("x", x) || !q("y", y) || !q("w", w) || !q("h", h)) return jerr(400, "invalid_argument", "x, y, w, h required");
+    if (rq.query.count("max") && (!parse_i64(rq.query.at("max"), mx) || mx < 32 || mx > 640)) return jerr(400, "invalid_argument", "max must be 32..640");
+    ObjectIndex scratch({a.cfg.storage_root});              // crop generation needs no database
+    std::vector<uint8_t> out; std::string err;
+    const int rc = scratch.crop_jpeg(*rd, id, {static_cast<int>(std::max<int64_t>(-1, std::min<int64_t>(x, 100000))), static_cast<int>(std::max<int64_t>(-1, std::min<int64_t>(y, 100000))),
+                                              static_cast<int>(std::min<int64_t>(w, 100000)), static_cast<int>(std::min<int64_t>(h, 100000))}, static_cast<int>(mx), 88, out, err);
+    if (rc == 1) return jerr(404, "not_found", "no such frame");
+    if (rc == 2) return jerr(410, "image_expired", "JPEG expired");
+    if (rc == 3) return jerr(404, "image_missing", "JPEG file is missing or unreadable");
+    if (rc == 4) return jerr(400, "invalid_roi", err);
+    if (rc != 0) return jerr(500, "internal", "crop failed");
+    Response r; r.ctype = "image/jpeg"; r.cache = "private, max-age=60";
+    r.body.assign(reinterpret_cast<const char*>(out.data()), out.size());
+    return r;
+}
+
+Response handle_objects_list(App& a, const Request& rq) {
+    ObjectIndex* oi = nullptr; VisualMemoryReader* rd = nullptr;
+    Response g = objects_gate(a, oi, rd); if (!oi) return g;
+    ObjectFilter f; int64_t v, lim = 24, off = 0;
+    if (rq.query.count("start") && parse_i64(rq.query.at("start"), v)) f.start_utc_ms = v;
+    if (rq.query.count("end") && parse_i64(rq.query.at("end"), v)) f.end_utc_ms = v;
+    if (rq.query.count("source")) f.source_id = rq.query.at("source");
+    if (rq.query.count("label")) f.label = rq.query.at("label");
+    if (rq.query.count("frame_id") && parse_i64(rq.query.at("frame_id"), v) && v > 0) f.frame_id = v;
+    if (rq.query.count("limit")) { if (!parse_i64(rq.query.at("limit"), lim) || lim < 1 || lim > 100) return jerr(400, "invalid_argument", "limit must be 1..100"); }
+    if (rq.query.count("offset")) { if (!parse_i64(rq.query.at("offset"), off) || off < 0) return jerr(400, "invalid_argument", "offset must be >= 0"); }
+    uint64_t total = 0;
+    const auto rows = oi->list_regions(f, static_cast<int>(lim), static_cast<int>(off), true, &total);
+    json arr = json::array(); for (auto& r : rows) arr.push_back(region_json(r));
+    return jok({{"label", kObjLabel}, {"total", total}, {"limit", lim}, {"offset", off}, {"objects", arr}});
+}
+
+Response handle_object_detail(App& a, int64_t id) {
+    ObjectIndex* oi = nullptr; VisualMemoryReader* rd = nullptr;
+    Response g = objects_gate(a, oi, rd); if (!oi) return g;
+    ObjectRegion r; if (!oi->get_region(id, r)) return jerr(404, "not_found", "no such object region");
+    json j = region_json(r);
+    FrameDetail fd;
+    if (rd->get_frame(r.frame_id, fd)) { j["image_available"] = fd.record.frame.image_available; j["image_exists"] = fd.record.image_exists; }
+    return jok(j);
+}
+
+Response handle_object_image(App& a, int64_t id, const Request& rq) {
+    ObjectIndex* oi = nullptr; VisualMemoryReader* rd = nullptr;
+    Response g = objects_gate(a, oi, rd); if (!oi) return g;
+    int64_t mx = 240;
+    if (rq.query.count("max") && (!parse_i64(rq.query.at("max"), mx) || mx < 32 || mx > 640)) return jerr(400, "invalid_argument", "max must be 32..640");
+    std::vector<uint8_t> out; std::string err;
+    const int rc = oi->region_crop_jpeg(*rd, id, static_cast<int>(mx), 88, out, err);
+    if (rc == 1) return jerr(404, "not_found", "no such object region or frame");
+    if (rc == 2) return jerr(410, "image_expired", "source frame JPEG expired; the embedding and bounding box are retained");
+    if (rc == 3) return jerr(404, "image_missing", "source frame JPEG is missing");
+    if (rc != 0) return jerr(500, "internal", "crop failed");
+    Response r; r.ctype = "image/jpeg"; r.cache = "private, max-age=300";
+    r.body.assign(reinterpret_cast<const char*>(out.data()), out.size());
+    return r;
+}
+
+Response handle_object_index(App& a, const Request& rq, int fd) {
+    ObjectIndex* oi = nullptr; VisualMemoryReader* rd = nullptr;
+    Response g = objects_gate(a, oi, rd); if (!oi) return g;
+    if (!a.cfg.embedding) return jerr(503, "not_enabled", "embeddings are not enabled in the active configuration");
+    json j; std::string why;
+    if (!body_json(rq, j, why)) return jerr(400, "invalid_argument", why);
+    int64_t frame_id = 0; Roi roi;
+    if (!get_int(j, "frame_id", frame_id) || frame_id < 1) return jerr(400, "invalid_argument", "frame_id required");
+    if (!get_roi(j, roi, why)) return jerr(400, "invalid_argument", why);
+    std::string label = j.contains("label") && j["label"].is_string() ? j["label"].get<std::string>() : std::string();
+    NpuGuard ng(a);
+    if (!ng.held) return jerr(429, "busy", "another search or indexing operation is running");
+    auto prov = a.get_provider(why); if (!prov) return jerr(503, "provider_failed", why);
+    ObjectIndexResult res;
+    run_watched(a, fd, [] {}, [&] { res = oi->index_region(*rd, *prov, frame_id, roi, label); });
+    using C = ObjectIndexResult::Code;
+    int http = 200; std::string code = "ok";
+    switch (res.code) {
+        case C::Indexed: http = 201; code = "indexed"; break;
+        case C::Duplicate: code = "duplicate"; break;
+        case C::FrameNotFound: http = 404; code = "not_found"; break;
+        case C::ImageUnavailable: http = 410; code = "image_unavailable"; break;
+        case C::InvalidRoi: http = 400; code = "invalid_roi"; break;
+        case C::InvalidArgument: http = 400; code = "invalid_argument"; break;
+        case C::DecodeFailed: http = 500; code = "decode_failed"; break;
+        case C::ProviderFailed: http = 503; code = "provider_failed"; break;
+        case C::InvalidVector: http = 500; code = "invalid_vector"; break;
+        default: http = 500; code = "database_error"; break;
+    }
+    if (http >= 400) { Response r = jerr(http, code, res.message); return r; }
+    ObjectRegion reg; oi->get_region(res.region_id, reg);
+    // independent retention for the object index (bounded work: only when a region was added)
+    uint64_t pruned = 0;
+    if (res.code == C::Indexed) {
+        const int64_t cutoff = a.cfg.objects_retention_days > 0 ? now_ms() - static_cast<int64_t>(a.cfg.objects_retention_days) * 86400000LL : 0;
+        pruned = oi->prune(cutoff, a.cfg.objects_max_regions);
+    }
+    json out = {{"label", kObjLabel}, {"status", code}, {"region", region_json(reg)}, {"elapsed_ms", res.elapsed_ms}, {"pruned", pruned},
+                {"model", model_json(prov->spec())}};
+    Response r = jok(out); r.status = http; return r;
+}
+
+Response handle_object_search(App& a, const Request& rq, int fd) {
+    ObjectIndex* oi = nullptr; VisualMemoryReader* rd = nullptr;
+    Response g = objects_gate(a, oi, rd); if (!oi) return g;
+    if (!a.cfg.embedding) return jerr(503, "not_enabled", "embeddings are not enabled in the active configuration");
+    json j; std::string why;
+    if (!body_json(rq, j, why)) return jerr(400, "invalid_argument", why);
+    ObjectSearchOptions o; int64_t v;
+    o.top_k = 5;
+    if (get_int(j, "top_k", v)) { if (v < 1 || v > 50) return jerr(400, "invalid_argument", "top_k must be 1..50"); o.top_k = static_cast<int>(v); }
+    if (get_int(j, "start", v)) o.start_utc_ms = v;
+    if (get_int(j, "end", v)) o.end_utc_ms = v;
+    if (j.contains("source") && j["source"].is_string()) o.source_id = j["source"].get<std::string>();
+    if (j.contains("label") && j["label"].is_string()) o.label = j["label"].get<std::string>();
+    if (j.contains("min_similarity") && j["min_similarity"].is_number()) {
+        const double m = j["min_similarity"].get<double>();
+        if (!std::isfinite(m) || m < -1 || m > 1) return jerr(400, "invalid_argument", "min_similarity must be in [-1,1]");
+        o.has_min_similarity = true; o.min_similarity = static_cast<float>(m);
+    }
+    o.require_image = j.value("require_image", false);
+    int64_t frame_id = 0, region_id = 0; Roi roi; const bool by_region = get_int(j, "region_id", region_id);
+    if (by_region) { if (region_id < 1) return jerr(400, "invalid_argument", "region_id must be >= 1"); }
+    else {
+        if (!get_int(j, "frame_id", frame_id) || frame_id < 1) return jerr(400, "invalid_argument", "region_id, or frame_id with x,y,w,h, required");
+        if (!get_roi(j, roi, why)) return jerr(400, "invalid_argument", why);
+    }
+    NpuGuard ng(a);
+    if (!ng.held) return jerr(429, "busy", "another search or indexing operation is running");
+    const int64_t t_start = steady_ms();
+    std::shared_ptr<EmbeddingProvider> prov;
+    if (!by_region) { prov = a.get_provider(why); if (!prov) return jerr(503, "provider_failed", why); }
+    ObjectSearchResult res;
+    const int cancelled = run_watched(a, fd, [oi] { oi->cancel(); }, [&] {
+        res = by_region ? oi->search_by_region(rd, region_id, o) : oi->search_by_roi(*rd, *prov, frame_id, roi, o);
+    });
+    std::string code = code_name(res.status.code); int http = 200;
+    if (res.status.code == SearchStatus::Code::Cancelled) { code = cancelled == 1 ? "timeout" : "cancelled"; http = cancelled == 1 ? 504 : 200; }
+    else if (res.status.code == SearchStatus::Code::NotEnabled || res.status.code == SearchStatus::Code::ProviderFailed) http = 503;
+    else if (res.status.code == SearchStatus::Code::InvalidArgument || res.status.code == SearchStatus::Code::DimensionMismatch ||
+             res.status.code == SearchStatus::Code::InvalidVector || res.status.code == SearchStatus::Code::ModelMismatch) http = 400;
+    else if (res.status.code == SearchStatus::Code::DatabaseError) http = 500;
+    json hits = json::array(); int rank = 0; for (auto& h : res.hits) hits.push_back(hit_json(h, ++rank));
+    const ObjectIndexSummary sm = oi->summary();
+    json out = {{"label", kObjLabel},
+                {"query", by_region ? json{{"type", "region"}, {"region_id", region_id}}
+                                    : json{{"type", "roi"}, {"frame_id", frame_id}, {"bbox", {{"x", roi.x}, {"y", roi.y}, {"w", roi.w}, {"h", roi.h}}}}},
+                {"index_regions", sm.regions},
+                {"status", {{"code", code}, {"message", res.status.message}, {"elapsed_ms", res.status.elapsed_ms}, {"candidates_scanned", res.index_size},
+                            {"total_ms", static_cast<double>(steady_ms() - t_start)}}},
+                {"results", hits}};
+    if (res.status.code == SearchStatus::Code::Ok && sm.regions == 0) out["status"]["empty_index"] = true;
+    Response r = jok(out); r.status = http; return r;
+}
+
 Response route(App& a, const Request& rq, int fd) {
     const std::string& p = rq.path;
     if (p.rfind("/api/vm/", 0) != 0) return jerr(404, "not_found", "unknown route");
@@ -665,6 +945,22 @@ Response route(App& a, const Request& rq, int fd) {
     if (sub == "frames") return get ? handle_frames(a, rq) : jerr(405, "method_not_allowed", "GET only");
     if (sub == "search/image") return post ? handle_search(a, rq, fd, false) : jerr(405, "method_not_allowed", "POST only");
     if (sub == "search/frame") return post ? handle_search(a, rq, fd, true) : jerr(405, "method_not_allowed", "POST only");
+    if (sub == "objects") {
+        if (get) return handle_objects_list(a, rq);
+        return post ? handle_object_index(a, rq, fd) : jerr(405, "method_not_allowed", "GET or POST only");
+    }
+    if (sub == "objects/search") return post ? handle_object_search(a, rq, fd) : jerr(405, "method_not_allowed", "POST only");
+    if (sub.rfind("objects/", 0) == 0) {
+        if (!get) return jerr(405, "method_not_allowed", "GET only");
+        std::string rest = sub.substr(8), tail;
+        const size_t sl = rest.find('/');
+        if (sl != std::string::npos) { tail = rest.substr(sl + 1); rest = rest.substr(0, sl); }
+        int64_t id;
+        if (!parse_i64(rest, id) || id < 1) return jerr(400, "invalid_argument", "bad object id");
+        if (tail.empty()) return handle_object_detail(a, id);
+        if (tail == "image") return handle_object_image(a, id, rq);
+        return jerr(404, "not_found", "unknown route");
+    }
     if (sub.rfind("frames/", 0) == 0) {
         if (!get) return jerr(405, "method_not_allowed", "GET only");
         std::string rest = sub.substr(7), tail;
@@ -675,6 +971,7 @@ Response route(App& a, const Request& rq, int fd) {
         if (tail.empty()) return handle_frame_detail(a, id);
         if (tail == "image") return handle_image(a, id, false, rq);
         if (tail == "thumb") return handle_image(a, id, true, rq);
+        if (tail == "crop") return handle_frame_crop(a, id, rq);
     }
     return jerr(404, "not_found", "unknown route");
 }

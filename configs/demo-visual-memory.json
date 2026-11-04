@@ -26,6 +26,12 @@
       "npu_core": -1,
       "prefer_sqlite_vec": true
     },
+    "objects": {
+      "enabled": true,
+      "max_regions": 10000,
+      "retention_days": 30,
+      "min_roi_px": 16
+    },
     "api": {
       "npu_core": 1,
       "search_timeout_ms": 10000,

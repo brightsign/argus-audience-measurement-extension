@@ -72,6 +72,33 @@ func TestMethodPathAllowList(t *testing.T) {
 	}
 }
 
+func TestObjectEndpointsPostPolicy(t *testing.T) {
+	h, s := handler(t, "")
+	for _, p := range []string{"/api/vm/objects", "/api/vm/objects/search"} {
+		n := s.n
+		if w := do(h, "POST", p, []byte(`{"frame_id":1}`), okOrigin); w.Code != 200 || s.n != n+1 {
+			t.Errorf("POST %s: %d", p, w.Code)
+		}
+		if w := do(h, "POST", p, []byte(`{}`), nil); w.Code != 403 {
+			t.Errorf("POST %s without origin: %d", p, w.Code)
+		}
+		if w := do(h, "POST", p, make([]byte, vmObjMaxBody+1), okOrigin); w.Code != 413 {
+			t.Errorf("POST %s oversize: %d", p, w.Code)
+		}
+	}
+	for _, p := range []string{"/api/vm/objects/1", "/api/vm/objects/1/image", "/api/vm/objects/search/x"} {
+		if w := do(h, "POST", p, []byte("{}"), okOrigin); w.Code != 405 {
+			t.Errorf("POST %s: got %d want 405", p, w.Code)
+		}
+	}
+	if w := do(h, "DELETE", "/api/vm/objects/1", nil, okOrigin); w.Code != 405 {
+		t.Errorf("DELETE: %d", w.Code)
+	}
+	if w := do(h, "GET", "/api/vm/objects/1/image", nil, nil); w.Code != 200 {
+		t.Errorf("GET image: %d", w.Code)
+	}
+}
+
 func TestOriginCheck(t *testing.T) {
 	h, _ := handler(t, "")
 	p := "/api/vm/search/image"

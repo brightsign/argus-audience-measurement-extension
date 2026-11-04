@@ -122,6 +122,7 @@ add_library(visualmemory STATIC
     src/embedding_worker.cpp
     src/search_core.cpp
     src/reader.cpp
+    src/object_index.cpp
 )
 add_library(visualmemory::visualmemory ALIAS visualmemory)
 

@@ -25,6 +25,9 @@ bool make_thumbnail(const uint8_t* data, size_t size, int max_w, int quality, st
                     std::string& err);
 
 // Read a whole file, refusing anything larger than max_bytes.
+// Encode packed RGB24 to JPEG (4:2:0).
+bool encode_rgb_jpeg(const uint8_t* rgb, int w, int h, int quality, std::vector<uint8_t>& out, std::string& err);
+
 bool read_file_bounded(const std::string& path, size_t max_bytes, std::vector<uint8_t>& out,
                        std::string& err);
 

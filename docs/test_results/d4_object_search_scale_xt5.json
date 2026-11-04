@@ -1,0 +1,64 @@
+{
+ "latency_vs_index_size": {
+  "100": {
+   "regions": 100,
+   "scanned": 100,
+   "roi_query": {
+    "scan_p50": 1.6,
+    "scan_p95": 1.7,
+    "server_total_p50": 37.0,
+    "server_total_p95": 49.0,
+    "client_p50": 39.6,
+    "client_p95": 51.9,
+    "n": 40
+   },
+   "region_query_scan": {
+    "p50": 5.2,
+    "p95": 5.4,
+    "max": 5.5,
+    "n": 40
+   },
+   "seconds_to_reach": 12
+  },
+  "1000": {
+   "regions": 1000,
+   "scanned": 1000,
+   "roi_query": {
+    "scan_p50": 7.5,
+    "scan_p95": 7.7,
+    "server_total_p50": 42.0,
+    "server_total_p95": 50.0,
+    "client_p50": 44.8,
+    "client_p95": 53.2,
+    "n": 40
+   },
+   "region_query_scan": {
+    "p50": 22.6,
+    "p95": 31.6,
+    "max": 34.6,
+    "n": 40
+   },
+   "seconds_to_reach": 81
+  },
+  "10000": {
+   "regions": 10000,
+   "scanned": 10000,
+   "roi_query": {
+    "scan_p50": 62.2,
+    "scan_p95": 63.1,
+    "server_total_p50": 105.0,
+    "server_total_p95": 118.0,
+    "client_p50": 108.5,
+    "client_p95": 121.5,
+    "n": 40
+   },
+   "region_query_scan": {
+    "p50": 62.9,
+    "p95": 86.5,
+    "max": 86.7,
+    "n": 40
+   },
+   "seconds_to_reach": 959
+  }
+ }
+}

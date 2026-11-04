@@ -102,6 +102,18 @@ bool make_thumbnail(const uint8_t* data, size_t size, int max_w, int quality, st
     return true;
 }
 
+bool encode_rgb_jpeg(const uint8_t* rgb, int w, int h, int quality, std::vector<uint8_t>& out, std::string& err) {
+    if (!rgb || w < 1 || h < 1) { err = "bad image"; return false; }
+    tjhandle tc = tjInitCompress();
+    if (!tc) { err = "tjInitCompress failed"; return false; }
+    unsigned char* buf = nullptr; unsigned long bsz = 0;
+    const int rc = tjCompress2(tc, rgb, w, 0, h, TJPF_RGB, &buf, &bsz, TJSAMP_420, quality, TJFLAG_FASTDCT);
+    if (rc != 0) { err = "jpeg encode failed"; tjDestroy(tc); if (buf) tjFree(buf); return false; }
+    out.assign(buf, buf + bsz);
+    tjFree(buf); tjDestroy(tc);
+    return true;
+}
+
 bool read_file_bounded(const std::string& path, size_t max_bytes, std::vector<uint8_t>& out,
                        std::string& err) {
     FILE* f = std::fopen(path.c_str(), "rb");

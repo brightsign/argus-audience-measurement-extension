@@ -144,10 +144,11 @@ func logging(next http.Handler) http.Handler {
 // ---- Visual Memory API proxy ------------------------------------------------
 
 const (
-	vmMaxBody   = 8 << 20 // 8 MiB cap on request bodies
-	vmAuthCap   = 4 << 10
-	vmCookie    = "vm_token"
-	vmTokHeader = "X-VM-Token"
+	vmMaxBody    = 8 << 20 // 8 MiB cap on request bodies
+	vmAuthCap    = 4 << 10
+	vmObjMaxBody = 16 << 10 // object index/search requests are tiny JSON documents
+	vmCookie     = "vm_token"
+	vmTokHeader  = "X-VM-Token"
 )
 
 func vmJSON(w http.ResponseWriter, status int, v any) {
@@ -180,6 +181,14 @@ func sameOrigin(r *http.Request) bool {
 func tokenEq(a, b string) bool {
 	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
+
+// vmPostAllowed lists the only POST routes the browser may reach (all others are read-only GETs).
+func vmPostAllowed(p string) bool {
+	return strings.HasPrefix(p, "/api/vm/search/") || vmSmallBody(p)
+}
+
+// vmSmallBody: JSON-only object endpoints (bounded to vmObjMaxBody).
+func vmSmallBody(p string) bool { return p == "/api/vm/objects" || p == "/api/vm/objects/search" }
 
 // newVMHandler builds the /api/vm/ handler: method/path allow-list, body cap,
 // same-origin check for POST, optional shared-secret token, JSON 502.
@@ -257,9 +266,9 @@ func newVMHandler(target *url.URL, token string) http.Handler {
 		switch r.Method {
 		case http.MethodGet, http.MethodHead:
 		case http.MethodPost:
-			if !strings.HasPrefix(r.URL.Path, "/api/vm/search/") {
+			if !vmPostAllowed(r.URL.Path) {
 				w.Header().Set("Allow", "GET, HEAD")
-				vmErr(w, 405, "method_not_allowed", "POST is only allowed on /api/vm/search/*")
+				vmErr(w, 405, "method_not_allowed", "POST is only allowed on /api/vm/search/*, /api/vm/objects and /api/vm/objects/search")
 				return
 			}
 			if !sameOrigin(r) {
@@ -276,11 +285,15 @@ func newVMHandler(target *url.URL, token string) http.Handler {
 			return
 		}
 		if r.Method == http.MethodPost {
-			if r.ContentLength > vmMaxBody {
-				vmErr(w, 413, "too_large", "request body exceeds 8 MiB")
+			limit := int64(vmMaxBody)
+			if vmSmallBody(r.URL.Path) {
+				limit = vmObjMaxBody
+			}
+			if r.ContentLength > limit {
+				vmErr(w, 413, "too_large", "request body too large")
 				return
 			}
-			r.Body = http.MaxBytesReader(w, r.Body, vmMaxBody)
+			r.Body = http.MaxBytesReader(w, r.Body, limit)
 		}
 		proxy.ServeHTTP(w, r)
 	})
