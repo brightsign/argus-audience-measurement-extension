@@ -26,3 +26,18 @@ bin/
 gaze.log
 gaze.log.*
 .llm/
+
+# Python bytecode
+__pycache__/
+*.pyc
+# Local credentials / secrets must never be committed or packaged
+.bsp_pw
+*.pw
+# Generated model build workdir and benchmark outputs
+libs/visual-memory/build-models/
+rss_*.csv
+rss_*.out
+fps_*.csv
+# Model binaries are distributed via the artifact store, not git (see libs/visual-memory/models/README.md)
+libs/visual-memory/models/*.onnx
+libs/visual-memory/models/*.rknn

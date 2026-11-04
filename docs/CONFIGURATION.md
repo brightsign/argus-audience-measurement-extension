@@ -10,7 +10,7 @@ Argus looks for configuration in the following order (first found wins):
 flowchart TD
     CLI["1. CLI Argument<br/>--config /path/to/config.json"] --> ENV
     ENV["2. Environment Variable<br/>BSEXT_CONFIG=/path/to/config.json"] --> SD
-    SD["3. SD Card Override<br/>/storage/sd/configs/config.json"] --> PKG
+    SD["3. SD Card Override<br/>/storage/sd/configs/argus-config.json (preferred),<br/>else /storage/sd/configs/config.json"] --> PKG
     PKG["4. Package Default<br/>(built into extension)"]
 
     CLI --> |Found| USE[Use this config]
@@ -19,7 +19,12 @@ flowchart TD
     PKG --> |Fallback| USE
 ```
 
-**Recommended:** Use `/storage/sd/configs/config.json` for easy customization.
+**Recommended:** Use `/storage/sd/configs/argus-config.json` for customization.
+
+> **Both SD files can exist, but only one is used.** `argus-config.json` is checked first (`src/util/util.cpp`
+> `pick_config_path`, mirrored by `bsext_init`); `config.json` is read only when `argus-config.json` is absent.
+> Editing the shadowed file has no effect. Package defaults (`<extension>/configs/argus-config.json`, then
+> `config.json`) apply only when neither SD file exists.
 
 ## Quick Configuration
 
