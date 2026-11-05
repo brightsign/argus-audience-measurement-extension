@@ -96,6 +96,23 @@ Store `/storage/sd/vm-d4-store` = 240 object frames + the 64 people-free demo sc
 cup → Find Similar Objects: #1 is the indexed cup at 0.986 with the source frame and its bounding box highlighted; #2–#5 are
 synthetic mugs at 0.51–0.57. Screenshots (people-free, not committed) are in the session scratchpad `d4host/shots_xt5/`.
 
+## Installed-package validation (XT5, the D5 package `argus-ext-1793873298.zip`)
+D4 ships inside the D5 package (`dashboard/objects.js`, the `/api/vm/objects*` routes in `vm_api_server`) and is **off by default**: with the original configuration
+`GET /api/vm/objects` answers `not_enabled`. It was validated on the installed package with an isolated test configuration (`visual_memory.enabled`, embeddings, `objects.enabled`,
+`pop.enabled` for the RAM measurement only) and an isolated storage directory holding a copy of the synthetic, people-free D4 frames (304 frames: 240 object scenes + 64 demo scenes; no
+audience-camera frame was written: `sample_interval_ms` was 24 h and the store listed only the two synthetic sources). The original configuration was restored afterwards (sha256 `fd984a47…c7c94`) and the
+test store deleted.
+
+| Check | Result |
+|---|---|
+| Browser flow (`tests/browser/d4_demo_cdp_xt5.py`) | **5/5**: select the cup in frame #259, save, select it in frame #304, find similar: #1 is the indexed cup at **0.9862** with the source frame and the bounding box overlay |
+| D3 full-frame search (`POST /api/vm/search/frame?frame_id=259`) | still works: top-1 frame #304 at **0.9755**; 18 searches p50 5.9 ms (stored vectors, no inference), p95 106 ms (one query embedded the JPEG) |
+| Object index, 100 regions, `tests/api/vm_installed_itest.py` | index call p50 36.8 / p95 46.0 ms; ROI search (crop + NPU embedding + scan) p50 **35 ms** / p95 46 / max 52; scan alone 1.6 ms; region-query scan p50 5.2 ms |
+| RAM | `vm_api_server` RSS 29.8 -> 31.9 MB (peak 31.9 MB); `attention_demo` 92.1 MB; MemAvailable 2932 -> 2930 MB |
+| Argus | 29 FPS before and after, no dropped frames |
+| Errors | 0 failed requests (the proxy's same-origin rule refused two early test calls that lacked an `Origin` header, a test-script bug, fixed) |
+Raw numbers: `docs/test_results/d4_installed_package_xt5.json`. Limits unchanged: manual ROI only, exact linear scan, no delete button, synthetic data (VM-14). Note the timing above is at 100 regions; 1,000 and 10,000 were measured earlier from `/tmp` (`d4_object_search_scale_xt5.json`).
+
 ## Run the demo (development only; nothing is installed)
 ```
 # host: build, then stage binaries + dashboard + dataset

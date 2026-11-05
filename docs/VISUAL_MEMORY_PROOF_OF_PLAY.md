@@ -146,6 +146,12 @@ Argus kept 29 FPS. Embedding a reference frame takes ~120 ms (122 frames in 14.5
 3. Schedule from the dashboard (Proof of Play → Schedule a play) or `POST /api/pop/sessions`; the verdict appears in the history within a few seconds of the end of the slot.
 4. Performance: `scripts/pop/perf_sampler.py --api http://<player>:20300 --exporter http://<player>:9101`.
 
+## State of the development XT5 after validation
+The D5 package `argus-ext-1793873298.zip` stays installed; the original configuration (`fd984a47…c7c94`) and autorun (`83076b0b…609ab`) are restored and verified by hash, Visual Memory and PoP are disabled, and the rollback packages
+(`…816098`, `…800886`, `…779707`) are untouched. The temporary validation data was deleted through the DWS file API (no shell, no Telnet, presentation untouched): the D5 test store (649 files, including 439 audience-camera frames written while Visual Memory was enabled),
+the temporary `/storage/sd/pop/` contents (job files, shots, event logs, probe logs) and the two obsolete D5 build zips. `/storage/sd/pop/{jobs,done,shots}` remain as empty directories. A repeat of the PoP scenarios needs the temporary configuration
+and `pop_autorun.brs` again (Run it, above). Anything that writes frames while Visual Memory is enabled (including the Argus writer's first sample) can capture identifiable audience images: delete such stores when the test ends.
+
 ## Rollback (development XT5)
 * **Autorun:** the original presentation script is `/storage/sd/autorun.brs.pre-d5` (sha256 `83076b0b4c6b71e7d2d05bb9b226fb3ab46575ef4d3a4973e923a87abd1609ab`). Restore it over `autorun.brs` (or delete `SD:/pop/enabled`), then reboot.
 * **Configuration:** the original is `/storage/sd/configs/argus-config.json.pre-d5` (sha256 `fd984a47b87459bec8c7feb6b4394d4300b9f5326a836b8a2a3e5811ab6c7c94`). Copy it over `argus-config.json` and reboot.
