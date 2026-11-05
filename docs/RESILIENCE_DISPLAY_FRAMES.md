@@ -4,8 +4,11 @@ Optional, **disabled by default**, OS-image dependent. It reuses the OS `Rendere
 local Unix socket by `bs-resilience-api-daemon`) instead of adding another capture implementation. The BrightScript `Screenshot()` backend of
 Proof of Play is untouched and stays the default. Background and findings: `RESILIENCE_DISPLAY_FRAMES_FEASIBILITY.md`.
 
-**Status: implemented and tested on the host against a test double of the OS service. Not yet run on the XT5** (needs an install, which needs
-approval). Every number a hardware run should produce is listed in section 7.
+**Status: implemented and tested on the host against a test double of the OS service. First hardware probe done on the dev XT5 (2026-11-05,
+`test_results/display_probe_xt5.json`):** the OS daemon and producer are present and serve genuine 640x360 JPEG frames of the presentation at ~4.7-5 FPS with
+provider `WESTON_VOP2_WRITEBACK`, the interest mechanism wakes the producer within one cycle, the daemon clock equals this process's monotonic clock (0-1 ms),
+and an idle producer correctly answers STALE. The display preview and the Proof of Play backend have **not** been enabled or measured on hardware yet.
+Every number a full hardware run should produce is listed in section 7.
 
 ## 1. What it is, and what it is not
 
