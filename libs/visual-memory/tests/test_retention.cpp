@@ -55,6 +55,54 @@ TEST(Retention, AgeExpiry) {
     EXPECT_EQ(db.row_count(), 2);
 }
 
+TEST(Retention, BudgetedSlicesMakeProgressAndFinish) {
+    // A large expired backlog must be removable in bounded slices (the writer thread interleaves the ingest
+    // queue between slices); the sum of the slices equals one unbounded pass.
+    vmtest::TempDir dir;
+    FileStore files(dir.str());
+    ASSERT_TRUE(files.init());
+    SqliteStore db;
+    std::string err;
+    ASSERT_TRUE(db.open(dir.str() + "/t.db", err)) << err;
+    const int64_t now = 1000LL * 3600 * 1000;
+    for (int i = 0; i < 300; ++i) add_frame(db, files, "cam", now - 100LL * 3600 * 1000 + i, i + 1, 200);
+    add_frame(db, files, "cam", now - 1000, 999, 200);      // fresh: must survive
+
+    RetentionBudget b; b.max_deletions = 40;
+    uint64_t total = 0; int slices = 0;
+    for (;;) {
+        auto r = run_retention(db, files, now, 48, 0, nullptr, 0, b);
+        EXPECT_LE(r.deleted, 40u);
+        total += r.deleted; ++slices;
+        if (!r.more) break;
+        ASSERT_LT(slices, 100) << "slices never converged";
+    }
+    EXPECT_EQ(total, 300u);
+    EXPECT_EQ(slices, 8);                     // 7 full slices of 40 + the remainder (20)
+    EXPECT_EQ(db.row_count(), 1);
+}
+
+TEST(Retention, TimeBudgetStopsEarly) {
+    vmtest::TempDir dir;
+    FileStore files(dir.str());
+    ASSERT_TRUE(files.init());
+    SqliteStore db;
+    std::string err;
+    ASSERT_TRUE(db.open(dir.str() + "/t.db", err)) << err;
+    const int64_t now = 1000LL * 3600 * 1000;
+    for (int i = 0; i < 50; ++i) add_frame(db, files, "cam", now - 100LL * 3600 * 1000 + i, i + 1, 200);
+    RetentionBudget b; b.max_ms = 1; b.max_deletions = 0;
+    int slices = 0; uint64_t total = 0;
+    for (;;) {
+        auto r = run_retention(db, files, now, 48, 0, nullptr, 0, b);
+        total += r.deleted; ++slices;
+        if (!r.more) break;
+        ASSERT_LT(slices, 100000);
+    }
+    EXPECT_EQ(total, 50u);                    // however many slices it took, nothing is lost or double counted
+    EXPECT_EQ(db.row_count(), 0);
+}
+
 TEST(Retention, QuotaEviction) {
     vmtest::TempDir dir;
     FileStore files(dir.str());

@@ -81,7 +81,15 @@ void write_status_snapshot(visualmemory::VisualMemory& vm,
                    {"dropped_queue_full", s.dropped_queue_full}, {"dropped_invalid", s.dropped_invalid},
                    {"jpeg_write_failures", s.jpeg_write_failures}, {"database_failures", s.database_failures},
                    {"retention_deletions", s.retention_deletions}, {"queue_depth", s.queue_depth},
-                   {"max_queue_depth", s.max_queue_depth}, {"bytes_on_disk", s.bytes_on_disk}};
+                   {"max_queue_depth", s.max_queue_depth}, {"bytes_on_disk", s.bytes_on_disk},
+                   {"last_commit_utc_ms", s.last_commit_utc_ms}, {"retention_pending", s.retention_pending},
+                   {"retention_slices", s.retention_slices}};
+    auto lat = [](const visualmemory::LatencyStats& l) {
+        return json{{"count", l.count}, {"p50_ms", l.p50_ms}, {"p95_ms", l.p95_ms}, {"p99_ms", l.p99_ms}, {"max_ms", l.max_ms}};
+    };
+    j["stage1_latency"] = {{"encode", lat(s.encode)}, {"file_write", lat(s.file_write)}, {"db_insert", lat(s.db_insert)},
+                           {"process_total", lat(s.process_total)}, {"retention_slice", lat(s.retention_slice)},
+                           {"commit_delay", lat(s.commit_delay)}};
     if (provider) {
         const auto e = vm.embedding_stats();
         j["stage2"] = {{"status", e.status}, {"backend", e.backend}, {"embedded", e.embedded},
@@ -89,7 +97,10 @@ void write_status_snapshot(visualmemory::VisualMemory& vm,
                        {"queue_depth", e.queue_depth}, {"max_queue_depth", e.max_queue_depth},
                        {"dropped_queue_full", e.dropped_queue_full}, {"inference_failures", e.inference_failures},
                        {"invalid_vectors", e.invalid_vectors}, {"decode_failures", e.decode_failures},
-                       {"permanent_failures", e.failed_permanent}, {"db_failures", e.db_failures}};
+                       {"permanent_failures", e.failed_permanent}, {"db_failures", e.db_failures},
+                       {"backfilled", e.backfilled}, {"backfill_attempted", e.backfill_attempted},
+                       {"backfill_cap", e.backfill_cap}, {"backfill_done", e.backfill_done},
+                       {"inference_p50_ms", e.process_total.p50_ms}, {"inference_p95_ms", e.process_total.p95_ms}};
         const auto sp = provider->spec();
         j["model"] = {{"name", sp.model_name}, {"version", sp.model_version}, {"preprocessing", sp.preprocessing},
                       {"dimension", sp.dimension}, {"sha256", sp.model_sha256}, {"dtype", sp.dtype}, {"metric", sp.metric},
@@ -147,6 +158,8 @@ bool VisualMemoryAdapter::start() {
                 cfg.embedding.max_pending         = opt_.embedding.max_pending;
                 cfg.embedding.retention_days      = opt_.embedding.retention_days;
                 cfg.embedding.backfill_on_startup = opt_.embedding.backfill_on_startup;
+                cfg.embedding.backfill_max_frames = opt_.embedding.backfill_max_frames;
+                cfg.embedding.backfill_max_age_hours = opt_.embedding.backfill_max_age_hours;
                 cfg.embedding.prefer_sqlite_vec   = opt_.embedding.prefer_sqlite_vec;
                 LG_INFO("visual_memory: embedding model loaded: %s (sha256=%.12s) %s",
                         opt_.embedding.model_path.c_str(), p->spec().model_sha256.c_str(), p->describe().c_str());

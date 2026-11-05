@@ -181,6 +181,8 @@ endif()
 if(VISUALMEMORY_BUILD_EXAMPLES)
     add_executable(vm_ingest_image examples/ingest_image.cpp)
     target_link_libraries(vm_ingest_image PRIVATE visualmemory)
+    add_executable(vm_live_writer examples/live_writer.cpp)
+    target_link_libraries(vm_live_writer PRIVATE visualmemory)
 
     # Stage 2 command-line demo / utility (ingest, search, backfill, embed, stats, bench-db)
     add_executable(vm_embed_demo examples/embed_demo.cpp)

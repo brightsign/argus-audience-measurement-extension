@@ -19,6 +19,8 @@ struct VisualEmbeddingOptions {
     size_t      max_pending = 4;                                    // bounded embedding queue
     int         retention_days = 7;                                 // embedding lifetime, independent of retention_hours
     bool        backfill_on_startup = false;                        // embed stored JPEGs that lack a vector
+    uint64_t    backfill_max_frames = 500;                          // cap on frames attempted per run (0 = unlimited)
+    int         backfill_max_age_hours = 24;                        // only frames captured this recently (0 = no age limit)
     int         npu_core = -1;                                      // -1 auto, 0..2 single core, 3 all
     bool        prefer_sqlite_vec = true;                           // false => BLOB + C++ cosine fallback
 };

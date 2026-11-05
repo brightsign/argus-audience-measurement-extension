@@ -279,10 +279,58 @@ TEST(EmbeddingPipeline, BackgroundBackfillOnStartupCatchesUp) {
         ASSERT_TRUE(vmtest::wait_until([&] { return vm.stats().encoded == 6; }));
     }
     Config c = base_cfg(dir.str()); c.embedding.backfill_on_startup = true; c.embedding.backfill_batch = 2;
+    c.embedding.backfill_max_frames = 0; c.embedding.backfill_max_age_hours = 0;   // explicit "unlimited" opt-in
     VisualMemory vm(c);
     vm.set_embedding_provider(std::make_shared<MockEmbeddingProvider>(16));
     ASSERT_TRUE(vm.start());
     EXPECT_TRUE(vmtest::wait_until([&] { return vm.embedding_stats().vectors_stored == 6; }, 10000));
+}
+
+// The startup backfill is bounded by default: it stops at backfill_max_frames and reports that it is done.
+TEST(EmbeddingPipeline, StartupBackfillStopsAtFrameCap) {
+    vmtest::TempDir dir;
+    {
+        VisualMemory vm(base_cfg(dir.str(), false));
+        ASSERT_TRUE(vm.start());
+        for (uint32_t i = 0; i < 10; ++i) ASSERT_TRUE(submit_scene(vm, 600 + i, kBase + i * 5000, i + 1));
+        ASSERT_TRUE(vmtest::wait_until([&] { return vm.stats().encoded == 10; }));
+    }
+    Config c = base_cfg(dir.str()); c.embedding.backfill_on_startup = true; c.embedding.backfill_batch = 2;
+    c.embedding.backfill_max_frames = 4; c.embedding.backfill_max_age_hours = 0;
+    VisualMemory vm(c);
+    vm.set_embedding_provider(std::make_shared<MockEmbeddingProvider>(16));
+    ASSERT_TRUE(vm.start());
+    ASSERT_TRUE(vmtest::wait_until([&] { return vm.embedding_stats().backfill_done; }, 10000));
+    std::this_thread::sleep_for(std::chrono::milliseconds(600));            // it must not creep past the cap
+    auto e = vm.embedding_stats();
+    EXPECT_EQ(e.vectors_stored, 4u);
+    EXPECT_EQ(e.backfill_attempted, 4u);
+    EXPECT_EQ(e.backfill_cap, 4u);
+    // newest frames first: the four embedded are the most recent ones
+    auto q = vmtest::make_scene_rgb(kW, kH, 609);
+    auto r = vm.search_by_image(view(q), SearchOptions{});
+    ASSERT_FALSE(r.empty());
+    EXPECT_EQ(r[0].metadata.capture_utc_ms, kBase + 9 * 5000);
+}
+
+// ...and by age: frames older than backfill_max_age_hours are left alone (the existing store's old frames).
+TEST(EmbeddingPipeline, StartupBackfillRespectsAgeWindow) {
+    vmtest::TempDir dir;
+    {
+        VisualMemory vm(base_cfg(dir.str(), false));
+        ASSERT_TRUE(vm.start());
+        for (uint32_t i = 0; i < 5; ++i) ASSERT_TRUE(submit_scene(vm, 700 + i, kBase + i * 5000, i + 1));
+        ASSERT_TRUE(vmtest::wait_until([&] { return vm.stats().encoded == 5; }));
+    }
+    Config c = base_cfg(dir.str()); c.embedding.backfill_on_startup = true; c.embedding.backfill_batch = 2;
+    c.embedding.backfill_max_age_hours = 1;     // kBase is long past
+    c.embedding.retention_days = 0;
+    VisualMemory vm(c);
+    vm.set_embedding_provider(std::make_shared<MockEmbeddingProvider>(16));
+    ASSERT_TRUE(vm.start());
+    std::this_thread::sleep_for(std::chrono::milliseconds(1200));
+    EXPECT_EQ(vm.embedding_stats().vectors_stored, 0u);
+    EXPECT_EQ(vm.embedding_stats().backfill_attempted, 0u);
 }
 
 TEST(EmbeddingPipeline, EmbeddingsAndSearchSurviveRestart) {

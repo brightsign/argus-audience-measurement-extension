@@ -75,7 +75,10 @@ struct VisualMemory::Impl {
         dropped_invalid{0}, encoded{0}, jpeg_write_failures{0}, database_failures{0},
         retention_deletions{0}, bytes_on_disk{0};
     std::atomic<size_t> max_queue_depth{0};
-    LatencyRing lat_encode, lat_write, lat_db, lat_total;
+    std::atomic<int64_t> last_commit_utc_ms{0};
+    std::atomic<bool>    retention_pending{false};
+    std::atomic<uint64_t> retention_slices{0};
+    LatencyRing lat_encode, lat_write, lat_db, lat_total, lat_retention, lat_commit_delay;
 
     // Stage 2
     std::shared_ptr<EmbeddingProvider> provider;
@@ -139,6 +142,9 @@ void VisualMemory::Impl::process(OwnedFrame&& f) {
     const int64_t t5 = now_steady_ns();
     lat_db.add(t5 - t4);
     lat_total.add(t5 - t0);
+    const int64_t commit_ms = now_utc_ms();
+    last_commit_utc_ms.store(commit_ms, std::memory_order_relaxed);
+    lat_commit_delay.add((commit_ms - cap_ms) * 1000000LL);
     encoded.fetch_add(1, std::memory_order_relaxed);
     bytes_on_disk.fetch_add(enc.bytes.size(), std::memory_order_relaxed);
     // Stage 2: hand (id, path) to the separate bounded embedding queue. Non-blocking: a
@@ -147,23 +153,48 @@ void VisualMemory::Impl::process(OwnedFrame&& f) {
 }
 
 void VisualMemory::Impl::worker_loop() {
+    // Retention never runs as one long pass on this thread: the same thread drains the ingest queue, so a
+    // big expired backlog (an old store, or a long outage) would otherwise make every sample drop as
+    // "queue full" until the pass ended. Instead it runs in short budgeted slices, and the queue is
+    // serviced between slices. `retention_pending` stays true until a slice finds nothing left to do.
     int64_t last_retention = now_steady_ms();
-    // Initial reconciliation: clear expired/over-quota data from prior runs.
-    {
+    bool pending = true;                     // initial reconciliation of a prior run's data
+    retention_pending.store(true, std::memory_order_relaxed);
+    detail::RetentionBudget budget;
+    budget.max_ms = cfg.retention_slice_ms;
+    budget.max_deletions = cfg.retention_slice_deletions;
+
+    auto retention_slice = [&]() {
+        const int64_t s0 = now_steady_ns();
         auto r = detail::run_retention(db, *files, now_utc_ms(), cfg.retention_hours,
-                                       cfg.max_storage_bytes, vs.get(), cfg.embedding.retention_days);
+                                       cfg.max_storage_bytes, vs.get(), cfg.embedding.retention_days, budget);
         retention_deletions.fetch_add(r.deleted, std::memory_order_relaxed);
+        retention_slices.fetch_add(1, std::memory_order_relaxed);
         bytes_on_disk.store(db.total_jpeg_bytes(), std::memory_order_relaxed);
-        if (ew) ew->refresh_counts();
-    }
+        if (ew && !r.more) ew->refresh_counts();
+        lat_retention.add(now_steady_ns() - s0);
+        // A slice that made no progress (e.g. rows whose delete keeps failing) must not spin the worker:
+        // treat it as done and retry at the next interval.
+        pending = r.more && r.deleted > 0;
+        retention_pending.store(pending, std::memory_order_relaxed);
+        if (!pending) last_retention = now_steady_ms();
+    };
+
+    // The first slice runs before any frame is taken (as the old synchronous reconciliation did), so an empty or
+    // already-clean store is reconciled completely before the first sample; only a real backlog continues in slices.
+    retention_slice();
 
     for (;;) {
         OwnedFrame frame;
         {
             std::unique_lock<std::mutex> lk(mu);
-            cv.wait_for(lk, std::chrono::milliseconds(250), [&] {
-                return stop_flag.load(std::memory_order_relaxed) || !queue.empty();
-            });
+            // With retention backlog do not sleep: take a frame if one is waiting, otherwise go straight
+            // to the next slice.
+            if (!pending) {
+                cv.wait_for(lk, std::chrono::milliseconds(250), [&] {
+                    return stop_flag.load(std::memory_order_relaxed) || !queue.empty();
+                });
+            }
             if (queue.empty()) {
                 if (stop_flag.load(std::memory_order_relaxed)) break;
             } else {
@@ -174,14 +205,12 @@ void VisualMemory::Impl::worker_loop() {
         if (frame.width != 0 || frame.pixel_format == PixelFormat::JPEG)
             process(std::move(frame));
 
-        const int64_t now = now_steady_ms();
-        if (now - last_retention >= cfg.retention_interval_ms) {
-            auto r = detail::run_retention(db, *files, now_utc_ms(), cfg.retention_hours,
-                                           cfg.max_storage_bytes, vs.get(), cfg.embedding.retention_days);
-            retention_deletions.fetch_add(r.deleted, std::memory_order_relaxed);
-            bytes_on_disk.store(db.total_jpeg_bytes(), std::memory_order_relaxed);
-            if (ew) ew->refresh_counts();
-            last_retention = now;
+        if (pending || now_steady_ms() - last_retention >= cfg.retention_interval_ms) {
+            if (stop_flag.load(std::memory_order_relaxed) && pending) {
+                // shutting down: do not spend time on backlog; drain the queue and exit
+            } else {
+                retention_slice();
+            }
         }
     }
 }
@@ -361,6 +390,9 @@ Stats VisualMemory::stats() const {
     s.database_failures = impl_->database_failures.load();
     s.retention_deletions = impl_->retention_deletions.load();
     s.bytes_on_disk = impl_->bytes_on_disk.load();
+    s.last_commit_utc_ms = impl_->last_commit_utc_ms.load();
+    s.retention_pending = impl_->retention_pending.load();
+    s.retention_slices = impl_->retention_slices.load();
     {
         std::lock_guard<std::mutex> lk(impl_->mu);
         s.queue_depth = impl_->queue.size();
@@ -370,6 +402,8 @@ Stats VisualMemory::stats() const {
     s.file_write = impl_->lat_write.snapshot();
     s.db_insert = impl_->lat_db.snapshot();
     s.process_total = impl_->lat_total.snapshot();
+    s.retention_slice = impl_->lat_retention.snapshot();
+    s.commit_delay = impl_->lat_commit_delay.snapshot();
     return s;
 }
 

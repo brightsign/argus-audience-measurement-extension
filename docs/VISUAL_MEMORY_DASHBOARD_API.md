@@ -32,18 +32,24 @@ read-only store counts. Nothing is hardcoded; missing data is `null`.
   "runtime": { "running": true, "snapshot_age_ms": 2100, "stale": false,
                "stage1": { "samples_seen":0,"accepted":0,"encoded":0,"dropped_queue_full":0,"dropped_invalid":0,
                            "jpeg_write_failures":0,"database_failures":0,"retention_deletions":0,
-                           "queue_depth":0,"max_queue_depth":0,"bytes_on_disk":0 },
+                           "queue_depth":0,"max_queue_depth":0,"bytes_on_disk":0,
+                           "last_commit_utc_ms":0,"retention_pending":false,"retention_slices":0 },
                "stage2": { "status":"active","backend":"sqlite-vec v0.1.6","embedded":0,"vectors_stored":0,
                            "vector_bytes":0,"queue_depth":0,"max_queue_depth":0,"dropped_queue_full":0,
                            "inference_failures":0,"invalid_vectors":0,"decode_failures":0,
                            "permanent_failures":0,"db_failures":0 } },
+  "storage_root": "/storage/sd/visual-memory",
+  "ingest": { "state":"ok", "message":"", "expected_interval_ms":5000, "age_ms":3100,
+              "last_commit_utc_ms":1793780000000, "newest_frame_utc_ms":1793780000000,
+              "retention_pending":false, "queue_depth":0, "dropped_queue_full":0, "dropped_invalid":0 },
   "model": { "name":"mobilenet_v2_embedder","version":"tv-imagenet1k-v1","preprocessing":"pp1",
              "dimension":1280,"sha256":"...","dtype":"float32","metric":"cosine" },
   "store": { "available": true, "schema_version": 2, "vec_backend":"sqlite-vec v0.1.6",
              "frames":0,"frames_with_image":0,"embeddings_ok":0,"embeddings_failed":0,
              "jpeg_bytes":0,"vector_bytes":0,"db_bytes":0,"quota_bytes":4000000000,
              "retention_hours":48,"embedding_retention_days":7,
-             "oldest_utc_ms":0,"newest_utc_ms":0,"sources":["/dev/video1"],"disk_free_bytes":0 },
+             "oldest_utc_ms":0,"newest_utc_ms":0,"latest_embedding_utc_ms":null,
+             "sources":["/dev/video1"],"disk_free_bytes":0 },
   "search": { "available": true, "reason": "", "model_loaded": false, "busy": false },
   "errors": [ "human readable problems, e.g. 'runtime snapshot stale (95 s)'" ]
 }
@@ -55,6 +61,18 @@ read-only store counts. Nothing is hardcoded; missing data is `null`.
 "Sampling & processing" panel shows these together with the existing `runtime.stage1/stage2` counters: sampled =
 `samples_seen`, accepted, encoded, embedded = `stage2.embedded`, dropped = queue-full + invalid-frame drops,
 failed = write/DB/embedding failures. `vm_api_server --metrics host:port` overrides the exporter address.
+`storage_root` is the directory this API reads (and that the Argus writer writes: both come from the same config key).
+`ingest` is the answer to "is it actually storing the latest images?", judged from the writer's own commit clock
+(`runtime.stage1.last_commit_utc_ms`) and the newest stored frame, **not** from capture FPS (Argus can run at 29 FPS
+while nothing reaches the store). `state`: `ok` | `stalled` (nothing stored for longer than max(3 x sample interval, 30 s);
+`message` says why: expired-data cleanup, full queue, ...) | `waiting` (nothing offered yet) | `unknown` (no live Argus
+snapshot) | `viewer`. A stalled state is also added to `errors`. `retention_pending` means the writer is still clearing
+expired data left by an earlier run; this runs in short slices between frames and does not stop new frames.
+`store.latest_embedding_utc_ms` is when the newest OK embedding was stored (null: none). Argus also writes
+`stage1_latency` (`encode`, `file_write` incl. fsync, `db_insert`, `process_total`, `retention_slice`, `commit_delay`;
+each `count/p50_ms/p95_ms/p99_ms/max_ms`) into the snapshot file `/tmp/argus_vm_status.json`; the API does not
+re-publish it, read the file (or the Argus log) when diagnosing SD-card speed. Stage-2 snapshot fields added:
+`backfilled`, `backfill_attempted`, `backfill_cap`, `backfill_done`, `inference_p50_ms/p95_ms`.
 `configured:false` => everything else except `server_time_utc_ms`, `config_path`, `errors` is `null`.
 `search.available:false` carries the reason (Visual Memory disabled, embeddings not configured, no stored vectors,
 provider failed to load, ...).

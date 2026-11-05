@@ -65,6 +65,7 @@ struct StoreSummary {
     uint64_t    embeddings_ok = 0, embeddings_failed = 0;
     uint64_t    jpeg_bytes = 0, vector_bytes = 0, db_bytes = 0;
     int64_t     oldest_capture_utc_ms = 0, newest_capture_utc_ms = 0;     // 0 if empty
+    int64_t     latest_embedding_created_utc_ms = 0;   // when the newest OK embedding was stored (0 if none)
     std::vector<std::string> sources;
     std::vector<ModelSummary> models;
 };

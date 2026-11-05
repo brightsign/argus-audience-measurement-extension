@@ -133,10 +133,13 @@ EmbeddingWorker::Outcome EmbeddingWorker::process(const Task& t) {
     return Outcome::Stored;
 }
 
-size_t EmbeddingWorker::backfill(size_t max_frames, int64_t deadline_ms) {
+size_t EmbeddingWorker::backfill(size_t max_frames, int64_t deadline_ms, bool startup) {
     const int64_t start = steady_now_ns() / 1000000;
-    const int64_t min_cap = opt_.retention_days > 0
+    int64_t min_cap = opt_.retention_days > 0
         ? now_utc_ms() - static_cast<int64_t>(opt_.retention_days) * 86400000LL : 0;
+    // Startup backfill is limited to recent frames (explicit synchronous callers keep the retention window only).
+    if (startup && opt_.backfill_max_age_hours > 0)
+        min_cap = std::max<int64_t>(min_cap, now_utc_ms() - static_cast<int64_t>(opt_.backfill_max_age_hours) * 3600000LL);
     int64_t before = std::numeric_limits<int64_t>::max();   // cursor: transient failures can't loop
     size_t stored = 0, seen = 0;
     while (seen < max_frames && !stop_.load()) {
@@ -146,6 +149,7 @@ size_t EmbeddingWorker::backfill(size_t max_frames, int64_t deadline_ms) {
         if (batch.empty()) break;
         for (const auto& f : batch) {
             ++seen;
+            if (startup) backfill_attempted_.fetch_add(1);
             before = std::min(before, f.capture_utc_ms);
             if (process(Task{f.id, f.relative_path, f.capture_utc_ms, f.source_id, true}) == Outcome::Stored)
                 ++stored;
@@ -172,10 +176,18 @@ void EmbeddingWorker::loop() {
         }
         if (have) { process(t); continue; }
         // idle: low-priority backfill, one bounded batch per cycle
-        if (opt_.backfill_on_startup && provider_->ready()) {
+        if (opt_.backfill_on_startup && provider_->ready() && !backfill_done_.load()) {
             const int64_t now = steady_now_ns() / 1000000;
             if (now >= next_backfill) {
-                const size_t n = backfill(static_cast<size_t>(std::max(1, opt_.backfill_batch)), 0);
+                size_t want = static_cast<size_t>(std::max(1, opt_.backfill_batch));
+                if (opt_.backfill_max_frames > 0) {
+                    const uint64_t used = backfill_attempted_.load();
+                    if (used >= opt_.backfill_max_frames) { backfill_done_.store(true); continue; }
+                    want = static_cast<size_t>(std::min<uint64_t>(want, opt_.backfill_max_frames - used));
+                }
+                const size_t n = backfill(want, 0, /*startup=*/true);
+                // Cap reached, or nothing missing inside the age window: finished (the live path keeps embedding new frames).
+                if (opt_.backfill_max_frames > 0 && backfill_attempted_.load() >= opt_.backfill_max_frames) backfill_done_.store(true);
                 // nothing left to do => rescan rarely (picks up queue-full drops); else keep going soon
                 next_backfill = steady_now_ns() / 1000000 + (n == 0 ? 30000 : opt_.backfill_pause_ms);
             }
@@ -190,6 +202,9 @@ EmbeddingStats EmbeddingWorker::stats() const {
     s.dimension = model_.spec.dimension;
     s.enqueued = enqueued_.load(); s.dropped_queue_full = dropped_.load();
     s.embedded = embedded_.load(); s.backfilled = backfilled_.load(); s.retries = retries_.load();
+    s.backfill_attempted = backfill_attempted_.load();
+    s.backfill_cap = opt_.backfill_on_startup ? opt_.backfill_max_frames : 0;
+    s.backfill_done = backfill_done_.load();
     s.inference_failures = infer_fail_.load(); s.invalid_vectors = invalid_.load();
     s.decode_failures = decode_fail_.load(); s.failed_permanent = perm_fail_.load();
     s.db_failures = db_fail_.load(); s.searches = searches_.load();

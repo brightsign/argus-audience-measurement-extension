@@ -229,3 +229,11 @@ func TestPopEndpointsPostPolicy(t *testing.T) {
 		t.Errorf("GET image: %d", w.Code)
 	}
 }
+
+func TestStaticFilesRevalidate(t *testing.T) {
+	h := revalidate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.Write([]byte("x")) }))
+	w := do(h, "GET", "/vm.js", nil, nil)
+	if got := w.Header().Get("Cache-Control"); got != "no-cache" {
+		t.Fatalf("static files must revalidate on every load, Cache-Control=%q", got)
+	}
+}

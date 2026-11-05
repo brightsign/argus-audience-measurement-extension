@@ -142,6 +142,10 @@ StoreSummary VisualMemoryReader::summary() {
             }
         }
         {
+            Stmt q(db, "SELECT COALESCE(MAX(created_utc_ms),0) FROM frame_embeddings WHERE status=1;");
+            if (q && sqlite3_step(q.s) == SQLITE_ROW) s.latest_embedding_created_utc_ms = sqlite3_column_int64(q.s, 0);
+        }
+        {
             Stmt q(db, "SELECT DISTINCT source_id FROM frames ORDER BY source_id LIMIT 64;");
             if (q) while (sqlite3_step(q.s) == SQLITE_ROW) s.sources.push_back(col_text(q.s, 0));
         }

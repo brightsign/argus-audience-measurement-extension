@@ -442,6 +442,48 @@ CaptureStats read_capture_stats(const std::string& host_port) {
     return cache;
 }
 
+// Is frame ingestion healthy? Judged from the writer's own commit clock (stage1.last_commit_utc_ms) and the newest
+// stored frame, not from capture FPS: Argus can run at 29 FPS while nothing reaches the store (writer blocked, full
+// queue, unwritable card). The dashboard shows `state` and `message` verbatim.
+json ingest_json(const App& a, bool have, bool stale, const json& snap, int64_t newest_store_ms, int64_t now_utc_ms) {
+    const int64_t interval = a.cfg.sample_interval_ms > 0 ? a.cfg.sample_interval_ms : 5000;
+    json j = {{"state", "unknown"}, {"expected_interval_ms", interval}, {"message", ""},
+              {"last_commit_utc_ms", nullptr}, {"newest_frame_utc_ms", newest_store_ms ? json(newest_store_ms) : json(nullptr)},
+              {"age_ms", nullptr}, {"retention_pending", false}, {"queue_depth", nullptr}, {"dropped_queue_full", nullptr},
+              {"dropped_invalid", nullptr}};
+    if (a.viewer) { j["state"] = "viewer"; j["message"] = "dataset viewer: no live writer"; return j; }
+    if (!have || stale) { j["message"] = "no live Argus runtime snapshot, so ingestion cannot be judged"; return j; }
+    const json s1 = snap.contains("stage1") && snap["stage1"].is_object() ? snap["stage1"] : json::object();
+    const int64_t last_commit = s1.value("last_commit_utc_ms", static_cast<int64_t>(0));
+    j["last_commit_utc_ms"] = last_commit ? json(last_commit) : json(nullptr);
+    j["retention_pending"] = s1.value("retention_pending", false);
+    if (s1.contains("queue_depth")) j["queue_depth"] = s1["queue_depth"];
+    if (s1.contains("dropped_queue_full")) j["dropped_queue_full"] = s1["dropped_queue_full"];
+    if (s1.contains("dropped_invalid")) j["dropped_invalid"] = s1["dropped_invalid"];
+    const int64_t ref = std::max(last_commit, newest_store_ms);
+    if (ref <= 0) {
+        j["state"] = s1.value("samples_seen", static_cast<uint64_t>(0)) > 0 ? "stalled" : "waiting";
+        j["message"] = j["state"] == "stalled" ? "frames are being offered but none has been stored yet"
+                                               : "no frame has been offered or stored yet";
+        return j;
+    }
+    const int64_t age = std::max<int64_t>(0, now_utc_ms - ref);
+    j["age_ms"] = age;
+    const int64_t limit = std::max<int64_t>(3 * interval, 30000);
+    if (age > limit) {
+        j["state"] = "stalled";
+        std::string m = "no new frame has been stored for " + std::to_string(age / 1000) + " s (expected every " +
+                        std::to_string(interval / 1000) + " s)";
+        if (s1.value("retention_pending", false)) m += "; the writer is still clearing expired data from an earlier run";
+        else if (s1.value("dropped_queue_full", static_cast<uint64_t>(0)) > 0) m += "; samples are being dropped because the writer queue is full";
+        j["message"] = m;
+    } else {
+        j["state"] = "ok";
+        if (s1.value("retention_pending", false)) j["message"] = "clearing expired frames from an earlier run in the background";
+    }
+    return j;
+}
+
 Response handle_status(App& a) {
     json out; json errors = json::array();
     out["server_time_utc_ms"] = now_ms();
@@ -504,6 +546,7 @@ Response handle_status(App& a) {
         std::error_code ec;
         const auto sp = fs::space(a.cfg.storage_root, ec);
         store["disk_free_bytes"] = ec ? json(nullptr) : json(static_cast<uint64_t>(sp.available));
+        store["latest_embedding_utc_ms"] = s.latest_embedding_created_utc_ms ? json(s.latest_embedding_created_utc_ms) : json(nullptr);
         if (model.is_null() && !s.models.empty()) model = model_json(s.models.front().spec);
         if (s.frames_with_image > s.embeddings_ok + s.embeddings_failed + 12)
             errors.push_back(std::to_string(s.frames_with_image - s.embeddings_ok - s.embeddings_failed) +
@@ -533,6 +576,9 @@ Response handle_status(App& a) {
         }
         out["objects"] = ob;
     }
+    out["storage_root"] = a.cfg.storage_root;
+    out["ingest"] = ingest_json(a, have, stale, snap, store.value("newest_utc_ms", static_cast<int64_t>(0)), out["server_time_utc_ms"].get<int64_t>());
+    if (out["ingest"].value("state", std::string()) == "stalled") errors.push_back(out["ingest"].value("message", std::string("frame ingestion appears stalled")));
     out["store"] = store;
     out["model"] = model;
     out["search"] = search;

@@ -100,7 +100,7 @@ func main() {
 		})
 	})
 
-	mux.Handle("/", http.FileServer(http.Dir(*dir)))
+	mux.Handle("/", revalidate(http.FileServer(http.Dir(*dir))))
 
 	var handler http.Handler = mux
 	if *debug {
@@ -132,6 +132,15 @@ func main() {
 	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 		log.Fatalf("dashboard-server failed: %v", err)
 	}
+}
+
+// revalidate makes browsers re-check the dashboard's static files on every load (cheap 304s via Last-Modified)
+// instead of applying heuristic freshness, so an upgraded vm.js/index.html is never masked by a stale cached copy.
+func revalidate(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Cache-Control", "no-cache")
+		next.ServeHTTP(w, r)
+	})
 }
 
 func logging(next http.Handler) http.Handler {

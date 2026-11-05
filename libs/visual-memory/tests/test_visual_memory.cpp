@@ -2,6 +2,8 @@
 // End-to-end VisualMemory behaviour: persistence, restart, backpressure,
 // validation, graceful failure and clean shutdown.
 #include "visualmemory/visual_memory.h"
+#include "file_store.h"
+#include "sqlite_store.h"
 #include "test_util.h"
 
 #include <filesystem>
@@ -152,4 +154,55 @@ TEST(VisualMemory, ShutdownWithPendingDoesNotHang) {
         vm.try_submit(vmtest::make_bgr_frame(1280, 720, "cam", 1000 + i, i + 1));
     vm.stop();  // drain-then-stop: finishes in-flight, discards the rest
     SUCCEED();
+}
+
+// Regression: the writer used to run retention to completion before it started draining the ingest queue.
+// A store holding a large expired backlog therefore dropped every sample as "queue full" until the pass ended
+// (seen on the XT5: ~14,000 expired frames, ~11 min of drops, newest stored frame 2 days old).
+TEST(VisualMemory, ExpiredBacklogDoesNotStallIngest) {
+    vmtest::TempDir dir;
+    const int kBacklog = 600;
+    const int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+    {
+        detail::FileStore files(dir.str());
+        ASSERT_TRUE(files.init());
+        detail::SqliteStore db;
+        std::string err;
+        ASSERT_TRUE(db.open(dir.str() + "/visual_memory.db", err)) << err;
+        for (int i = 0; i < kBacklog; ++i) {
+            const int64_t cap = now_ms - 100LL * 3600 * 1000 + i;
+            std::string rel = files.make_relative_path("old", cap, i + 1);
+            ASSERT_TRUE(files.write_atomic(rel, std::vector<uint8_t>(64, 0xAB)));
+            detail::InsertRow r;
+            r.source_id = "old"; r.source_type = "file"; r.capture_utc_ms = cap; r.stored_width = 640;
+            r.stored_height = 360; r.pixel_format = "BGR24"; r.relative_jpeg_path = rel;
+            r.jpeg_size_bytes = 64; r.created_utc_ms = cap;
+            ASSERT_GT(db.insert(r), 0);
+        }
+    }
+    auto cfg = make_config(dir.str());
+    cfg.retention_hours = 48;
+    cfg.retention_slice_deletions = 1;          // many tiny slices: the queue is serviced between each
+    cfg.retention_slice_ms = 1;
+    VisualMemory vm(cfg);
+    ASSERT_TRUE(vm.start());
+    for (int i = 0; i < 3; ++i) {
+        for (int tries = 0; tries < 2000 && !vm.try_submit(vmtest::make_bgr_frame(640, 480, "cam", now_ms + i, i + 1)); ++tries)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    ASSERT_TRUE(vmtest::wait_until([&] { return vm.stats().encoded >= 1; }, 10000));
+    // The first new frame is committed while the backlog is still being worked off, not after it.
+    auto at_first = vm.stats();
+    EXPECT_LT(at_first.retention_deletions, static_cast<uint64_t>(kBacklog)) << "ingest waited for the whole backlog";
+    EXPECT_GT(at_first.last_commit_utc_ms, 0);
+
+    ASSERT_TRUE(vmtest::wait_until([&] { auto s = vm.stats(); return !s.retention_pending && s.encoded == 3; }, 20000));
+    auto s = vm.stats();
+    EXPECT_EQ(s.retention_deletions, static_cast<uint64_t>(kBacklog));
+    EXPECT_EQ(s.dropped_queue_full, 0u);
+    EXPECT_GT(s.retention_slices, 10u);
+    EXPECT_GT(s.commit_delay.count, 0u);
+    EXPECT_GT(s.retention_slice.count, 0u);
+    vm.stop();
 }

@@ -90,6 +90,10 @@ bool load_from_file(const std::string& path, AppConfig& out, bool /*strict*/, ch
         if (em.contains("retention_days") && em["retention_days"].is_number()) e.retention_days = em["retention_days"].get<int>();
         if (em.contains("backfill_on_startup") && em["backfill_on_startup"].is_boolean())
           e.backfill_on_startup = em["backfill_on_startup"].get<bool>();
+        if (em.contains("backfill_max_frames") && em["backfill_max_frames"].is_number_unsigned())
+          e.backfill_max_frames = em["backfill_max_frames"].get<uint64_t>();
+        if (em.contains("backfill_max_age_hours") && em["backfill_max_age_hours"].is_number())
+          e.backfill_max_age_hours = em["backfill_max_age_hours"].get<int>();
         if (em.contains("npu_core") && em["npu_core"].is_number()) e.npu_core = em["npu_core"].get<int>();
         if (em.contains("prefer_sqlite_vec") && em["prefer_sqlite_vec"].is_boolean())
           e.prefer_sqlite_vec = em["prefer_sqlite_vec"].get<bool>();

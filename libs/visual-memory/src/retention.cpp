@@ -5,6 +5,9 @@
 #include "sqlite_store.h"
 #include "vector_store.h"
 
+#include <algorithm>
+#include <chrono>
+
 namespace visualmemory::detail {
 
 namespace {
@@ -26,8 +29,22 @@ uint64_t total_bytes(SqliteStore& db, VectorStore* vs) {
 RetentionResult run_retention(SqliteStore& db, FileStore& files,
                               int64_t now_utc_ms, int retention_hours,
                               uint64_t max_storage_bytes,
-                              VectorStore* vs, int embedding_retention_days) {
+                              VectorStore* vs, int embedding_retention_days,
+                              const RetentionBudget& budget) {
     RetentionResult res;
+    const auto t0 = std::chrono::steady_clock::now();
+    // True once the slice budget is spent. Checked between single deletions, so one slice never
+    // runs longer than max_ms plus one file removal + row delete.
+    // At least one item is always processed per call, so a slice can never be all overhead (progress guarantee).
+    uint64_t attempted = 0;
+    auto spent = [&]() {
+        if (attempted == 0) return false;
+        if (budget.max_deletions > 0 && res.deleted >= budget.max_deletions) return true;
+        if (budget.max_ms > 0 &&
+            std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count() >= budget.max_ms)
+            return true;
+        return false;
+    };
 
     // 1) Age-based JPEG expiry.
     if (retention_hours > 0) {
@@ -37,6 +54,8 @@ RetentionResult run_retention(SqliteStore& db, FileStore& files,
             auto batch = db.select_older_than(cutoff, kBatch);   // only image_available=1 rows
             if (batch.empty()) break;
             for (const auto& c : batch) {
+                if (spent()) { res.more = true; return res; }
+                ++attempted;
                 if (retire_jpeg(db, files, vs, c)) {
                     ++res.deleted;
                     res.freed_bytes += c.jpeg_size_bytes;
@@ -46,10 +65,13 @@ RetentionResult run_retention(SqliteStore& db, FileStore& files,
         }
     }
 
-    // 2) Independent embedding expiry.
+    // 2) Independent embedding expiry (one cheap SQL batch per call; checked against the budget).
     if (vs && embedding_retention_days > 0) {
         const int64_t cutoff = now_utc_ms - static_cast<int64_t>(embedding_retention_days) * 86400LL * 1000;
-        while (vs->delete_older_than(cutoff, kBatch) == static_cast<uint64_t>(kBatch)) {}
+        while (vs->delete_older_than(cutoff, kBatch) == static_cast<uint64_t>(kBatch)) {
+            ++attempted;
+            if (spent()) { res.more = true; return res; }
+        }
     }
 
     // 3) Quota (JPEG + vectors): evict oldest JPEGs first, then oldest embeddings.
@@ -61,6 +83,8 @@ RetentionResult run_retention(SqliteStore& db, FileStore& files,
                 continue;
             }
             for (const auto& c : batch) {
+                if (spent()) { res.more = true; return res; }
+                ++attempted;
                 if (retire_jpeg(db, files, vs, c)) {
                     ++res.deleted;
                     res.freed_bytes += c.jpeg_size_bytes;

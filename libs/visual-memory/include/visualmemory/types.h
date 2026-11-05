@@ -57,6 +57,11 @@ struct EmbeddingOptions {
     bool     backfill_on_startup = false;// embed already-stored JPEGs that have no vector yet
     int      backfill_batch = 8;         // frames per backfill cycle (bounded work per cycle)
     int64_t  backfill_pause_ms = 250;    // idle pause between backfill cycles (yields CPU/NPU)
+    // Bounds for the startup backfill (only used when backfill_on_startup is true). It is deliberately NOT open
+    // ended: a store with thousands of old frames must not occupy the NPU/SD card unbounded after a restart.
+    // Newest frames are embedded first. 0 = no limit on that dimension (an explicit opt-in).
+    uint64_t backfill_max_frames = 500;    // total frames attempted per process run
+    int      backfill_max_age_hours = 24;  // only frames captured within this many hours
     int      max_attempts = 2;           // inference attempts per frame for recoverable errors
     bool     prefer_sqlite_vec = true;   // false (or sqlite-vec not compiled in) => BLOB + C++ cosine fallback
     size_t   max_jpeg_bytes = 8u << 20;  // refuse to decode larger stored files (bounds memory)
@@ -81,6 +86,10 @@ struct Config {
     int      retention_hours    = 48;            // delete frames older than this
 
     int64_t  retention_interval_ms = 60'000;     // how often the worker runs retention
+    // Retention runs in short slices between frames (never one long pass), so an expired backlog
+    // cannot stall the ingest queue. A slice ends after this many ms or deletions, whichever first.
+    int64_t  retention_slice_ms = 100;
+    uint64_t retention_slice_deletions = 64;
     bool     compute_sha256 = true;              // hash stored JPEG bytes for integrity
 
     EmbeddingOptions embedding;                  // Stage 2 (disabled by default)
@@ -164,6 +173,9 @@ struct Stats {
     uint64_t database_failures    = 0;
     uint64_t retention_deletions  = 0;
     uint64_t bytes_on_disk        = 0;  // logical sum of stored JPEG bytes
+    int64_t  last_commit_utc_ms   = 0;  // wall-clock time the newest JPEG+row was committed (0 = none yet)
+    bool     retention_pending    = false; // retention still has backlog to work through (sliced)
+    uint64_t retention_slices     = 0;
     size_t   queue_depth          = 0;  // instantaneous pending frames
     size_t   max_queue_depth      = 0;  // high-water mark since start
 
@@ -172,6 +184,8 @@ struct Stats {
     LatencyStats file_write;    // atomic JPEG write incl. fsync + rename (SD-card latency)
     LatencyStats db_insert;     // SQLite INSERT (FULL sync)
     LatencyStats process_total; // whole per-frame pipeline on the worker
+    LatencyStats retention_slice; // one bounded retention slice on the worker (should stay ~retention_slice_ms)
+    LatencyStats commit_delay;  // capture -> committed (queue wait + process); rises when the writer is stalled
 };
 
 // Stage 2 counters (all zero when embeddings are disabled).
@@ -185,6 +199,9 @@ struct EmbeddingStats {
     uint64_t dropped_queue_full = 0;             // dropped from the live queue (backfill will pick them up)
     uint64_t embedded = 0;                       // vectors persisted
     uint64_t backfilled = 0;                     // subset of `embedded` produced by backfill
+    uint64_t backfill_attempted = 0;             // frames the startup backfill has processed this run
+    uint64_t backfill_cap = 0;                   // configured backfill_max_frames (0 = unlimited / backfill off)
+    bool     backfill_done = false;              // cap reached or nothing left within the age window
     uint64_t retries = 0;
     uint64_t inference_failures = 0;             // provider returned false
     uint64_t invalid_vectors = 0;                // NaN/Inf/zero-norm/wrong dimension

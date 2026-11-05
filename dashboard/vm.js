@@ -156,10 +156,12 @@
       if (st.runtime.running === false) amber.push("Pipeline not running");
       if (st.runtime.stale) amber.push("Runtime snapshot stale");
     }
+    const ing = st.ingest;
+    if (ing && ing.state === "stalled") red.push("Frame ingestion stalled: " + (ing.message || "no new frames"));
     if (st.embedding_configured === false) amber.push("Embeddings not configured");
     else if (st.runtime && st.runtime.stage2 && st.runtime.stage2.status && st.runtime.stage2.status !== "active") amber.push("Stage-2 status: " + st.runtime.stage2.status);
     for (const [g, k, l] of DROPS) { const v = cnt(st, g, k); if (v) amber.push(`${l}: ${v}`); }
-    if (Array.isArray(st.errors) && st.errors.length) amber.push(...st.errors);
+    if (Array.isArray(st.errors) && st.errors.length) amber.push(...st.errors.filter((e) => !(ing && ing.state === "stalled" && e === ing.message)));
     if (red.length) return { cls: "red", text: "VM: errors", reasons: red.concat(amber) };
     if (amber.length) return { cls: "amber", text: "VM: degraded", reasons: amber };
     if (st.viewer) return { cls: "green", text: "VM: dataset viewer", reasons: ["Read-only view of a stored dataset (no live capture)"] };
@@ -293,8 +295,9 @@
 
   // ---- gallery component (main page + picker) ---------------------------------------
   function makeGallery(opts) {
-    const st = { offset: 0, total: null, seq: 0, selected: opts.selected || null };
+    const st = { offset: 0, total: null, seq: 0, selected: opts.selected || null, loadedNewest: null };
     const grid = h("div", { class: "vm-grid", "aria-live": "polite" });
+    const live = h("div", { class: "vm-live" });          // "new frames" / "ingestion stalled" notices (main gallery only)
     const msg = h("div");
     const info = h("span", { class: "muted" });
     const prev = h("button", { class: "vm-btn small", type: "button", text: "← Prev", onclick: () => { st.offset = Math.max(0, st.offset - PAGE_SIZE); load(); } });
@@ -306,8 +309,34 @@
     const refresh = h("button", { class: "vm-btn small", type: "button", text: "Refresh", onclick: () => load() });
     const root = h("div", null,
       h("div", { class: "vm-filters" }, tf.el, h("label", null, "Source", src), h("label", null, "Order", order), refresh),
-      msg, grid, h("div", { class: "vm-pager" }, prev, next, info));
+      live, msg, grid, h("div", { class: "vm-pager" }, prev, next, info));
     tz.subs.push(() => refreshTs(grid));
+
+    // Live behaviour (main gallery only; the picker inside Visual Search must not move under the user).
+    // "Following" = page 1, newest first, no end-time filter: new frames are then merged in place on the next
+    // status poll (existing cards, scroll position, selection and open dialogs are untouched). Otherwise the user
+    // keeps exactly what they are looking at and gets a notice with a button instead.
+    const newestKnown = () => { const sto = S.status && S.status.store; return sto && isNum(sto.newest_utc_ms) ? sto.newest_utc_ms : null; };
+    const following = () => opts.main && st.offset === 0 && order.value === "desc" && tf.get().end == null;
+    function renderLive() {
+      clear(live);
+      if (!opts.main) return;
+      const ing = S.status && S.status.ingest;
+      if (ing && ing.state === "stalled")
+        live.append(h("div", { class: "vm-banner bad", role: "alert" }, "Frame ingestion has stopped: " + (ing.message || "no new frames are being stored") + ". The gallery shows the newest frames that were stored."));
+      const n = newestKnown();
+      if (n != null && st.loadedNewest != null && n > st.loadedNewest && !following())
+        live.append(h("div", { class: "vm-banner info", role: "status" }, "Newer frames have been stored. ",
+          h("button", { class: "vm-btn small", type: "button", text: "Show newest", onclick: () => { tf.set(null, null); order.value = "desc"; st.offset = 0; load(); } })));
+    }
+    function onStatusTick() {
+      if (!opts.main || !root.isConnected) return;
+      const n = newestKnown();
+      if (n != null && st.loadedNewest == null) st.loadedNewest = n;
+      else if (n != null && n !== st.loadedNewest && following() && !st.busy) load({ silent: true });
+      renderLive();
+    }
+    onStatus(onStatusTick);
 
     function card(f) {
       const hasEmb = f.has_embedding;
@@ -323,7 +352,8 @@
             hasEmb ? h("span", { class: "vm-badge ok", text: "embedding" }) : h("span", { class: "vm-badge", text: "no embedding" }))));
       return b;
     }
-    async function load() {
+    async function load(o) {
+      const silent = !!(o && o.silent);
       if (S.apiState === "auth") { clear(grid); clear(msg); if (!opts.main) msg.append(authBox()); info.textContent = ""; prev.disabled = next.disabled = true; return; }
       if (S.apiState === "down") { clear(grid); clear(msg); if (!opts.main) msg.append(apiDownBox()); info.textContent = ""; prev.disabled = next.disabled = true; return; }
       if (S.status && !S.status.configured) { clear(grid); clear(msg).append(h("div", { class: "vm-empty", text: "Visual Memory is not configured, so there are no frames." })); info.textContent = ""; return; }
@@ -333,9 +363,14 @@
       if (t.start != null) q.set("start", t.start);
       if (t.end != null) q.set("end", t.end);
       if (src.value) q.set("source", src.value);
-      const r = await api("/frames?" + q);
+      const newestAtRequest = newestKnown();           // frames committed after this are picked up by the next tick
+      st.busy = true;
+      let r;
+      try { r = await api("/frames?" + q); } finally { st.busy = false; }
       if (seq !== st.seq) return;
-      clear(msg); clear(grid);
+      if (silent && (r.status !== 200 || !r.data)) return;      // a background refresh never replaces the grid with an error
+      if (!silent) { clear(msg); clear(grid); }
+      if (r.status === 200 && r.data && st.offset === 0 && order.value === "desc") st.loadedNewest = newestAtRequest;
       if (r.status !== 200 || !r.data) {
         const m = r.status === 401 ? authBox() : r.status === 404 || r.status === 502 || r.status === 0 ? apiDownBox()
           : h("div", { class: "vm-banner bad" }, "Could not load frames: " + ((r.data && (r.data.message || r.data.error)) || "HTTP " + r.status));
@@ -343,14 +378,24 @@
       }
       const d = r.data, frames = Array.isArray(d.frames) ? d.frames : [];
       st.total = isNum(d.total) ? d.total : frames.length;
-      if (!frames.length) {
-        if (st.offset > 0 && st.total > 0) { st.offset = Math.max(0, (Math.ceil(st.total / PAGE_SIZE) - 1) * PAGE_SIZE); return load(); }
-        grid.append(h("div", { class: "vm-empty", style: "grid-column:1/-1", text: "No frames match these filters." }));
+      if (silent) {
+        // merge in place: reuse the cards of frames that are still on the page, so images do not reload or flicker
+        const have = new Map(Array.from(grid.children).filter((c) => c.dataset && c.dataset.id).map((c) => [c.dataset.id, c]));
+        const nodes = frames.map((f) => have.get(String(f.id)) || card(f));
+        nodes.forEach((n) => n.classList && n.classList.toggle("selected", st.selected != null && String(st.selected) === n.dataset.id));
+        if (!nodes.length) nodes.push(h("div", { class: "vm-empty", style: "grid-column:1/-1", text: "No frames match these filters." }));
+        grid.replaceChildren(...nodes);
+      } else {
+        if (!frames.length) {
+          if (st.offset > 0 && st.total > 0) { st.offset = Math.max(0, (Math.ceil(st.total / PAGE_SIZE) - 1) * PAGE_SIZE); return load(); }
+          grid.append(h("div", { class: "vm-empty", style: "grid-column:1/-1", text: "No frames match these filters." }));
+        }
+        frames.forEach((f) => grid.append(card(f)));
       }
-      frames.forEach((f) => grid.append(card(f)));
       const a = frames.length ? st.offset + 1 : 0, b = st.offset + frames.length;
       info.textContent = `${fmtInt(a)}–${fmtInt(b)} of ${fmtInt(st.total)}`;
       prev.disabled = st.offset <= 0; next.disabled = b >= st.total;
+      renderLive();
     }
     document.addEventListener("vm-authed", () => { if (root.isConnected) load(); });
     return { el: root, load, setSelected(id) { st.selected = id; } };
@@ -370,7 +415,7 @@
     if (!st) { box.append(h("div", { class: "vm-empty", text: "Loading status…" })); return; }
     const ev = evaluate();
     const rt = st.runtime || null, s1 = rt && rt.stage1, s2 = rt && rt.stage2, sto = st.store, mdl = st.model;
-    const cfgTxt = st.configured ? (st.viewer ? "Dataset viewer" : rt && rt.running ? "Active" : "Configured") : "Not configured";
+    const cfgTxt = st.configured ? (st.viewer ? "Dataset viewer" : rt && rt.running ? (st.ingest && st.ingest.state === "stalled" ? "Stalled" : "Active") : "Configured") : "Not configured";
     const tiles = h("div", { class: "vm-tiles" });
     tiles.append(
       tile("Visual Memory", cfgTxt, st.viewer ? "read-only stored dataset · no live capture" : (st.config_path || null), ev.cls === "green" ? "good" : ev.cls === "red" ? "bad" : ev.cls === "amber" ? "warn" : ""),
@@ -401,7 +446,30 @@
       h("div", { class: "s", text: `embedder status: ${(s2 && s2.status) || DASH} · vector backend: ${(s2 && s2.backend) || (sto && sto.vec_backend) || (st.vector_search_configured === false ? "not configured" : DASH)}` }),
       mdl && mdl.sha256 ? h("div", { class: "s vm-mono", title: "model SHA-256", text: "sha256 " + mdl.sha256 }) : null);
     tiles.insertBefore(modelTile, tiles.children[6]);
+    // ingestion + embedding health, storage root (answers "is it actually storing the latest images, where, and with embeddings?")
+    const ing = st.ingest || null;
+    const ingCls = !ing ? "" : ing.state === "stalled" ? "bad" : ing.state === "ok" ? "good" : "warn";
+    const ageTxt = ing && isNum(ing.age_ms) ? fmtDur(ing.age_ms) + " ago" : null;
+    tiles.append(
+      tile("Latest JPEG committed", ing && ing.last_commit_utc_ms ? fmtTs(ing.last_commit_utc_ms) : (ing && ing.newest_frame_utc_ms ? fmtTs(ing.newest_frame_utc_ms) : DASH),
+        ing ? [ageTxt, "ingestion: " + ing.state].filter(Boolean).join(" · ") : null, ingCls, true),
+      tile("Latest embedding", sto && sto.latest_embedding_utc_ms ? fmtTs(sto.latest_embedding_utc_ms) : DASH,
+        sto && sto.latest_embedding_utc_ms ? otherZone(sto.latest_embedding_utc_ms) : (st.embedding_configured ? "none stored yet" : "embeddings disabled"), st.embedding_configured === false ? "warn" : "", true),
+      h("div", { class: "vm-tile wide" }, h("div", { class: "l", text: "Storage root" }),
+        h("div", { class: "v sm vm-mono", text: st.storage_root || DASH }),
+        h("div", { class: "s", text: "config: " + (st.config_path || DASH) })));
     box.append(tiles);
+
+    // notices: ingestion stopped / embeddings off / retention catch-up
+    const notices = [];
+    if (ing && ing.state === "stalled") notices.push(h("div", { class: "vm-banner bad", role: "alert" }, h("b", { text: "Frame ingestion stalled. " }), ing.message || ""));
+    else if (ing && ing.retention_pending) notices.push(h("div", { class: "vm-banner info" }, "Clearing expired frames from an earlier run in the background. New frames are still being stored."));
+    if (st.configured && !st.viewer && st.embedding_configured === false)
+      notices.push(h("div", { class: "vm-banner warn" }, h("b", { text: "Stage 2 is disabled. " }),
+        "New frames are stored without embeddings and image search is unavailable. Set visual_memory.vector_search_enabled and visual_memory.embedding.enabled to true in the active config and restart Argus."));
+    else if (st.embedding_configured && !st.viewer && rt && !rt.stale && !s2)
+      notices.push(h("div", { class: "vm-banner warn" }, h("b", { text: "Embeddings are configured but not running. " }), "The model may have failed to load; see the Argus log."));
+    if (notices.length) box.insertBefore(h("div", { class: "vm-stack" }, notices), tiles);
 
     // sampling & processing (existing runtime counters; nothing new is counted)
     {
@@ -418,7 +486,8 @@
         tile("Frames sampled", fmtInt(s1 && s1.samples_seen), "offered to Visual Memory"),
         tile("Accepted", fmtInt(s1 && s1.accepted), s1 && isNum(s1.encoded) ? fmtInt(s1.encoded) + " JPEG-encoded" : null),
         tile("Embedded", fmtInt(s2 && s2.embedded), s2 ? "stage 2 · " + (s2.status || DASH) : st.viewer ? "dataset viewer" : "stage 2 not running"),
-        tile("Dropped", fmtInt(dropped), "queue full / invalid frames", dropped > 0 ? "warn" : ""),
+        tile("Queue-full drops", fmtInt(cnt(st, "stage1", "dropped_queue_full")), "writer could not keep up (or was busy)", cnt(st, "stage1", "dropped_queue_full") > 0 ? "warn" : ""),
+        tile("Invalid frames", fmtInt(cnt(st, "stage1", "dropped_invalid")), "rejected before queueing", cnt(st, "stage1", "dropped_invalid") > 0 ? "warn" : ""),
         tile("Failed", fmtInt(failedAll), "write / DB / embedding failures", failedAll > 0 ? "bad" : ""),
         tile("Embedding model", mdl ? (mdl.name || DASH) : DASH, mdl ? `${mdl.version || ""} · dim ${fmtInt(mdl.dimension)} · ${mdl.preprocessing || DASH}` : "no model information", "", true));
       box.append(h("section", { class: "panel" }, h("div", { class: "panel-head" }, h("h2", { text: "Sampling & processing" }),

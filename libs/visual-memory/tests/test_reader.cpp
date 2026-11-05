@@ -134,16 +134,25 @@ TEST(Reader, ReadJpegHandlesUnknownExpiredAndMissing) {
 
 TEST(Reader, ExpiredJpegKeepsRowAndEmbeddingAndReportsExpired) {
     vmtest::TempDir dir;
-    {
+    {   // run 1: store and embed a frame that is years old, with age retention off (so nothing races the embedder)
+        Config c = cfg(dir.str());
+        c.retention_hours = 0;
+        c.embedding.retention_days = 3650;
+        VisualMemory vm(c);
+        vm.set_embedding_provider(std::make_shared<MockEmbeddingProvider>(16));
+        ASSERT_TRUE(vm.start());
+        ASSERT_TRUE(submit(vm, 1, kBase, 1));
+        ASSERT_TRUE(vmtest::wait_until([&] { return vm.stats().encoded == 1; }));
+        ASSERT_TRUE(vmtest::wait_until([&] { return vm.embedding_stats().embedded == 1; }));
+        vm.stop();
+    }
+    {   // run 2: JPEG retention is now 1 h, so the startup retention expires the JPEG; the row and its embedding stay
         Config c = cfg(dir.str());
         c.retention_hours = 1; c.retention_interval_ms = 40;
         c.embedding.retention_days = 3650;
         VisualMemory vm(c);
         vm.set_embedding_provider(std::make_shared<MockEmbeddingProvider>(16));
         ASSERT_TRUE(vm.start());
-        ASSERT_TRUE(submit(vm, 1, kBase, 1));                       // years old -> JPEG expires at once
-        ASSERT_TRUE(vmtest::wait_until([&] { return vm.stats().encoded == 1; }));
-        ASSERT_TRUE(vmtest::wait_until([&] { return vm.embedding_stats().embedded == 1; }));
         ASSERT_TRUE(vmtest::wait_until([&] { return vm.stats().retention_deletions >= 1; }));
         vm.stop();
     }

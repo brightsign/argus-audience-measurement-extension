@@ -40,7 +40,7 @@ public:
     // `max_frames` stored JPEGs that have no vector for this model, newest first.
     // Idempotent and resumable (selection is "frames lacking a vector"). Returns the
     // number of vectors stored. `deadline_ms` > 0 bounds wall time.
-    size_t backfill(size_t max_frames, int64_t deadline_ms);
+    size_t backfill(size_t max_frames, int64_t deadline_ms, bool startup = false);
 
     // Embed + validate + L2-normalise a decoded image (shares the provider with the worker).
     bool embed_image(const ImageView& img, std::vector<float>& out, std::string& err);
@@ -69,11 +69,11 @@ private:
     mutable std::mutex mu_;
     std::condition_variable cv_;
     std::deque<Task> q_;
-    std::atomic<bool> stop_{false}, running_{false};
+    std::atomic<bool> stop_{false}, running_{false}, backfill_done_{false};
     std::thread th_;
 
     std::atomic<uint64_t> enqueued_{0}, dropped_{0}, embedded_{0}, backfilled_{0}, retries_{0},
-        infer_fail_{0}, invalid_{0}, decode_fail_{0}, perm_fail_{0}, db_fail_{0}, searches_{0};
+        backfill_attempted_{0}, infer_fail_{0}, invalid_{0}, decode_fail_{0}, perm_fail_{0}, db_fail_{0}, searches_{0};
     std::atomic<size_t> max_depth_{0};
     std::atomic<uint64_t> vectors_cached_{0}, vector_bytes_cached_{0};
     std::mutex counts_mu_;   // makes (DB insert + cache increment) atomic w.r.t. refresh_counts(); never taken by stats()

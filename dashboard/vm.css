@@ -56,6 +56,9 @@
 /* Banners */
 .vm-banner { border: 1px solid var(--line); border-left: 4px solid var(--grey); border-radius: 10px; padding: 12px 14px; background: var(--panel); }
 .vm-banner.warn { border-left-color: var(--warn); } .vm-banner.bad { border-left-color: var(--bad); }
+.vm-banner.info { border-left-color: var(--accent, #3b9ddd); }
+.vm-banner .vm-btn { margin-left: 8px; }
+.vm-live { display: flex; flex-direction: column; gap: 8px; } .vm-live:not(:empty) { margin: 10px 0; }
 .vm-banner b { color: var(--ink); }
 .vm-banner p { margin: 4px 0; }
 .vm-note {
