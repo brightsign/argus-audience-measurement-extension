@@ -99,7 +99,7 @@ The first draft's reference filter (`scale=576:360,pad=...`) does not match the 
 | Simulated B frames vs A refs (negatives) | 60 | 0.601 | 0.612 | 0.623 |
 
 * `match_sim` 0.80 would reject 1 of 92 genuine positives (min 0.784), probably a transition frame. That is why one weak frame must not decide a verdict (`min_match_fraction` 0.60 handles it).
-* 62 negatives are at or above `reject_sim` 0.60 (none above 0.80): negatives are NOT cleanly below 0.60. Mismatch relies on the second rule (another registered media matches better by the margin), which requires B to be registered with references. An unregistered wrong advertisement would land in the ambiguous band, not Mismatch.
+* 62 negatives are at or above `reject_sim` 0.60 (none above 0.80): negatives are NOT cleanly below 0.60. Mismatch then relies on the second rule (another registered media matches at least `match_sim` and better than the expected one by the margin), which requires B to be registered with references. An unregistered wrong advertisement would land in the ambiguous band, not Mismatch.
 * Gap between lowest positive and highest negative: 0.161 (midpoint 0.70). Do not change thresholds on this alone: genuine B frames and the FP16 network are needed. Recommendation: keep 0.80/0.60 for the hardware run, record raw similarities, then decide.
 
 ## 8. Host test notes
@@ -126,3 +126,56 @@ Diagnosed earlier: the pause was caused by the console descent (Ctrl-C into the 
 3. If the package must go: reinstall the previous zip (kept), then DWS reboot.
 4. The isolated store `/storage/sd/pop-grpc-test` is simply left or deleted with approval; the production `pop.db` was never opened by the test configuration. Caveat: a schema-2 file cannot be downgraded; this is why the production file is never upgraded.
 5. Verify afterwards: `pop.db` hash equals the 4.0 backup, `display.enabled` false, `GET /api/display/status` reports disabled, the bridge process is gone.
+
+## 12. The D5 demonstration (what the dashboard `/#pop` now offers)
+
+Implemented and host-tested (`tests/browser/pop_demo_cdp.py`, 37 checks, real chain: OS-service double, bridge, vm_api_server, dashboard server, Chrome; a player emulator that does what `pop_autorun.brs` does):
+
+| Dashboard element | What it is |
+|---|---|
+| Advertisement registry | Ad A / Ad B, media ids, SHA-256, duration, slot, reference counts for both profiles (screenshot and Weston/VOP2 display output) |
+| Demonstration (local test mode) | **Verify Correct Ad** / **Verify Wrong Ad** / **Verify Interrupted Ad** (confirmation before it stops the playing ad). They call the ordinary `POST /api/pop/sessions` with the existing test hooks (`play_media_id`, `interrupt_at_s`); only REGISTERED media ids can be played; disabled with the reason unless `visual_memory.pop.allow_test_jobs` is true (the server answers 403 otherwise). Evidence offsets 3/15/27 s on a 30 s slot |
+| Live Display output | the Weston/VOP2 preview, on this page |
+| Current session | expected ad, actual ad reported by the player, start time, elapsed / slot with a progress bar, evidence captured of requested, backend; 1 s refresh while a session runs; "Waiting for the player to start" until a real playback event arrives |
+| Playback history | status, reason, backend, start/end, played/slot, evidence count and matches, mean similarity; filters; **Export CSV** and **Export JSON** |
+| Session details | per evidence frame: the captured frame, the closest reference of the expected ad and (for a mismatch) of the better-matching other ad, similarity, matched reference offset, capture method, provenance `weston_vop2_writeback pN`, capture time, `time_uncertainty_ms`; "Why this result" (the engine's reason plus the thresholds in force); player event timeline; per-session JSON export |
+
+CLI equivalents (same API, same hooks): `scripts/pop/demo_trigger.py --api http://PLAYER:20300 correct|wrong|interrupted`.
+Provisioning: `scripts/pop/provision_demo.py prepare|apply` (reference bundle generated from the ORIGINAL videos: Ad A 121.7 s, 122 + 122 reference frames at 1 s; Ad B 15.0 s, 15 + 15; hashes `81e3cc01...` and `885b3680...`). The bundle contains frames of people and therefore stays out of Git.
+
+### 12.1 Why the dashboard shows no playback events today (investigated, read-only)
+
+On the XT5 (`GET /api/pop/status`, nothing modified): the adapter is running and reading `/storage/sd/pop/events.jsonl`, but that file is 0 bytes (0 lines, 0 boots, 0 events ingested); `media` 0, `sessions` 0; the store is schema 1; `allow_test_jobs` false; backend `brightscript_screenshot`.
+Cause: the installed autorun is the original presentation. It plays the video but writes no D5 events, and not even the `boot` event that `scripts/pop/pop_autorun.brs` writes at start. Without that player-side reporter there is nothing to verify, and the engine correctly never reports a play. The gRPC preview alone is never treated as a playback event.
+The original presentation is not modified. For the demonstration the existing D5 test autorun is used (it plays exactly the original presentation, looping `meet-brightsign.mp4`, until `SD:/pop/enabled` exists).
+
+### 12.2 Exact changes the hardware demonstration needs (none is made yet)
+
+1. **Package:** install `argus-ext-<new>.zip` (contains the dashboard move, the Proof of Play demo UI, the isolated storage root, readiness gate, guards, bridge). One DWS reboot after the install.
+2. **Configuration** (`/storage/sd/configs/argus-config.json`, backup and SHA-256 first):
+   ```
+   "visual_memory": { ...unchanged...,
+     "display": { "enabled": true, "manage_bridge": true },
+     "pop": { "enabled": true, "storage_root": "/storage/sd/pop-grpc-demo",
+              "capture_backend": "resilience_grpc", "allow_test_jobs": true } }
+   ```
+   `pop.storage_root` creates a NEW schema-2 `pop.db` under `/storage/sd/pop-grpc-demo`; the existing schema-1 `pop.db` in the Visual Memory root is not opened, migrated or modified (`allow_schema_upgrade` stays false). `events_path` / `jobs_dir` stay the defaults used by the autorun (`/storage/sd/pop/events.jsonl`, `/storage/sd/pop/jobs`).
+3. **Files on the SD card:** `snowy_river.mp4` (15 s) next to the already present `meet-brightsign.mp4`; the reference bundle's `refs_incoming/` into `/storage/sd/pop-grpc-demo/pop/refs_incoming/`; `/storage/sd/pop/enabled` (turns job mode on).
+4. **Autorun:** back up `autorun.brs` (SHA-256 recorded, `autorun.brs.pre-d5`), copy `scripts/pop/pop_autorun.brs` as `autorun.brs`, restart the player application. The original presentation is untouched as a file backup; the test autorun behaves identically while `SD:/pop/enabled` is absent.
+
+### 12.3 Demonstration procedure (after approval)
+
+1. `provision_demo.py apply --api http://192.168.0.165:20300 --bundle <bundle>`: registers Ad A and Ad B and builds both reference profiles; the registry on `/#pop` shows them with 122/122 and 15/15 reference frames.
+2. Open `http://192.168.0.165:20300/#pop`: the registry, the live preview and the three controls are visible.
+3. Verify Correct Ad, then Wrong, then Interrupted (or `demo_trigger.py`), each 30 s (interrupted ~10 s). Expected: Playback corroborated; Mismatch (similarity to A about 0.5-0.62 for B frames; B frames should match Ad B's own references closely, which is what triggers the "another ad matches better" rule; neither number has been measured on the XT5 yet, the similarities quoted are host proxies); Incomplete.
+4. Open each session: frames at about 3, 15 and 27 s beside their references, scores, uncertainty and the explanation. Export CSV/JSON.
+5. Compare backends: the same three scenarios with `capture_backend: brightscript_screenshot` for the comparison (`compare_pop_backends.py`, `timing_calibrate.py`, `perf_ab.py` as in section 4.5).
+6. Also run S4/S5 (capture unavailable, no fresh frames) from section 4.4.
+
+### 12.4 Rollback for the demonstration
+
+Restore `argus-config.json` (verify SHA-256), restore the original `autorun.brs` from the backup and restart the player application, delete `/storage/sd/pop/enabled`, optionally delete `/storage/sd/pop-grpc-demo` (test store, schema 2, never merged into the production one), reinstall the previous package zip if required. The schema-1 `pop.db` and its evidence were never opened by the demonstration configuration.
+
+### 12.5 Open limits
+
+The 0.80/0.60 thresholds are kept for the first comparison and are not a calibration; real FP16 RKNN similarities for genuine Ad A and Ad B frames on the XT5 are the data that decides. Absolute producer latency is still unmeasured (`timing_calibrate.py` measures it on hardware; guards of 400 ms plus the 250 ms configured bound are conservative placeholders). The 30 s slot plays the first 30 s of Ad A (121.7 s video); Ad B (15 s) loops twice, so the evidence at 15 s sits on the loop boundary of B.

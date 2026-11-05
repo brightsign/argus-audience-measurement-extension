@@ -159,6 +159,7 @@ struct FrameScore {
     int         phash_dist_expected = 64;  // smallest Hamming distance to an expected reference
     float       sim_other = -1.0f;         // best cosine to any OTHER registered media
     std::string best_other_media;
+    int         best_other_ref_offset_ms = -1;   // offset of that other media's closest reference (diagnostic only; not used in any decision)
     std::string verdict;                   // "match" | "mismatch" | "inconclusive"
 };
 

@@ -493,6 +493,11 @@ json PopService::session_json(const PopSession& s) {
               {"source", s.source}, {"state", s.state}, {"end_reason", s.end_reason}, {"scheduled_utc_ms", s.scheduled_utc_ms},
               {"start_utc_ms", s.start_utc_ms}, {"end_utc_ms", s.end_utc_ms}, {"actual_play_ms", s.actual_play_ms}, {"slot_ms", s.slot_ms},
               {"captures_requested", s.captures_requested}, {"created_utc_ms", s.created_utc_ms}};
+    // Which backend captures (or captured) this session's evidence: the scheduled plan while it runs, else what the stored evidence says.
+    std::string backend; int ev_n = 0, ev_ok = 0;
+    for (const auto& e : store_->list_evidence(s.session_id)) { ++ev_n; if (e.status == "ok") ++ev_ok; if (backend.empty()) backend = e.capture_method; }
+    if (backend.empty()) { std::lock_guard<std::mutex> pl(plan_mu_); if (plans_.count(s.session_id)) backend = "resilience_grpc"; }
+    j["capture_backend"] = backend; j["evidence_count"] = ev_n; j["evidence_ok"] = ev_ok;
     j["status"] = have ? to_string(v.status) : "scheduled";
     j["status_label"] = have ? pop_status_label(v.status) : "Scheduled";
     j["reason"] = have ? v.reason : "no playback event or screenshot received yet";

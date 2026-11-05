@@ -219,7 +219,7 @@ table.vm-table { border-collapse: collapse; width: 100%; font-size: 12px; }
 .pop-evs { display: grid; gap: 14px; }
 .pop-ev { border: 1px solid var(--line); border-radius: 10px; padding: 10px; background: var(--panel); }
 .pop-ev-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 8px; }
-.pop-cmp { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.pop-cmp { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
 .pop-cmp figure { margin: 0; } .pop-cmp figcaption { font-size: 12px; color: var(--muted); margin-top: 4px; }
 .pop-img { width: 100%; height: auto; border-radius: 6px; background: #000; display: block; }
 .pop-noimg { display: flex; align-items: center; justify-content: center; min-height: 120px; border: 1px dashed var(--line); border-radius: 6px; color: var(--muted); font-size: 13px; padding: 8px; text-align: center; }
@@ -247,3 +247,9 @@ table.vm-table { border-collapse: collapse; width: 100%; font-size: 12px; }
 .disp-badge.ok { border-color: #2e8b57; color: #6fd39a; }
 .disp-badge.warn { border-color: #c98a1b; color: #f0b44c; }
 .disp-badge.bad { border-color: #c0392b; color: #ff7b6b; }
+
+/* Proof of Play: live session progress and the decision explanation */
+.pop-bar { height: 8px; border-radius: 999px; background: var(--panel-2); border: 1px solid var(--line); overflow: hidden; margin-top: 10px; }
+.pop-bar-fill { height: 100%; background: var(--present); transition: width 0.9s linear; }
+.pop-why { margin: 4px 0 12px 18px; padding: 0; font-size: 13px; line-height: 1.5; }
+.pop-why li { margin: 3px 0; }

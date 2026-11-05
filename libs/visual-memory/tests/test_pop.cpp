@@ -109,6 +109,9 @@ TEST(PopVerifyLogic, DecisionTable) {
     VerifyInput b = base; b.evidence = {ev(1, 1), ev(2, 1), ev(3, 1)};
     Verification vb = verify_playback(b, t);
     EXPECT_EQ(vb.status, PopStatus::Mismatch); EXPECT_EQ(vb.best_media_id, "B");
+    ASSERT_EQ(vb.frames.size(), 3u);
+    EXPECT_EQ(vb.frames[0].best_other_media, "B"); EXPECT_EQ(vb.frames[0].best_other_ref_offset_ms, 0) << "the matched reference of the other advertisement is reported (diagnostic only)";
+    EXPECT_NE(verification_to_json(vb).find("\"best_other_ref_offset_ms\":0"), std::string::npos);
 
     VerifyInput c = base; c.actual_play_ms = 9000; c.end_reason = "interrupted"; c.evidence = {ev(1, 0)};
     EXPECT_EQ(verify_playback(c, t).status, PopStatus::Incomplete) << "interrupted beats a visual match";

@@ -1150,7 +1150,7 @@ Response route_pop(App& a, const Request& rq) {
             if (rq.query.count("offset") && (!parse_i64(rq.query.at("offset"), off) || off < 0)) return jerr(400, "invalid_argument", "bad offset");
             uint64_t total = 0; json arr = json::array();
             for (const auto& s : st.list_sessions(f, static_cast<int>(lim), static_cast<int>(off), &total)) arr.push_back(ps.session_json(s));
-            return jok({{"total", total}, {"limit", lim}, {"offset", off}, {"sessions", arr}});
+            return jok({{"total", total}, {"limit", lim}, {"offset", off}, {"now_utc_ms", static_cast<int64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count())}, {"sessions", arr}});
         }
         if (seg[1] == "export.csv") {
             if (!get) return jerr(405, "method_not_allowed", "GET only");

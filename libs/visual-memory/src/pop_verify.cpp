@@ -147,15 +147,15 @@ Verification verify_playback(const VerifyInput& in, const VerifyThresholds& t) {
     std::vector<std::pair<std::string, int>> best_votes;
     for (const auto& e : in.evidence) {
         FrameScore f; f.idx = e.idx; f.evidence_id = e.evidence_id; f.actual_offset_ms = e.actual_offset_ms;
-        float other_best = -1.0f; std::string other_media;
+        float other_best = -1.0f; std::string other_media; int other_off = -1;
         for (const auto& r : in.refs) {
             const float s = dot(e.emb, r.emb);
             if (r.media_id == in.expected_media_id) {
                 if (s > f.sim_expected) { f.sim_expected = s; f.best_ref_offset_ms = r.offset_ms; }
                 f.phash_dist_expected = std::min(f.phash_dist_expected, phash_distance(e.phash, r.phash));
-            } else if (s > other_best) { other_best = s; other_media = r.media_id; }
+            } else if (s > other_best) { other_best = s; other_media = r.media_id; other_off = r.offset_ms; }
         }
-        f.sim_other = other_best; f.best_other_media = other_media;
+        f.sim_other = other_best; f.best_other_media = other_media; f.best_other_ref_offset_ms = other_off;
         const bool have_exp = f.sim_expected >= 0.0f || f.best_ref_offset_ms >= 0;
         if (!have_exp) f.verdict = "inconclusive";                                   // no reference frames of the expected media
         else if (f.sim_expected >= t.match_sim && !(other_best >= t.match_sim && other_best > f.sim_expected + t.margin)) f.verdict = "match";
@@ -246,7 +246,7 @@ std::string verification_to_json(const Verification& v) {
         o += "{\"idx\":" + std::to_string(f.idx) + ",\"evidence_id\":" + std::to_string(f.evidence_id) + ",\"actual_offset_ms\":" + std::to_string(f.actual_offset_ms) +
              ",\"sim_expected\":" + num(f.sim_expected) + ",\"best_ref_offset_ms\":" + std::to_string(f.best_ref_offset_ms) +
              ",\"phash_dist_expected\":" + std::to_string(f.phash_dist_expected) + ",\"sim_other\":" + num(f.sim_other) +
-             ",\"best_other_media\":\"" + esc(f.best_other_media) + "\",\"verdict\":\"" + f.verdict + "\"}";
+             ",\"best_other_media\":\"" + esc(f.best_other_media) + "\",\"best_other_ref_offset_ms\":" + std::to_string(f.best_other_ref_offset_ms) + ",\"verdict\":\"" + f.verdict + "\"}";
     }
     return o + "]}";
 }
