@@ -12,11 +12,14 @@
 #include "visualmemory/pop.h"
 
 #include <atomic>
+#include <map>
 #include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
+
+namespace argus_display { class DisplayFrameSource; struct DisplayFrame; }
 
 namespace argus_pop {
 
@@ -30,6 +33,10 @@ struct PopCfg {
     uint64_t    evidence_max_bytes = 512ull * 1024 * 1024;
     int         evidence_retention_days = 30;
     bool        allow_test_jobs = false;                           // play a media other than the expected one, interrupt, break capture
+    std::string capture_backend = "brightscript_screenshot";       // or "resilience_grpc" (OS rendered frames, needs visual_memory.display.enabled)
+    int         grpc_before_ms = 300;                              // accept a display frame this long before the target offset ...
+    int         grpc_after_ms = 800;                               // ... or this long after it
+    int         grpc_max_uncertainty_ms = 1500;                    // reject a frame whose time uncertainty exceeds this
     visualmemory::VerifyThresholds thresholds;
 };
 
@@ -52,7 +59,12 @@ public:
     // scheduling: records the expectation and hands a job to the player application. Returns false + http code.
     bool schedule(const nlohmann::json& body, nlohmann::json& out, int& http, std::string& err);
     // ingest <root>/pop/refs_incoming/<media_id>/<offset_ms>.jpg into the reference library.
-    bool build_references(const std::string& media_id, nlohmann::json& out, int& http, std::string& err, bool replace = false);
+    // profile "screenshot" (default) reads refs_incoming/<id>/, "display_letterbox" reads refs_incoming/<id>.display_letterbox/ and stores the
+    // references under the hidden media row <id>.display_letterbox (used only for OS-rendered-frame evidence).
+    bool build_references(const std::string& media_id, nlohmann::json& out, int& http, std::string& err, bool replace = false,
+                          const std::string& profile = "screenshot");
+    // Optional OS rendered-frame source (capture_backend "resilience_grpc"). Not owned.
+    void set_display(argus_display::DisplayFrameSource* d) { display_ = d; }
     bool verify(const std::string& session_id, nlohmann::json& out, int& http, std::string& err);
 
     nlohmann::json session_detail(const std::string& id, bool* found);
@@ -65,6 +77,10 @@ public:
 
 private:
     void loop();
+    void grpc_loop();                                  // selects display frames at the capture offsets of active sessions
+    void grpc_collect(const std::string& sid, bool final_pass, int64_t end_utc_ms);
+    // Stores one piece of evidence (frame == nullptr records a failed capture). false = embedding provider busy, try again.
+    bool grpc_record(const std::string& sid, int idx, int64_t target_ms, const std::string& why, const argus_display::DisplayFrame* frame, int64_t play_start_utc);
     bool ingest_capture(const nlohmann::json& j, int64_t utc_ms, const std::string& sid, bool ok);
     std::string map_path(const std::string& p) const;
     void save_state();
@@ -84,6 +100,18 @@ private:
     int64_t last_event_utc_ms_ = 0, last_prune_ms_ = 0;
     std::string last_error_;
     uint64_t file_size_ = 0;
+
+    // capture_backend = resilience_grpc
+    struct GrpcPlan {
+        std::vector<int64_t> offsets_ms;
+        std::vector<char> done;
+        int64_t slot_ms = 0, play_start_utc = 0, created_ms = 0;
+        bool started = false, break_capture = false;
+    };
+    argus_display::DisplayFrameSource* display_ = nullptr;
+    std::mutex plan_mu_;
+    std::map<std::string, GrpcPlan> plans_;
+    std::thread grpc_th_;
 };
 
 } // namespace argus_pop

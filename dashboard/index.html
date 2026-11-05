@@ -63,6 +63,15 @@
       </section>
     </section>
 
+    <!-- Display output preview (OS rendered frames). Hidden unless visual_memory.display.enabled; polls only while this view is on screen. -->
+    <section class="panel disp-panel" id="dispPanel" aria-label="Display output" hidden>
+      <div class="panel-head"><h2>Display output</h2><span class="hint" id="dispHint">what the player is showing (approximate, composed)</span></div>
+      <div class="disp-body">
+        <div class="disp-frame"><img id="dispImg" alt="Display output preview" hidden><div class="disp-empty" id="dispEmpty">Waiting for a display frame…</div></div>
+        <dl class="disp-meta" id="dispMeta" aria-live="off"></dl>
+      </div>
+    </section>
+
     <!-- Secondary band -->
     <section class="secondary">
       <section class="panel" aria-label="Attention funnel">
@@ -91,5 +100,6 @@
   <script src="vm.js"></script>
   <script src="objects.js"></script>
   <script src="pop.js"></script>
+  <script src="display.js"></script>
 </body>
 </html>

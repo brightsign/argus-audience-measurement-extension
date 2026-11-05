@@ -87,7 +87,8 @@ func main() {
 
 	// Visual Memory API (read-only gallery + bounded search POSTs).
 	mux.Handle("/api/vm/", newVMHandler(&url.URL{Scheme: "http", Host: *vmUp}, vmToken))
-	mux.Handle("/api/pop/", newVMHandler(&url.URL{Scheme: "http", Host: *vmUp}, vmToken)) // D5 Proof of Play: same policy, same upstream
+	mux.Handle("/api/pop/", newVMHandler(&url.URL{Scheme: "http", Host: *vmUp}, vmToken))     // D5 Proof of Play: same policy, same upstream
+	mux.Handle("/api/display/", newVMHandler(&url.URL{Scheme: "http", Host: *vmUp}, vmToken)) // display-output preview (OS rendered frames): GET only, never exposes the OS gRPC socket
 
 	// Connection hints for the browser so the dashboard is not hard-coded.
 	mux.HandleFunc("/config.json", func(w http.ResponseWriter, r *http.Request) {

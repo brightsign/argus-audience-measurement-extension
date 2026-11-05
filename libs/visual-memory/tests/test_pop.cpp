@@ -139,14 +139,38 @@ TEST(PopVerifyLogic, DecisionTable) {
 
 TEST(PopStore, SchemaMigrationAndGuard) {
     vmtest::TempDir dir;
-    { PopConfig c; c.root_directory = dir.str(); PopStore s(c); std::string e; ASSERT_TRUE(s.open(e)) << e; EXPECT_EQ(s.summary().schema_version, 1); }
-    { PopConfig c; c.root_directory = dir.str(); PopStore s(c); std::string e; ASSERT_TRUE(s.open(e)) << e; EXPECT_EQ(s.summary().schema_version, 1); }   // idempotent reopen
+    { PopConfig c; c.root_directory = dir.str(); PopStore s(c); std::string e; ASSERT_TRUE(s.open(e)) << e; EXPECT_EQ(s.summary().schema_version, 2); }
+    { PopConfig c; c.root_directory = dir.str(); PopStore s(c); std::string e; ASSERT_TRUE(s.open(e)) << e; EXPECT_EQ(s.summary().schema_version, 2); }   // idempotent reopen
     {
         sqlite3* db = nullptr; ASSERT_EQ(sqlite3_open((dir.path() / "pop.db").c_str(), &db), SQLITE_OK);
         sqlite3_exec(db, "PRAGMA user_version=99;", nullptr, nullptr, nullptr); sqlite3_close(db);
     }
     PopConfig c; c.root_directory = dir.str(); PopStore s(c); std::string e;
     EXPECT_FALSE(s.open(e)); EXPECT_NE(e.find("newer"), std::string::npos);
+}
+
+TEST(PopStore, SchemaV1DatabaseIsUpgradedWithCaptureMethodColumns) {
+    vmtest::TempDir dir;
+    {   // a v1 database as written by the screenshot-only release: evidence table without the capture-method columns
+        sqlite3* db = nullptr; ASSERT_EQ(sqlite3_open((dir.path() / "pop.db").c_str(), &db), SQLITE_OK);
+        ASSERT_EQ(sqlite3_exec(db,
+            "CREATE TABLE display_capture_evidence(evidence_id INTEGER PRIMARY KEY AUTOINCREMENT,session_id TEXT NOT NULL,idx INTEGER NOT NULL,"
+            " target_offset_ms INTEGER NOT NULL,actual_offset_ms INTEGER NOT NULL,status TEXT NOT NULL,failure_reason TEXT NOT NULL DEFAULT '',"
+            " source TEXT NOT NULL,path TEXT NOT NULL DEFAULT '',phash INTEGER NOT NULL DEFAULT 0,sha256 TEXT NOT NULL DEFAULT '',width INTEGER NOT NULL DEFAULT 0,"
+            " height INTEGER NOT NULL DEFAULT 0,bytes INTEGER NOT NULL DEFAULT 0,took_ms INTEGER NOT NULL DEFAULT 0,utc_ms INTEGER NOT NULL,"
+            " model_id INTEGER NOT NULL DEFAULT 0,embedding BLOB,embedded INTEGER NOT NULL DEFAULT 0,image_available INTEGER NOT NULL DEFAULT 0,"
+            " created_at INTEGER NOT NULL,UNIQUE(session_id,idx));"
+            "INSERT INTO display_capture_evidence(session_id,idx,target_offset_ms,actual_offset_ms,status,source,utc_ms,created_at) VALUES('old',1,3000,3007,'ok','main_display',1,1);"
+            "PRAGMA user_version=1;", nullptr, nullptr, nullptr), SQLITE_OK);
+        sqlite3_close(db);
+    }
+    PopConfig c; c.root_directory = dir.str(); PopStore s(c); std::string e;
+    ASSERT_TRUE(s.open(e)) << e;
+    EXPECT_EQ(s.summary().schema_version, 2);
+    auto ev = s.list_evidence("old");
+    ASSERT_EQ(ev.size(), 1u);
+    EXPECT_EQ(ev[0].capture_method, "brightscript_screenshot");      // old rows are screenshots by definition
+    EXPECT_EQ(ev[0].uncertainty_ms, -1);
 }
 
 TEST(PopStore, ReferenceLibraryRoundTripAndValidation) {
@@ -260,4 +284,78 @@ TEST(PopStore, SessionsAdHocDuplicatesFilterAndPersistence) {
     EXPECT_EQ(s.list_sessions(SessionFilter{}, 10, 0, &total).size(), 2u); EXPECT_EQ(total, 2u);
     SessionFilter flt; flt.expected_media_id = "ad-b"; EXPECT_EQ(s.list_sessions(flt, 10, 0).size(), 1u);
     flt = SessionFilter{}; flt.status = "scheduled"; EXPECT_EQ(s.list_sessions(flt, 10, 0).size(), 2u) << "no verification yet counts as scheduled";
+}
+
+// ---- OS rendered-frame evidence (capture_method resilience_grpc) -----------------------------------------------------------
+namespace {
+void shot_via(Fx& f, const std::string& sid, int idx, int kind, int off, const std::string& method, int phase = 0, int uncertainty = 300) {
+    EvidenceIn in; in.session_id = sid; in.idx = idx; in.target_offset_ms = off; in.actual_offset_ms = off + 40; in.utc_ms = kT0 + 1000 + off;
+    in.capture_method = method; in.provenance = method == "resilience_grpc" ? "weston_vop2_writeback (OS provider 7)" : ""; in.uncertainty_ms = method == "resilience_grpc" ? uncertainty : -1;
+    in.jpeg = make_jpeg(kind, phase); Evidence out; std::string e; ASSERT_TRUE(f.store.add_evidence(f.prov, in, out, e)) << e;
+}
+void display_refs(Fx& f, const std::string& id, int kind) {          // references in the letterboxed display geometry live in a hidden profile row
+    MediaAsset base; ASSERT_TRUE(f.store.get_media(id, base));
+    MediaAsset d = base; d.media_id = id + kDisplayProfileSuffix();
+    std::string e; ASSERT_TRUE(f.store.register_media(d, e)) << e;
+    for (int i = 0; i < 4; ++i) ASSERT_TRUE(f.store.add_reference(f.prov, d.media_id, i * 5000, make_jpeg(kind, i * 3, 160, 90), e)) << e;
+}
+}  // namespace
+
+TEST(PopStore, EvidenceRecordsHowItWasCapturedAndItsTimeUncertainty) {
+    Fx f; f.media("ad-a", 0);
+    f.schedule("g1", "ad-a"); f.full_play("g1");
+    shot_via(f, "g1", 1, 0, 3000, "resilience_grpc", 1, 275);
+    shot_via(f, "g1", 2, 0, 15000, "brightscript_screenshot", 2);
+    auto ev = f.store.list_evidence("g1");
+    ASSERT_EQ(ev.size(), 2u);
+    EXPECT_EQ(ev[0].capture_method, "resilience_grpc");
+    EXPECT_NE(ev[0].provenance.find("weston_vop2_writeback"), std::string::npos);
+    EXPECT_EQ(ev[0].uncertainty_ms, 275);
+    EXPECT_EQ(ev[1].capture_method, "brightscript_screenshot");
+    EXPECT_EQ(ev[1].uncertainty_ms, -1);
+}
+
+TEST(PopStore, DisplayEvidenceIsComparedOnlyWithDisplayGeometryReferences) {
+    Fx f; f.media("ad-a", 0); f.media("ad-b", 1);
+    display_refs(f, "ad-a", 2);                                     // the display geometry of ad A looks like kind 2 in this synthetic set
+    display_refs(f, "ad-b", 1);
+    // hidden rows are not listed as advertisements, but can be read directly
+    for (const auto& m : f.store.list_media()) EXPECT_EQ(m.media_id.find(kDisplayProfileSuffix()), std::string::npos) << m.media_id;
+    MediaAsset hidden; EXPECT_TRUE(f.store.get_media("ad-a" + std::string(kDisplayProfileSuffix()), hidden)); EXPECT_EQ(hidden.reference_frames, 4u);
+
+    // Evidence captured from the OS frames showing ad A (kind 2 in display geometry): corroborated against the display references,
+    f.schedule("g2", "ad-a"); f.full_play("g2");
+    for (int i = 0; i < 3; ++i) shot_via(f, "g2", i + 1, 2, 3000 + i * 12000, "resilience_grpc", i);
+    Verification v = f.verify("g2");
+    EXPECT_EQ(v.status, PopStatus::PlaybackCorroborated) << v.reason;
+    EXPECT_EQ(v.best_media_id, "ad-a");
+    // ... while the SAME pictures taken through the screenshot path are compared with the screenshot references (kind 0) and do not match.
+    f.schedule("g3", "ad-a"); f.full_play("g3");
+    for (int i = 0; i < 3; ++i) shot_via(f, "g3", i + 1, 2, 3000 + i * 12000, "brightscript_screenshot", i);
+    EXPECT_NE(f.verify("g3").status, PopStatus::PlaybackCorroborated);
+}
+
+TEST(PopStore, DisplayEvidenceFallsBackToScreenshotReferencesWhenNoDisplaySetExists) {
+    Fx f; f.media("ad-a", 0); f.media("ad-b", 1);                   // no display_letterbox references at all
+    f.schedule("g4", "ad-a"); f.full_play("g4");
+    for (int i = 0; i < 3; ++i) shot_via(f, "g4", i + 1, 0, 3000 + i * 12000, "resilience_grpc", i);
+    EXPECT_EQ(f.verify("g4").status, PopStatus::PlaybackCorroborated);
+}
+
+TEST(PopStore, DisplayWrongAdMissingAndInterruptedOutcomesAreUnchanged) {
+    Fx f; f.media("ad-a", 0); f.media("ad-b", 1); display_refs(f, "ad-a", 2); display_refs(f, "ad-b", 1);
+    f.schedule("w", "ad-a"); f.full_play("w");
+    for (int i = 0; i < 3; ++i) shot_via(f, "w", i + 1, 1, 3000 + i * 12000, "resilience_grpc", i);   // display shows ad B
+    Verification vb = f.verify("w");
+    EXPECT_EQ(vb.status, PopStatus::Mismatch) << vb.reason;
+    EXPECT_EQ(vb.best_media_id, "ad-b");
+
+    f.schedule("m", "ad-a"); f.full_play("m");                                                          // every display capture failed
+    for (int i = 0; i < 3; ++i) { EvidenceIn in; in.session_id = "m"; in.idx = i + 1; in.status = "failed"; in.capture_method = "resilience_grpc"; in.failure_reason = "no fresh display frame"; Evidence o; std::string e; ASSERT_TRUE(f.store.add_evidence(f.prov, in, o, e)) << e; }
+    EXPECT_EQ(f.verify("m").status, PopStatus::CaptureUnsupported);
+
+    f.schedule("i", "ad-a");                                                                            // interrupted at 10 s
+    f.ev("i", "session_scheduled_run", 0); f.ev("i", "play_started", 300); f.ev("i", "play_stopped", 10300, "interrupted"); f.ev("i", "session_end", 10310, "interrupted", 10000);
+    shot_via(f, "i", 1, 2, 3000, "resilience_grpc");
+    EXPECT_EQ(f.verify("i").status, PopStatus::Incomplete);
 }

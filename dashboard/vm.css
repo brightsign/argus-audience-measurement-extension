@@ -228,3 +228,17 @@ table.vm-table { border-collapse: collapse; width: 100%; font-size: 12px; }
 #view-pop .vm-page { grid-column: 1 / -1; width: 100%; min-width: 0; display: flex; flex-direction: column; gap: 12px; }
 #view-pop .pop-panel { margin: 0; max-width: none; width: 100%; box-sizing: border-box; }
 .pop-reason { min-width: 220px; }
+
+/* Display output preview (audience view) */
+.disp-panel { margin-top: 12px; }
+.disp-body { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
+.disp-frame { position: relative; flex: 0 1 640px; max-width: 100%; aspect-ratio: 16 / 9; background: #000; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.disp-frame img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.disp-empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); font-size: 13px; padding: 12px; text-align: center; }
+.disp-meta { flex: 1 1 260px; margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 4px 12px; font-size: 13px; }
+.disp-meta dt { color: var(--muted); }
+.disp-meta dd { margin: 0; overflow-wrap: anywhere; }
+.disp-badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 12px; border: 1px solid var(--line); }
+.disp-badge.ok { border-color: #2e8b57; color: #6fd39a; }
+.disp-badge.warn { border-color: #c98a1b; color: #f0b44c; }
+.disp-badge.bad { border-color: #c0392b; color: #ff7b6b; }

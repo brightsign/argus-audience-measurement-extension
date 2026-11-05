@@ -71,7 +71,7 @@ try:
         except Exception: time.sleep(0.1)
 
     st, s, _ = call("GET", "/api/pop/status")
-    check("status: enabled, adapter running, schema 1", st == 200 and s["enabled"] and s["adapter"]["running"] and s["store"]["schema_version"] == 1, s)
+    check("status: enabled, adapter running, schema 2", st == 200 and s["enabled"] and s["adapter"]["running"] and s["store"]["schema_version"] == 2, s)
     check("status states the evidence source is the presentation output", "presentation output" in s["evidence_source"])
 
     # ---- reference library

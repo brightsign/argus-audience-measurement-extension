@@ -237,3 +237,18 @@ func TestStaticFilesRevalidate(t *testing.T) {
 		t.Fatalf("static files must revalidate on every load, Cache-Control=%q", got)
 	}
 }
+
+func TestDisplayPreviewIsGetOnlyAndProxied(t *testing.T) {
+	h, seen := handler(t, "")
+	if w := do(h, "GET", "/api/display/frame.jpg?after=3", nil, nil); w.Code != 200 || seen.n != 1 {
+		t.Fatalf("GET must be proxied, got %d (upstream calls %d)", w.Code, seen.n)
+	}
+	for _, p := range []string{"/api/display/frame.jpg", "/api/display/status", "/api/display/anything"} {
+		if w := do(h, "POST", p, []byte("x"), okOrigin); w.Code != 405 {
+			t.Fatalf("POST %s must be refused (the preview has no write routes), got %d", p, w.Code)
+		}
+	}
+	if seen.n != 1 {
+		t.Fatalf("refused POSTs must not reach the upstream (calls %d)", seen.n)
+	}
+}

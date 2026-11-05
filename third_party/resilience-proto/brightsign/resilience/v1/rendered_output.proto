@@ -1,0 +1,73 @@
+// BrightSign Resilience Runtime API - rendered-output health.
+//
+// Optional/roadmap. Screenshots are approximations, not exact HDMI-connector
+// truth, so this must be combined with player + display state before a failure
+// is classified. The daemon returns UNIMPLEMENTED until a safe native capture
+// path (e.g. VOP readback) exists.
+
+syntax = "proto3";
+
+package brightsign.resilience.v1;
+
+import "brightsign/resilience/v1/common.proto";
+
+option cc_enable_arenas = true;
+
+service RenderedOutputService {
+  rpc GetRenderedFrameHealth(GetRenderedFrameHealthRequest)
+      returns (RenderedFrameHealth);
+
+  rpc WatchRenderedFrameHealth(WatchRenderedFrameHealthRequest)
+      returns (stream RenderedFrameHealthEvent);
+
+  rpc CaptureRenderedFrame(CaptureRenderedFrameRequest)
+      returns (RenderedFrame);
+}
+
+message GetRenderedFrameHealthRequest {}
+message WatchRenderedFrameHealthRequest {}
+message CaptureRenderedFrameRequest {
+  uint32 max_width = 1;
+  uint32 max_height = 2;
+}
+
+message RenderedFrameHealth {
+  string boot_id = 1;
+  uint64 sequence_number = 2;
+  uint64 monotonic_timestamp_ms = 3;
+  uint64 freshness_timestamp_ms = 4;
+
+  bool capture_available = 10;
+  SourceProvider provider = 11;
+
+  uint32 width = 20;
+  uint32 height = 21;
+  double sample_fps = 22;
+
+  double avg_luminance = 30;
+  double frame_diff_score = 31;
+  bool black_screen = 32;
+  bool frozen_frame = 33;
+
+  uint64 black_duration_ms = 40;
+  uint64 frozen_duration_ms = 41;
+  uint64 last_changed_timestamp_ms = 42;
+
+  string error_code = 50;
+  string error_message = 51;
+}
+
+message RenderedFrameHealthEvent {
+  RenderedFrameHealth health = 1;
+}
+
+message RenderedFrame {
+  bool available = 1;
+  SourceProvider provider = 2;
+  uint32 width = 3;
+  uint32 height = 4;
+  string mime_type = 5;
+  bytes data = 6;
+  string error_code = 10;
+  string error_message = 11;
+}

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MIT
 #include "pop_service.h"
+#include "display/display_frame_source.h"
 
 #include <sys/stat.h>
 #include <unistd.h>
@@ -56,7 +57,8 @@ json evidence_json(const Evidence& e) {
     return {{"evidence_id", e.evidence_id}, {"idx", e.idx}, {"status", e.status}, {"failure_reason", e.failure_reason}, {"source", e.source},
             {"target_offset_ms", e.target_offset_ms}, {"actual_offset_ms", e.actual_offset_ms}, {"utc_ms", e.utc_ms}, {"took_ms", e.took_ms},
             {"width", e.width}, {"height", e.height}, {"bytes", e.bytes}, {"sha256", e.sha256}, {"phash", hex64(e.phash)},
-            {"image_available", e.image_available},
+            {"image_available", e.image_available}, {"capture_method", e.capture_method}, {"provenance", e.provenance},
+            {"time_uncertainty_ms", e.uncertainty_ms < 0 ? json(nullptr) : json(e.uncertainty_ms)},
             {"image_url", e.image_available ? "/api/pop/sessions/" + e.session_id + "/evidence/" + std::to_string(e.evidence_id) + "/image" : ""}};
 }
 json media_json(const MediaAsset& m) {
@@ -79,12 +81,14 @@ bool PopService::start(std::string& err) {
     if (cfg_.enabled && !running_.load()) {
         stop_ = false; running_ = true;
         th_ = std::thread([this] { loop(); });
+        if (display_) grpc_th_ = std::thread([this] { grpc_loop(); });
     }
     return true;
 }
 void PopService::stop() {
     stop_ = true;
     if (th_.joinable()) th_.join();
+    if (grpc_th_.joinable()) grpc_th_.join();
     running_ = false;
 }
 
@@ -181,11 +185,25 @@ void PopService::process_line(const std::string& line, int64_t read_utc_ms) {
     if (j.contains("reason") && j["reason"].is_string()) e.reason = j["reason"].get<std::string>();
     if (j.contains("actual_play_ms") && j["actual_play_ms"].is_number()) e.actual_play_ms = j["actual_play_ms"].get<int64_t>();
     if (j.contains("capture_count") && j["capture_count"].is_number_integer()) e.captures_requested = j["capture_count"].get<int>();
+    bool grpc_session = false;
+    { std::lock_guard<std::mutex> pl(plan_mu_); grpc_session = plans_.count(sid) != 0; }
+    if (grpc_session && ev == "session_scheduled_run") e.captures_requested = -1;      // the player takes no screenshots for this session: keep the scheduled count
+    if (grpc_session && ev == "play_started" && display_) {
+        std::lock_guard<std::mutex> pl(plan_mu_);
+        auto it = plans_.find(sid);
+        if (it != plans_.end() && !it->second.started) { it->second.started = true; it->second.play_start_utc = utc; display_->hold(sid); }
+    }
     e.detail_json = line.size() <= 4000 ? line : std::string("{}");
     std::string err;
     if (!store_->apply_event(e, err)) { std::lock_guard<std::mutex> lk(mu_); ++errors_; last_error_ = "apply_event: " + err; return; }
     { std::lock_guard<std::mutex> lk(mu_); ++events_; last_event_utc_ms_ = utc; }
     if (ev == "session_end") {
+        if (grpc_session) {                                          // resolve every capture offset that was reached, then stop holding the OS producer
+            grpc_collect(sid, true, utc);
+            if (display_) display_->release(sid);
+            std::lock_guard<std::mutex> pl(plan_mu_);
+            plans_.erase(sid);
+        }
         Verification v;
         if (!store_->verify_session(sid, cfg_.thresholds, v, err)) { std::lock_guard<std::mutex> lk(mu_); ++errors_; last_error_ = "verify: " + err; }
     }
@@ -229,6 +247,83 @@ bool PopService::ingest_capture(const json& j, int64_t utc_ms, const std::string
     return true;
 }
 
+
+// ---- capture backend "resilience_grpc": evidence from the OS rendered frames -----------------------------------------------------
+// The player application takes no screenshots for these sessions. At play_started the display source is held (it keeps the OS producer
+// capturing), and for every capture offset the frame closest to (play start + offset) is taken from the source's bounded ring. A frame is
+// used only if it was received within the configured window of the target and its time uncertainty is within the limit; otherwise a
+// failed capture is recorded, exactly like a failed Screenshot() (so the existing "capture unsupported" / "incomplete" outcomes apply).
+void PopService::grpc_loop() {
+    while (!stop_) {
+        std::vector<std::string> ids;
+        { std::lock_guard<std::mutex> pl(plan_mu_); for (const auto& kv : plans_) ids.push_back(kv.first); }
+        for (const auto& id : ids) grpc_collect(id, false, 0);
+        const int64_t t = now_ms();
+        {   // plans that never started (the play never happened) or ran far past their slot are dropped, and the source released
+            std::lock_guard<std::mutex> pl(plan_mu_);
+            for (auto it = plans_.begin(); it != plans_.end();) {
+                const bool never = !it->second.started && t - it->second.created_ms > 600000;
+                const bool over = it->second.started && t - it->second.play_start_utc > it->second.slot_ms + 60000;
+                if (never || over) { if (display_) display_->release(it->first); it = plans_.erase(it); } else ++it;
+            }
+        }
+        for (int i = 0; i < 5 && !stop_; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+}
+
+void PopService::grpc_collect(const std::string& sid, bool final_pass, int64_t end_utc_ms) {
+    if (!display_) return;
+    GrpcPlan p;
+    { std::lock_guard<std::mutex> pl(plan_mu_); auto it = plans_.find(sid); if (it == plans_.end() || !it->second.started) return; p = it->second; }
+    const int64_t now = now_ms();
+    for (size_t i = 0; i < p.offsets_ms.size(); ++i) {
+        if (p.done[i]) continue;
+        const int64_t tgt = p.play_start_utc + p.offsets_ms[i];
+        if (final_pass) {
+            if (tgt > end_utc_ms) { std::lock_guard<std::mutex> pl(plan_mu_); plans_[sid].done[i] = 1; continue; }      // the play ended before this offset: no capture, as with screenshots
+        } else if (now < tgt + 300) continue;                                          // wait until frames just after the target exist, then pick the closest
+        bool done = false;
+        if (p.break_capture) {
+            done = grpc_record(sid, static_cast<int>(i) + 1, p.offsets_ms[i], "display capture disabled by the break_capture test hook", nullptr, p.play_start_utc);
+        } else {
+            auto fr = display_->nearest(tgt, cfg_.grpc_before_ms, cfg_.grpc_after_ms);
+            if (fr) {
+                if (fr->uncertainty_ms > cfg_.grpc_max_uncertainty_ms)
+                    done = grpc_record(sid, static_cast<int>(i) + 1, p.offsets_ms[i], "display frame time uncertainty " + std::to_string(fr->uncertainty_ms) + " ms exceeds the limit", nullptr, p.play_start_utc);
+                else done = grpc_record(sid, static_cast<int>(i) + 1, p.offsets_ms[i], "", &*fr, p.play_start_utc);
+            } else if (final_pass || now > tgt + cfg_.grpc_after_ms + 500) {
+                const auto st = display_->status();
+                done = grpc_record(sid, static_cast<int>(i) + 1, p.offsets_ms[i],
+                                   "no fresh display frame within " + std::to_string(cfg_.grpc_before_ms) + "/" + std::to_string(cfg_.grpc_after_ms) +
+                                   " ms of the target (display source: " + st.value("state", std::string("unknown")) + ")", nullptr, p.play_start_utc);
+            }
+        }
+        if (done) { std::lock_guard<std::mutex> pl(plan_mu_); auto it = plans_.find(sid); if (it != plans_.end()) it->second.done[i] = 1; }
+    }
+}
+
+bool PopService::grpc_record(const std::string& sid, int idx, int64_t target_ms, const std::string& why, const argus_display::DisplayFrame* frame, int64_t play_start_utc) {
+    EvidenceIn in;
+    in.session_id = sid; in.idx = idx; in.target_offset_ms = static_cast<int>(target_ms); in.source = cfg_.source_id;
+    in.capture_method = "resilience_grpc";
+    Evidence out; std::string err;
+    if (!frame) {
+        in.status = "failed"; in.failure_reason = why; in.actual_offset_ms = 0; in.utc_ms = now_ms();
+        NoProvider np;
+        if (!store_->add_evidence(np, in, out, err)) { std::lock_guard<std::mutex> lk(mu_); ++errors_; last_error_ = "evidence: " + err; }
+        return true;
+    }
+    in.actual_offset_ms = static_cast<int>(frame->capture_utc_ms - play_start_utc);
+    in.took_ms = static_cast<int>(frame->acquire_ms); in.utc_ms = frame->capture_utc_ms; in.uncertainty_ms = static_cast<int>(frame->uncertainty_ms);
+    in.provenance = "weston_vop2_writeback (OS provider " + std::to_string(frame->provider) + "); approximate composed display output";
+    in.jpeg.assign(frame->jpeg->begin(), frame->jpeg->end());
+    std::string why2; bool done = false, stored = false;
+    const bool have = run_ && run_([&](EmbeddingProvider& p) { stored = store_->add_evidence(p, in, out, err); done = true; }, why2);
+    if (!have || !done) return false;                                                        // embedding provider busy: the frame may still be in the ring next cycle
+    if (!stored) { std::lock_guard<std::mutex> lk(mu_); ++errors_; last_error_ = "evidence: " + err; }
+    return true;
+}
+
 // ---- operations -------------------------------------------------------------------------------------------------
 bool PopService::schedule(const json& b, json& out, int& http, std::string& err) {
     http = 400;
@@ -260,28 +355,48 @@ bool PopService::schedule(const json& b, json& out, int& http, std::string& err)
         std::snprintf(buf, sizeof(buf), "s-%lld-%04x", static_cast<long long>(now_ms()), static_cast<unsigned>(rd() & 0xffff));
         sid = buf;
     }
+    const std::string backend = b.value("capture_backend", cfg_.capture_backend);
+    if (backend != "brightscript_screenshot" && backend != "resilience_grpc") { err = "capture_backend must be brightscript_screenshot or resilience_grpc"; return false; }
+    const bool grpc = backend == "resilience_grpc";
+    if (grpc && (!display_ || !display_->cfg().enabled)) {
+        err = "capture_backend resilience_grpc needs visual_memory.display.enabled and the argus_display_bridge (OS Resilience rendered frames)"; http = 503; return false;
+    }
     PopSession s; s.session_id = sid; s.job_id = "job-" + sid; s.expected_media_id = expected; s.slot_ms = static_cast<int64_t>(slot * 1000);
     s.captures_requested = static_cast<int>(offs.size()); s.source = cfg_.source_id; s.scheduled_utc_ms = now_ms();
     if (!store_->schedule_session(s, err)) { http = err.find("exists") != std::string::npos ? 409 : 400; return false; }
 
     json job = {{"job_id", s.job_id}, {"session_id", sid}, {"media_id", play}, {"expected_media_id", expected}, {"media_file", pm.uri},
-                {"max_play_ms", s.slot_ms}, {"capture_offsets_ms", offs}, {"capture_width", 640}, {"capture_height", 400},
+                {"max_play_ms", s.slot_ms}, {"capture_offsets_ms", grpc ? std::vector<int64_t>{} : offs}, {"capture_width", 640}, {"capture_height", 400},
+                {"capture_backend", backend},
                 {"loop", pm.kind == "file" && pm.duration_s > 0 && pm.duration_s * 1000 < static_cast<double>(s.slot_ms)}};
     if (interrupt >= 0) job["interrupt_at_ms"] = static_cast<int64_t>(interrupt * 1000);
-    if (b.value("break_capture", false)) job["capture_dir"] = "SD:/pop/no_such_dir";        // a real, failing Screenshot() call
+    if (b.value("break_capture", false) && !grpc) job["capture_dir"] = "SD:/pop/no_such_dir";        // a real, failing Screenshot() call
     char name[96]; std::snprintf(name, sizeof(name), "%013lld_%s.json", static_cast<long long>(now_ms()), sid.c_str());
     if (!write_text_atomic(fs::path(cfg_.jobs_dir) / name, job.dump())) { err = "cannot write the job file into " + cfg_.jobs_dir; http = 503; return false; }
+    if (grpc) {
+        GrpcPlan gp; gp.offsets_ms = offs; gp.done.assign(offs.size(), 0); gp.slot_ms = s.slot_ms; gp.created_ms = now_ms(); gp.break_capture = b.value("break_capture", false);
+        std::lock_guard<std::mutex> pl(plan_mu_);
+        plans_[sid] = std::move(gp);
+    }
     http = 201;
     out = {{"session_id", sid}, {"job_file", name}, {"expected_media_id", expected}, {"play_media_id", play}, {"slot_ms", s.slot_ms},
-           {"capture_offsets_ms", offs}, {"status", "scheduled"}};
+           {"capture_offsets_ms", offs}, {"capture_backend", backend}, {"status", "scheduled"}};
     return true;
 }
 
-bool PopService::build_references(const std::string& media_id, json& out, int& http, std::string& err, bool replace) {
+bool PopService::build_references(const std::string& media_id, json& out, int& http, std::string& err, bool replace, const std::string& profile) {
     http = 400;
+    if (profile != "screenshot" && profile != "display_letterbox") { err = "profile must be screenshot or display_letterbox"; return false; }
     MediaAsset m;
     if (!store_->get_media(media_id, m)) { err = "unknown media_id"; http = 404; return false; }
-    const fs::path dir = fs::path(root_) / "pop" / "refs_incoming" / media_id;
+    const bool disp = profile == "display_letterbox";
+    const std::string target = disp ? media_id + visualmemory::kDisplayProfileSuffix() : media_id;
+    if (disp) {
+        if (target.size() > 64) { err = "media_id too long for the display_letterbox profile (max 46 characters)"; return false; }
+        MediaAsset d = m; d.media_id = target; d.display_name = m.display_name + " (display frames)";
+        if (!store_->register_media(d, err)) return false;                  // hidden profile row; keeps existing frames
+    }
+    const fs::path dir = fs::path(root_) / "pop" / "refs_incoming" / (disp ? media_id + ".display_letterbox" : media_id);
     std::vector<std::pair<int, fs::path>> files;
     std::error_code ec;
     for (auto it = fs::directory_iterator(dir, ec); !ec && it != fs::directory_iterator(); it.increment(ec)) {
@@ -294,20 +409,20 @@ bool PopService::build_references(const std::string& media_id, json& out, int& h
     if (files.empty()) { err = "no <offset_ms>.jpg files in " + dir.string(); http = 404; return false; }
     if (files.size() > 1500) { err = "more than 1500 reference files"; return false; }
     std::sort(files.begin(), files.end());
-    if (replace) store_->clear_references(media_id);                  // live sources: refresh, do not accumulate stale scenes
+    if (replace) store_->clear_references(target);                    // live sources: refresh, do not accumulate stale scenes
     int added = 0, failed = 0; json errors = json::array();
     std::string why;
     const bool have = run_ && run_([&](EmbeddingProvider& p) {
         for (const auto& f : files) {
             std::vector<uint8_t> bytes; std::string e;
-            if (!read_file(f.second.string(), bytes) || !store_->add_reference(p, media_id, f.first, bytes, e)) {
+            if (!read_file(f.second.string(), bytes) || !store_->add_reference(p, target, f.first, bytes, e)) {
                 ++failed; if (errors.size() < 5) errors.push_back(f.second.filename().string() + ": " + e);
             } else { ++added; std::error_code rc; fs::remove(f.second, rc); }
         }
     }, why);
     if (!have) { err = "embedding provider unavailable: " + why; http = 503; return false; }
-    MediaAsset after; store_->get_media(media_id, after);
-    out = {{"media_id", media_id}, {"added", added}, {"failed", failed}, {"errors", errors}, {"reference_frames", after.reference_frames}};
+    MediaAsset after; store_->get_media(target, after);
+    out = {{"media_id", media_id}, {"profile", profile}, {"added", added}, {"failed", failed}, {"errors", errors}, {"reference_frames", after.reference_frames}};
     http = 200;
     return true;
 }
@@ -394,6 +509,7 @@ json PopService::status() {
             {"db_bytes", s.db_bytes}}},
             {"adapter", {{"running", running_.load()}, {"events_path", cfg_.events_path}, {"file_bytes", file_size_}, {"offset", offset_}, {"lines", lines_},
                          {"events_ingested", events_}, {"errors", errors_}, {"boots", boots_}, {"last_event_utc_ms", last_event_utc_ms_}, {"last_error", last_error_}}},
+            {"capture_backend", cfg_.capture_backend}, {"display_source_available", display_ != nullptr && display_->cfg().enabled},
             {"allow_test_jobs", cfg_.allow_test_jobs}, {"thresholds", th}, {"evidence_max_bytes", cfg_.evidence_max_bytes},
             {"evidence_retention_days", cfg_.evidence_retention_days}, {"source", cfg_.source_id},
             {"evidence_source", "presentation output of the player (display capture); not the audience camera"}};

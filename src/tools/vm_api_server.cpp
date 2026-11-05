@@ -42,6 +42,9 @@
 #include <sstream>
 #include <thread>
 
+#include "display/bridge_client.h"
+#include "display/display_frame_source.h"
+
 using json = nlohmann::json;
 using namespace visualmemory;
 namespace fs = std::filesystem;
@@ -84,6 +87,7 @@ struct Cfg {
     int         objects_retention_days = 30;
     int         objects_min_roi_px = 16;
     argus_pop::PopCfg pop;                    // visual_memory.pop.* (D5 Proof of Play; off by default)
+    argus_display::DisplayCfg display;        // visual_memory.display.* (OS rendered-frame preview; off by default)
     std::string config_path;
     std::string read_error;
 };
@@ -131,6 +135,18 @@ Cfg load_cfg(const std::string& path) {
         c.pop.thresholds.margin = th.value("margin", c.pop.thresholds.margin);
         c.pop.thresholds.min_play_ratio = th.value("min_play_ratio", c.pop.thresholds.min_play_ratio);
         c.pop.thresholds.min_match_fraction = th.value("min_match_fraction", c.pop.thresholds.min_match_fraction);
+        c.pop.capture_backend = pp.value("capture_backend", c.pop.capture_backend);          // brightscript_screenshot | resilience_grpc
+        c.pop.grpc_before_ms = std::max(0, std::min(5000, pp.value("grpc_window_before_ms", c.pop.grpc_before_ms)));
+        c.pop.grpc_after_ms = std::max(0, std::min(10000, pp.value("grpc_window_after_ms", c.pop.grpc_after_ms)));
+        c.pop.grpc_max_uncertainty_ms = std::max(0, std::min(10000, pp.value("grpc_max_uncertainty_ms", c.pop.grpc_max_uncertainty_ms)));
+        const json dp = vm.value("display", json::object());
+        c.display.enabled = dp.value("enabled", false);
+        c.display.backend = dp.value("backend", c.display.backend);
+        c.display.bridge_socket = dp.value("bridge_socket", c.display.bridge_socket);
+        c.display.poll_ms = std::max(50, std::min(2000, dp.value("poll_ms", c.display.poll_ms)));
+        c.display.max_age_ms = std::max(200, std::min(10000, dp.value("max_age_ms", c.display.max_age_ms)));
+        c.display.ring_frames = std::max(2, std::min(64, dp.value("ring_frames", c.display.ring_frames)));
+        c.display.producer_latency_ms = std::max(0, std::min(5000, dp.value("producer_latency_ms", c.display.producer_latency_ms)));
         const json a = vm.value("api", json::object());
         c.npu_core = a.value("npu_core", 1);
         c.search_timeout_ms = std::max(1000, std::min(60000, a.value("search_timeout_ms", 10000)));
@@ -152,6 +168,7 @@ struct Response {
     std::string ctype = "application/json";
     std::string body;
     std::string cache = "no-store";
+    std::map<std::string, std::string> headers;        // extra response headers (display frame metadata)
 };
 
 std::string url_decode(const std::string& s) {
@@ -167,7 +184,7 @@ std::string url_decode(const std::string& s) {
 
 const char* reason(int s) {
     switch (s) { case 200: return "OK"; case 400: return "Bad Request"; case 404: return "Not Found"; case 405: return "Method Not Allowed";
-        case 201: return "Created"; case 410: return "Gone"; case 413: return "Payload Too Large"; case 429: return "Too Many Requests"; case 500: return "Internal Server Error";
+        case 201: return "Created"; case 204: return "No Content"; case 410: return "Gone"; case 413: return "Payload Too Large"; case 429: return "Too Many Requests"; case 500: return "Internal Server Error";
         case 503: return "Service Unavailable"; case 504: return "Gateway Timeout"; default: return "Status"; }
 }
 
@@ -184,7 +201,9 @@ void send_response(int fd, const Response& r, bool head_only = false) {
     std::ostringstream h;
     h << "HTTP/1.1 " << r.status << " " << reason(r.status) << "\r\nContent-Type: " << r.ctype
       << "\r\nContent-Length: " << r.body.size() << "\r\nCache-Control: " << r.cache
-      << "\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n\r\n";
+      << "\r\nX-Content-Type-Options: nosniff\r\nConnection: close\r\n";
+    for (const auto& kv : r.headers) h << kv.first << ": " << kv.second << "\r\n";
+    h << "\r\n";
     std::string out = h.str();
     // One write for small bodies (avoids the Nagle/delayed-ACK 40 ms stall of header-then-body writes).
     if (!head_only && r.body.size() <= 256 * 1024) { out += r.body; send_all(fd, out.data(), out.size()); return; }
@@ -279,6 +298,8 @@ struct App {
     std::string metrics_addr = "127.0.0.1:9101"; // Argus Prometheus exporter (current FPS)
     bool viewer = false;                        // --viewer: read-only view of a stored dataset, no live Argus writer
     std::string provider_kind = "auto";         // auto (rknn per config) | mock
+
+    std::unique_ptr<argus_display::DisplayFrameSource> display;   // optional OS rendered-frame source (null when disabled)
 
     std::mutex rd_mu;
     std::unique_ptr<VisualMemoryReader> reader;
@@ -1042,7 +1063,16 @@ Response route_pop(App& a, const Request& rq) {
 
     if (seg[0] == "media") {
         if (seg.size() == 1) {
-            if (get) { json arr = json::array(); for (const auto& m : st.list_media()) arr.push_back(media_to_json(m)); return jok({{"media", arr}}); }
+            if (get) {
+                json arr = json::array();
+                for (const auto& m : st.list_media()) {
+                    json mj = media_to_json(m);
+                    MediaAsset dm;
+                    mj["display_reference_frames"] = st.get_media(m.media_id + visualmemory::kDisplayProfileSuffix(), dm) ? dm.reference_frames : 0;
+                    arr.push_back(mj);
+                }
+                return jok({{"media", arr}});
+            }
             if (!post) return jerr(405, "method_not_allowed", "GET or POST only");
             json b = json::parse(rq.body, nullptr, false);
             if (!b.is_object()) return jerr(400, "invalid_argument", "expected a JSON object");
@@ -1073,7 +1103,8 @@ Response route_pop(App& a, const Request& rq) {
             if (seg.size() == 4 && seg[3] == "build") {
                 if (!post) return jerr(405, "method_not_allowed", "POST only");
                 json out; int http = 400; std::string err;
-                if (!ps.build_references(seg[1], out, http, err, rq.query.count("replace") && rq.query.at("replace") == "1")) return jerr(http, http == 404 ? "not_found" : http == 503 ? "provider_unavailable" : "invalid_argument", err);
+                if (!ps.build_references(seg[1], out, http, err, rq.query.count("replace") && rq.query.at("replace") == "1",
+                                         rq.query.count("profile") ? rq.query.at("profile") : std::string("screenshot"))) return jerr(http, http == 404 ? "not_found" : http == 503 ? "provider_unavailable" : "invalid_argument", err);
                 return jok(out);
             }
             if (seg.size() == 5 && seg[4] == "image") {
@@ -1140,8 +1171,43 @@ Response route_pop(App& a, const Request& rq) {
     return jerr(404, "not_found", "unknown route");
 }
 
+// Display output preview (OS Resilience rendered frames). GET only; a frame request is the "viewer interest" that makes the
+// source poll the OS service, and the source stops polling a few seconds after the last request.
+Response route_display(App& a, const Request& rq) {
+    if (rq.method != "GET" && rq.method != "HEAD") return jerr(405, "method_not_allowed", "GET only");
+    const std::string sub = rq.path.substr(std::string("/api/display/").size());
+    if (!a.display) {
+        if (sub == "status") return jok(json{{"enabled", false}, {"state", "disabled"},
+                                             {"detail", "visual_memory.display.enabled is false in the active configuration"}});
+        return jerr(404, "display_disabled", "display output is not enabled (visual_memory.display.enabled)");
+    }
+    if (sub == "status") return jok(a.display->status());
+    if (sub == "frame.jpg") {
+        a.display->touch_preview();
+        argus_display::DisplayFrame f; int64_t age = 0; std::string why;
+        uint64_t after = 0; int64_t v;
+        if (rq.query.count("after") && parse_i64(rq.query.at("after"), v) && v >= 0) after = static_cast<uint64_t>(v);
+        const bool have = after ? a.display->newer_than(after, f, age) : a.display->latest(f, age, why);
+        if (!have) {
+            if (after) { Response r; r.status = 204; r.ctype = "text/plain"; return r; }      // nothing newer yet: cheap answer for the poller
+            Response r = jerr(503, "no_frame", why.empty() ? "no current display frame" : why);
+            return r;
+        }
+        Response r; r.ctype = "image/jpeg"; r.cache = "no-store"; r.body = *f.jpeg;
+        r.headers["X-Display-Seq"] = std::to_string(f.seq);
+        r.headers["X-Display-Capture-Utc-Ms"] = std::to_string(f.capture_utc_ms);
+        r.headers["X-Display-Age-Ms"] = std::to_string(age);
+        r.headers["X-Display-Uncertainty-Ms"] = std::to_string(f.uncertainty_ms);
+        r.headers["X-Display-Provider"] = std::to_string(f.provider);
+        r.headers["X-Display-Size"] = std::to_string(f.width) + "x" + std::to_string(f.height);
+        return r;
+    }
+    return jerr(404, "not_found", "unknown route");
+}
+
 Response route(App& a, const Request& rq, int fd) {
     const std::string& p = rq.path;
+    if (p.rfind("/api/display/", 0) == 0) return route_display(a, rq);
     if (p.rfind("/api/pop/", 0) == 0) return route_pop(a, rq);
     if (p.rfind("/api/vm/", 0) != 0) return jerr(404, "not_found", "unknown route");
     const std::string sub = p.substr(8);
@@ -1223,6 +1289,12 @@ int main(int argc, char** argv) {
     if (!cfg_path.empty()) { const std::string root = app.cfg.storage_root; app.cfg = load_cfg(cfg_path); if (!root.empty()) app.cfg.storage_root = root; }
     std::signal(SIGTERM, on_signal); std::signal(SIGINT, on_signal); std::signal(SIGPIPE, SIG_IGN);
 
+    if (app.cfg.display.enabled && app.cfg.display.backend == "bridge") {  // optional: OS rendered-frame source (no polling until a viewer or a PoP session needs it)
+        app.display = std::make_unique<argus_display::DisplayFrameSource>(
+            app.cfg.display, std::make_unique<argus_display::BridgeClient>(app.cfg.display.bridge_socket, 1500, app.cfg.display.max_jpeg_bytes));
+        app.display->start();
+    }
+
     if (app.cfg.configured && app.cfg.pop.enabled) {                       // D5: PoP store + playback-event adapter
         auto runner = [&app](const std::function<void(EmbeddingProvider&)>& fn, std::string& why) {
             for (int i = 0; i < 200; ++i) {                                // single-flight with searches (the NPU context is shared)
@@ -1239,6 +1311,7 @@ int main(int argc, char** argv) {
             why = "NPU busy"; return false;
         };
         app.pop = std::make_unique<argus_pop::PopService>(app.cfg.pop, app.cfg.storage_root, runner);
+        if (app.display) app.pop->set_display(app.display.get());
         std::string perr;
         if (!app.pop->start(perr)) { std::fprintf(stderr, "vm_api_server: Proof of Play store unavailable: %s\n", perr.c_str()); app.pop.reset(); }
     }
@@ -1266,6 +1339,7 @@ int main(int argc, char** argv) {
     ::close(ls);
     janitor.join();
     if (app.pop) app.pop->stop();
+    if (app.display) app.display->stop();
     for (int i = 0; i < 50 && g_conn.load() > 0; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(100));
     return 0;
 }

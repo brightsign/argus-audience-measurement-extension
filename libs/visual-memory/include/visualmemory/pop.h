@@ -111,6 +111,9 @@ struct EvidenceIn {
     std::string source = "main_display";
     int64_t     utc_ms = 0;
     int         took_ms = 0;
+    std::string capture_method = "brightscript_screenshot";   // or "resilience_grpc" (OS rendered frames)
+    std::string provenance;                // e.g. "weston_vop2_writeback (provider 7)"; approximate composed display output
+    int         uncertainty_ms = -1;       // time uncertainty of utc_ms (-1 = not applicable / unknown)
     std::vector<uint8_t> jpeg;             // image bytes when status == "ok"
 };
 
@@ -128,7 +131,14 @@ struct Evidence {
     int64_t     utc_ms = 0;
     bool        embedded = false;
     bool        image_available = false;   // file retained (retention may remove it; the scores are kept)
+    std::string capture_method = "brightscript_screenshot", provenance;
+    int         uncertainty_ms = -1;
 };
+
+// Reference frames can be built for a second capture geometry (the OS rendered frames are letterboxed 640x360, the BrightScript
+// screenshots are 640x400). They live in a hidden media row named <media_id> + this suffix and are used only when verifying evidence
+// captured with the matching method.
+inline const char* kDisplayProfileSuffix() { return ".display_letterbox"; }
 
 // ---- verification -----------------------------------------------------------------------------------------------
 struct VerifyThresholds {

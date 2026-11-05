@@ -16,6 +16,7 @@
 #include <fcntl.h>
 #include <filesystem>
 #include <mutex>
+#include <set>
 #include <unistd.h>
 
 namespace fs = std::filesystem;
@@ -23,7 +24,7 @@ namespace fs = std::filesystem;
 namespace visualmemory {
 
 namespace {
-constexpr int kSchemaVersion = 1;
+constexpr int kSchemaVersion = 2;
 constexpr size_t kMaxJpegBytes = 8u * 1024 * 1024;
 
 int64_t now_ms() {
@@ -103,7 +104,7 @@ PopSession row_session(sqlite3_stmt* s) {
     return p;
 }
 const char* kEvidenceCols = "evidence_id,session_id,idx,target_offset_ms,actual_offset_ms,status,failure_reason,source,path,phash,sha256,"
-                            "width,height,bytes,took_ms,utc_ms,embedded,image_available";
+                            "width,height,bytes,took_ms,utc_ms,embedded,image_available,capture_method,provenance,uncertainty_ms";
 Evidence row_evidence(sqlite3_stmt* s) {
     Evidence e;
     e.evidence_id = sqlite3_column_int64(s, 0); e.session_id = col_text(s, 1); e.idx = sqlite3_column_int(s, 2);
@@ -112,6 +113,7 @@ Evidence row_evidence(sqlite3_stmt* s) {
     e.sha256 = col_text(s, 10); e.width = sqlite3_column_int(s, 11); e.height = sqlite3_column_int(s, 12);
     e.bytes = static_cast<uint64_t>(sqlite3_column_int64(s, 13)); e.took_ms = sqlite3_column_int(s, 14); e.utc_ms = sqlite3_column_int64(s, 15);
     e.embedded = sqlite3_column_int(s, 16) != 0; e.image_available = sqlite3_column_int(s, 17) != 0;
+    e.capture_method = col_text(s, 18); e.provenance = col_text(s, 19); e.uncertainty_ms = sqlite3_column_int(s, 20);
     return e;
 }
 } // namespace
@@ -134,7 +136,17 @@ struct PopStore::Impl {
     bool migrate(std::string& err) {
         const int v = user_version();
         if (v > kSchemaVersion) { err = "pop.db schema " + std::to_string(v) + " is newer than this library (" + std::to_string(kSchemaVersion) + ")"; return false; }
-        if (v >= 1) return true;
+        if (v == 1) {                                  // v1 -> v2: record how each piece of evidence was captured
+            if (!exec("BEGIN IMMEDIATE;", err)) return false;
+            const char* up =
+                "ALTER TABLE display_capture_evidence ADD COLUMN capture_method TEXT NOT NULL DEFAULT 'brightscript_screenshot';"
+                "ALTER TABLE display_capture_evidence ADD COLUMN provenance TEXT NOT NULL DEFAULT '';"
+                "ALTER TABLE display_capture_evidence ADD COLUMN uncertainty_ms INTEGER NOT NULL DEFAULT -1;"
+                "PRAGMA user_version=2;";
+            if (!exec(up, err)) { std::string e2; exec("ROLLBACK;", e2); return false; }
+            return exec("COMMIT;", err);
+        }
+        if (v >= 2) return true;
         if (!exec("BEGIN IMMEDIATE;", err)) return false;
         const char* ddl =
             "CREATE TABLE IF NOT EXISTS pop_models(model_id INTEGER PRIMARY KEY,model_name TEXT NOT NULL,model_version TEXT NOT NULL,"
@@ -159,7 +171,9 @@ struct PopStore::Impl {
             " failure_reason TEXT NOT NULL DEFAULT '',source TEXT NOT NULL,path TEXT NOT NULL DEFAULT '',phash INTEGER NOT NULL DEFAULT 0,"
             " sha256 TEXT NOT NULL DEFAULT '',width INTEGER NOT NULL DEFAULT 0,height INTEGER NOT NULL DEFAULT 0,bytes INTEGER NOT NULL DEFAULT 0,"
             " took_ms INTEGER NOT NULL DEFAULT 0,utc_ms INTEGER NOT NULL,model_id INTEGER NOT NULL DEFAULT 0,embedding BLOB,"
-            " embedded INTEGER NOT NULL DEFAULT 0,image_available INTEGER NOT NULL DEFAULT 0,created_at INTEGER NOT NULL,UNIQUE(session_id,idx));"
+            " embedded INTEGER NOT NULL DEFAULT 0,image_available INTEGER NOT NULL DEFAULT 0,created_at INTEGER NOT NULL,"
+            " capture_method TEXT NOT NULL DEFAULT 'brightscript_screenshot',provenance TEXT NOT NULL DEFAULT '',uncertainty_ms INTEGER NOT NULL DEFAULT -1,"
+            " UNIQUE(session_id,idx));"
             "CREATE TABLE IF NOT EXISTS playback_verifications(verification_id INTEGER PRIMARY KEY AUTOINCREMENT,session_id TEXT NOT NULL UNIQUE,"
             " status TEXT NOT NULL,reason TEXT NOT NULL,expected_media_id TEXT NOT NULL,best_media_id TEXT NOT NULL,frames_total INTEGER NOT NULL,"
             " frames_ok INTEGER NOT NULL,frames_matched INTEGER NOT NULL,frames_mismatched INTEGER NOT NULL,mean_sim_expected REAL NOT NULL,"
@@ -170,7 +184,7 @@ struct PopStore::Impl {
             "CREATE INDEX IF NOT EXISTS ix_pop_evd_time ON display_capture_evidence(utc_ms);"
             "CREATE INDEX IF NOT EXISTS ix_pop_sess_time ON playback_sessions(created_at);"
             "CREATE INDEX IF NOT EXISTS ix_pop_sess_media ON playback_sessions(expected_media_id);"
-            "PRAGMA user_version=1;";
+            "PRAGMA user_version=2;";
         if (!exec(ddl, err)) { std::string e2; exec("ROLLBACK;", e2); return false; }
         return exec("COMMIT;", err);
     }
@@ -308,7 +322,12 @@ std::vector<MediaAsset> PopStore::list_media() {
     std::lock_guard<std::mutex> lk(impl_->mu);
     if (!impl_->db) return v;
     Stmt q(impl_->db, std::string(kMediaSel) + " ORDER BY a.media_id;");
-    while (q && sqlite3_step(q.s) == SQLITE_ROW) v.push_back(row_media(q.s));
+    const std::string suffix = kDisplayProfileSuffix();
+    while (q && sqlite3_step(q.s) == SQLITE_ROW) {
+        MediaAsset m = row_media(q.s);
+        if (m.media_id.size() > suffix.size() && m.media_id.compare(m.media_id.size() - suffix.size(), suffix.size(), suffix) == 0) continue;   // hidden profile row
+        v.push_back(std::move(m));
+    }
     return v;
 }
 bool PopStore::delete_media(const std::string& id) {
@@ -519,6 +538,8 @@ bool PopStore::add_evidence(EmbeddingProvider& provider, const EvidenceIn& in, E
     out.session_id = in.session_id; out.idx = in.idx; out.target_offset_ms = in.target_offset_ms; out.actual_offset_ms = in.actual_offset_ms;
     out.status = in.status; out.failure_reason = in.failure_reason.substr(0, 200); out.source = in.source.empty() ? "main_display" : in.source;
     out.took_ms = in.took_ms; out.utc_ms = in.utc_ms ? in.utc_ms : now_ms();
+    out.capture_method = in.capture_method.empty() ? "brightscript_screenshot" : in.capture_method.substr(0, 40);
+    out.provenance = in.provenance.substr(0, 120); out.uncertainty_ms = in.uncertainty_ms;
     std::vector<float> emb; int64_t mid = 0;
     if (in.status == "ok") {
         if (in.jpeg.empty() || in.jpeg.size() > kMaxJpegBytes) { err = "screenshot missing or larger than 8 MiB"; return false; }
@@ -536,11 +557,12 @@ bool PopStore::add_evidence(EmbeddingProvider& provider, const EvidenceIn& in, E
     if (!impl_->db) { err = "store not open"; return false; }
     if (out.embedded) { mid = impl_->model_id(provider.spec(), true); if (mid == 0) { err = "cannot register model"; return false; } }
     Stmt q(impl_->db, "INSERT INTO display_capture_evidence(session_id,idx,target_offset_ms,actual_offset_ms,status,failure_reason,source,path,phash,sha256,"
-                      "width,height,bytes,took_ms,utc_ms,model_id,embedding,embedded,image_available,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+                      "width,height,bytes,took_ms,utc_ms,model_id,embedding,embedded,image_available,created_at,capture_method,provenance,uncertainty_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
                       "ON CONFLICT(session_id,idx) DO UPDATE SET target_offset_ms=excluded.target_offset_ms,actual_offset_ms=excluded.actual_offset_ms,"
                       "status=excluded.status,failure_reason=excluded.failure_reason,source=excluded.source,path=excluded.path,phash=excluded.phash,"
                       "sha256=excluded.sha256,width=excluded.width,height=excluded.height,bytes=excluded.bytes,took_ms=excluded.took_ms,utc_ms=excluded.utc_ms,"
-                      "model_id=excluded.model_id,embedding=excluded.embedding,embedded=excluded.embedded,image_available=excluded.image_available;");
+                      "model_id=excluded.model_id,embedding=excluded.embedding,embedded=excluded.embedded,image_available=excluded.image_available,"
+                      "capture_method=excluded.capture_method,provenance=excluded.provenance,uncertainty_ms=excluded.uncertainty_ms;");
     if (!q) { err = sqlite3_errmsg(impl_->db); return false; }
     q.text(1, out.session_id); sqlite3_bind_int(q.s, 2, out.idx); sqlite3_bind_int(q.s, 3, out.target_offset_ms); sqlite3_bind_int(q.s, 4, out.actual_offset_ms);
     q.text(5, out.status); q.text(6, out.failure_reason); q.text(7, out.source); q.text(8, out.path); sqlite3_bind_int64(q.s, 9, as_i64(out.phash));
@@ -548,6 +570,7 @@ bool PopStore::add_evidence(EmbeddingProvider& provider, const EvidenceIn& in, E
     sqlite3_bind_int(q.s, 14, out.took_ms); sqlite3_bind_int64(q.s, 15, out.utc_ms); sqlite3_bind_int64(q.s, 16, mid);
     if (out.embedded) bind_vec(q.s, 17, emb); else sqlite3_bind_null(q.s, 17);
     sqlite3_bind_int(q.s, 18, out.embedded ? 1 : 0); sqlite3_bind_int(q.s, 19, out.image_available ? 1 : 0); sqlite3_bind_int64(q.s, 20, now_ms());
+    q.text(21, out.capture_method); q.text(22, out.provenance); sqlite3_bind_int(q.s, 23, out.uncertainty_ms);
     if (sqlite3_step(q.s) != SQLITE_DONE) { err = sqlite3_errmsg(impl_->db); return false; }
     Stmt id(impl_->db, "SELECT evidence_id FROM display_capture_evidence WHERE session_id=? AND idx=?;");
     if (id) { id.text(1, out.session_id); sqlite3_bind_int(id.s, 2, out.idx); if (sqlite3_step(id.s) == SQLITE_ROW) out.evidence_id = sqlite3_column_int64(id.s, 0); }
@@ -598,6 +621,11 @@ bool PopStore::verify_session(const std::string& session_id, const VerifyThresho
         }
     }
     int64_t model = 0;
+    bool display_evidence = false;                      // any evidence captured from the OS rendered frames
+    {
+        Stmt q(impl_->db, "SELECT COUNT(*) FROM display_capture_evidence WHERE session_id=? AND capture_method='resilience_grpc' AND status='ok';");
+        if (q) { q.text(1, session_id); if (sqlite3_step(q.s) == SQLITE_ROW) display_evidence = sqlite3_column_int(q.s, 0) > 0; }
+    }
     {
         Stmt q(impl_->db, "SELECT evidence_id,idx,actual_offset_ms,status,phash,model_id,embedding FROM display_capture_evidence WHERE session_id=? ORDER BY idx;");
         if (!q) { err = sqlite3_errmsg(impl_->db); return false; }
@@ -618,6 +646,19 @@ bool PopStore::verify_session(const std::string& session_id, const VerifyThresho
                 in.refs.push_back(std::move(r));
             }
         }
+        // Reference geometry: OS rendered frames are compared with the references built for that geometry (media id + suffix) when they
+        // exist; everything else uses the screenshot references. Never mix the two sets for one verification.
+        const std::string suffix = kDisplayProfileSuffix();
+        auto is_display = [&](const std::string& id) { return id.size() > suffix.size() && id.compare(id.size() - suffix.size(), suffix.size(), suffix) == 0; };
+        std::set<std::string> have_display;
+        for (const auto& r : in.refs) if (is_display(r.media_id)) have_display.insert(r.media_id.substr(0, r.media_id.size() - suffix.size()));
+        std::vector<VerifyInput::Ref> chosen;
+        for (auto& r : in.refs) {
+            if (is_display(r.media_id)) {
+                if (display_evidence) { r.media_id = r.media_id.substr(0, r.media_id.size() - suffix.size()); chosen.push_back(std::move(r)); }
+            } else if (!display_evidence || !have_display.count(r.media_id)) chosen.push_back(std::move(r));   // fall back to screenshot references when no display set exists
+        }
+        in.refs = std::move(chosen);
     }
     out = verify_playback(in, t);
     out.session_id = session_id;
