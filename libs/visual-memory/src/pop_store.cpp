@@ -105,6 +105,9 @@ PopSession row_session(sqlite3_stmt* s) {
 }
 const char* kEvidenceCols = "evidence_id,session_id,idx,target_offset_ms,actual_offset_ms,status,failure_reason,source,path,phash,sha256,"
                             "width,height,bytes,took_ms,utc_ms,embedded,image_available,capture_method,provenance,uncertainty_ms";
+// schema-1 (legacy) files have no capture-method columns: every row there is a screenshot by definition
+const char* kEvidenceColsV1 = "evidence_id,session_id,idx,target_offset_ms,actual_offset_ms,status,failure_reason,source,path,phash,sha256,"
+                              "width,height,bytes,took_ms,utc_ms,embedded,image_available,'brightscript_screenshot','',-1";
 Evidence row_evidence(sqlite3_stmt* s) {
     Evidence e;
     e.evidence_id = sqlite3_column_int64(s, 0); e.session_id = col_text(s, 1); e.idx = sqlite3_column_int(s, 2);
@@ -122,6 +125,7 @@ struct PopStore::Impl {
     PopConfig cfg;
     std::mutex mu;
     sqlite3* db = nullptr;
+    bool v2 = true;                                   // false: legacy schema-1 file kept as is (no capture-method columns)
     explicit Impl(PopConfig c) : cfg(std::move(c)) {}
 
     bool exec(const char* sql, std::string& err) {
@@ -136,6 +140,7 @@ struct PopStore::Impl {
     bool migrate(std::string& err) {
         const int v = user_version();
         if (v > kSchemaVersion) { err = "pop.db schema " + std::to_string(v) + " is newer than this library (" + std::to_string(kSchemaVersion) + ")"; return false; }
+        if (v == 1 && !cfg.allow_schema_upgrade) { v2 = false; return true; }   // leave an existing database untouched
         if (v == 1) {                                  // v1 -> v2: record how each piece of evidence was captured
             if (!exec("BEGIN IMMEDIATE;", err)) return false;
             const char* up =
@@ -244,6 +249,7 @@ bool PopStore::open(std::string& err) {
     if (!impl_->migrate(err)) { sqlite3_close(impl_->db); impl_->db = nullptr; return false; }
     return true;
 }
+bool PopStore::schema_v2() const { std::lock_guard<std::mutex> lk(impl_->mu); return impl_->v2; }
 bool PopStore::is_open() const { std::lock_guard<std::mutex> lk(impl_->mu); return impl_->db != nullptr; }
 void PopStore::close() {
     std::lock_guard<std::mutex> lk(impl_->mu);
@@ -556,13 +562,16 @@ bool PopStore::add_evidence(EmbeddingProvider& provider, const EvidenceIn& in, E
     std::lock_guard<std::mutex> lk(impl_->mu);
     if (!impl_->db) { err = "store not open"; return false; }
     if (out.embedded) { mid = impl_->model_id(provider.spec(), true); if (mid == 0) { err = "cannot register model"; return false; } }
-    Stmt q(impl_->db, "INSERT INTO display_capture_evidence(session_id,idx,target_offset_ms,actual_offset_ms,status,failure_reason,source,path,phash,sha256,"
-                      "width,height,bytes,took_ms,utc_ms,model_id,embedding,embedded,image_available,created_at,capture_method,provenance,uncertainty_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) "
+    if (!impl_->v2 && out.capture_method != "brightscript_screenshot") { err = "pop.db is schema 1: evidence from " + out.capture_method + " needs visual_memory.pop.allow_schema_upgrade"; return false; }
+    const std::string v2cols = impl_->v2 ? ",capture_method,provenance,uncertainty_ms" : "";
+    const std::string v2vals = impl_->v2 ? ",?,?,?" : "";
+    const std::string v2upd = impl_->v2 ? ",capture_method=excluded.capture_method,provenance=excluded.provenance,uncertainty_ms=excluded.uncertainty_ms" : "";
+    Stmt q(impl_->db, std::string("INSERT INTO display_capture_evidence(session_id,idx,target_offset_ms,actual_offset_ms,status,failure_reason,source,path,phash,sha256,"
+                      "width,height,bytes,took_ms,utc_ms,model_id,embedding,embedded,image_available,created_at") + v2cols + ") VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?" + v2vals + ") "
                       "ON CONFLICT(session_id,idx) DO UPDATE SET target_offset_ms=excluded.target_offset_ms,actual_offset_ms=excluded.actual_offset_ms,"
                       "status=excluded.status,failure_reason=excluded.failure_reason,source=excluded.source,path=excluded.path,phash=excluded.phash,"
                       "sha256=excluded.sha256,width=excluded.width,height=excluded.height,bytes=excluded.bytes,took_ms=excluded.took_ms,utc_ms=excluded.utc_ms,"
-                      "model_id=excluded.model_id,embedding=excluded.embedding,embedded=excluded.embedded,image_available=excluded.image_available,"
-                      "capture_method=excluded.capture_method,provenance=excluded.provenance,uncertainty_ms=excluded.uncertainty_ms;");
+                      "model_id=excluded.model_id,embedding=excluded.embedding,embedded=excluded.embedded,image_available=excluded.image_available" + v2upd + ";");
     if (!q) { err = sqlite3_errmsg(impl_->db); return false; }
     q.text(1, out.session_id); sqlite3_bind_int(q.s, 2, out.idx); sqlite3_bind_int(q.s, 3, out.target_offset_ms); sqlite3_bind_int(q.s, 4, out.actual_offset_ms);
     q.text(5, out.status); q.text(6, out.failure_reason); q.text(7, out.source); q.text(8, out.path); sqlite3_bind_int64(q.s, 9, as_i64(out.phash));
@@ -570,7 +579,7 @@ bool PopStore::add_evidence(EmbeddingProvider& provider, const EvidenceIn& in, E
     sqlite3_bind_int(q.s, 14, out.took_ms); sqlite3_bind_int64(q.s, 15, out.utc_ms); sqlite3_bind_int64(q.s, 16, mid);
     if (out.embedded) bind_vec(q.s, 17, emb); else sqlite3_bind_null(q.s, 17);
     sqlite3_bind_int(q.s, 18, out.embedded ? 1 : 0); sqlite3_bind_int(q.s, 19, out.image_available ? 1 : 0); sqlite3_bind_int64(q.s, 20, now_ms());
-    q.text(21, out.capture_method); q.text(22, out.provenance); sqlite3_bind_int(q.s, 23, out.uncertainty_ms);
+    if (impl_->v2) { q.text(21, out.capture_method); q.text(22, out.provenance); sqlite3_bind_int(q.s, 23, out.uncertainty_ms); }
     if (sqlite3_step(q.s) != SQLITE_DONE) { err = sqlite3_errmsg(impl_->db); return false; }
     Stmt id(impl_->db, "SELECT evidence_id FROM display_capture_evidence WHERE session_id=? AND idx=?;");
     if (id) { id.text(1, out.session_id); sqlite3_bind_int(id.s, 2, out.idx); if (sqlite3_step(id.s) == SQLITE_ROW) out.evidence_id = sqlite3_column_int64(id.s, 0); }
@@ -580,7 +589,7 @@ std::vector<Evidence> PopStore::list_evidence(const std::string& session_id) {
     std::vector<Evidence> v;
     std::lock_guard<std::mutex> lk(impl_->mu);
     if (!impl_->db) return v;
-    Stmt q(impl_->db, std::string("SELECT ") + kEvidenceCols + " FROM display_capture_evidence WHERE session_id=? ORDER BY idx;");
+    Stmt q(impl_->db, std::string("SELECT ") + (impl_->v2 ? kEvidenceCols : kEvidenceColsV1) + " FROM display_capture_evidence WHERE session_id=? ORDER BY idx;");
     if (!q) return v;
     q.text(1, session_id);
     while (sqlite3_step(q.s) == SQLITE_ROW) v.push_back(row_evidence(q.s));
@@ -623,7 +632,7 @@ bool PopStore::verify_session(const std::string& session_id, const VerifyThresho
     int64_t model = 0;
     bool display_evidence = false;                      // any evidence captured from the OS rendered frames
     {
-        Stmt q(impl_->db, "SELECT COUNT(*) FROM display_capture_evidence WHERE session_id=? AND capture_method='resilience_grpc' AND status='ok';");
+        Stmt q(impl_->db, impl_->v2 ? "SELECT COUNT(*) FROM display_capture_evidence WHERE session_id=? AND capture_method='resilience_grpc' AND status='ok';" : "SELECT 0 WHERE ?<>'';");
         if (q) { q.text(1, session_id); if (sqlite3_step(q.s) == SQLITE_ROW) display_evidence = sqlite3_column_int(q.s, 0) > 0; }
     }
     {

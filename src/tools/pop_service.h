@@ -33,6 +33,7 @@ struct PopCfg {
     uint64_t    evidence_max_bytes = 512ull * 1024 * 1024;
     int         evidence_retention_days = 30;
     bool        allow_test_jobs = false;                           // play a media other than the expected one, interrupt, break capture
+    bool        allow_schema_upgrade = false;                      // upgrade an existing schema-1 pop.db to schema 2 (needed for resilience_grpc evidence)
     std::string capture_backend = "brightscript_screenshot";       // or "resilience_grpc" (OS rendered frames, needs visual_memory.display.enabled)
     int         grpc_before_ms = 300;                              // accept a display frame this long before the target offset ...
     int         grpc_after_ms = 800;                               // ... or this long after it

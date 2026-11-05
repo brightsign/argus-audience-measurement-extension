@@ -8,6 +8,7 @@
 #include <gtest/gtest.h>
 #include <cmath>
 #include <filesystem>
+#include <fstream>
 #include <sqlite3.h>
 
 using namespace visualmemory;
@@ -164,13 +165,57 @@ TEST(PopStore, SchemaV1DatabaseIsUpgradedWithCaptureMethodColumns) {
             "PRAGMA user_version=1;", nullptr, nullptr, nullptr), SQLITE_OK);
         sqlite3_close(db);
     }
-    PopConfig c; c.root_directory = dir.str(); PopStore s(c); std::string e;
+    PopConfig c; c.root_directory = dir.str(); c.allow_schema_upgrade = true; PopStore s(c); std::string e;
     ASSERT_TRUE(s.open(e)) << e;
     EXPECT_EQ(s.summary().schema_version, 2);
     auto ev = s.list_evidence("old");
     ASSERT_EQ(ev.size(), 1u);
     EXPECT_EQ(ev[0].capture_method, "brightscript_screenshot");      // old rows are screenshots by definition
     EXPECT_EQ(ev[0].uncertainty_ms, -1);
+}
+
+// An existing schema-1 pop.db must not be migrated or altered just because a newer build opens it.
+TEST(PopStore, ExistingSchema1DatabaseIsLeftUntouchedAndStillWorksWithoutUpgrade) {
+    vmtest::TempDir dir;
+    const auto db_path = dir.path() / "pop.db";
+    {   // a real v1 database: written by the schema-1 code path (an upgrade-allowed store is not used here; build it by hand)
+        sqlite3* db = nullptr; ASSERT_EQ(sqlite3_open(db_path.c_str(), &db), SQLITE_OK);
+        ASSERT_EQ(sqlite3_exec(db,
+            "CREATE TABLE pop_models(model_id INTEGER PRIMARY KEY,model_name TEXT NOT NULL,model_version TEXT NOT NULL,model_sha256 TEXT NOT NULL,preprocessing TEXT NOT NULL,dimension INTEGER NOT NULL,dtype TEXT NOT NULL,metric TEXT NOT NULL,UNIQUE(model_name,model_version,model_sha256,preprocessing,dimension,dtype,metric));"
+            "CREATE TABLE media_assets(media_id TEXT PRIMARY KEY,display_name TEXT NOT NULL,kind TEXT NOT NULL,uri TEXT NOT NULL,sha256 TEXT NOT NULL DEFAULT '',codec TEXT NOT NULL DEFAULT '',duration_s REAL NOT NULL DEFAULT 0,slot_s REAL NOT NULL DEFAULT 30,width INTEGER NOT NULL DEFAULT 0,height INTEGER NOT NULL DEFAULT 0,fps REAL NOT NULL DEFAULT 0,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL);"
+            "CREATE TABLE media_reference_frames(ref_id INTEGER PRIMARY KEY AUTOINCREMENT,media_id TEXT NOT NULL REFERENCES media_assets(media_id) ON DELETE CASCADE,offset_ms INTEGER NOT NULL,phash INTEGER NOT NULL,path TEXT NOT NULL,width INTEGER NOT NULL,height INTEGER NOT NULL,model_id INTEGER NOT NULL REFERENCES pop_models(model_id),embedding BLOB NOT NULL,created_at INTEGER NOT NULL,UNIQUE(media_id,offset_ms,model_id));"
+            "CREATE TABLE playback_sessions(session_id TEXT PRIMARY KEY,job_id TEXT NOT NULL DEFAULT '',expected_media_id TEXT NOT NULL,played_media_id TEXT NOT NULL DEFAULT '',source TEXT NOT NULL DEFAULT 'main_display',state TEXT NOT NULL DEFAULT 'scheduled',end_reason TEXT NOT NULL DEFAULT '',scheduled_utc_ms INTEGER NOT NULL DEFAULT 0,start_utc_ms INTEGER NOT NULL DEFAULT 0,end_utc_ms INTEGER NOT NULL DEFAULT 0,actual_play_ms INTEGER NOT NULL DEFAULT -1,slot_ms INTEGER NOT NULL DEFAULT 30000,captures_requested INTEGER NOT NULL DEFAULT 0,created_at INTEGER NOT NULL);"
+            "CREATE TABLE playback_events(event_id INTEGER PRIMARY KEY AUTOINCREMENT,session_id TEXT NOT NULL,type TEXT NOT NULL,mono_ms INTEGER NOT NULL,utc_ms INTEGER NOT NULL,detail_json TEXT NOT NULL,created_at INTEGER NOT NULL);"
+            "CREATE TABLE display_capture_evidence(evidence_id INTEGER PRIMARY KEY AUTOINCREMENT,session_id TEXT NOT NULL,idx INTEGER NOT NULL,target_offset_ms INTEGER NOT NULL,actual_offset_ms INTEGER NOT NULL,status TEXT NOT NULL,failure_reason TEXT NOT NULL DEFAULT '',source TEXT NOT NULL,path TEXT NOT NULL DEFAULT '',phash INTEGER NOT NULL DEFAULT 0,sha256 TEXT NOT NULL DEFAULT '',width INTEGER NOT NULL DEFAULT 0,height INTEGER NOT NULL DEFAULT 0,bytes INTEGER NOT NULL DEFAULT 0,took_ms INTEGER NOT NULL DEFAULT 0,utc_ms INTEGER NOT NULL,model_id INTEGER NOT NULL DEFAULT 0,embedding BLOB,embedded INTEGER NOT NULL DEFAULT 0,image_available INTEGER NOT NULL DEFAULT 0,created_at INTEGER NOT NULL,UNIQUE(session_id,idx));"
+            "CREATE TABLE playback_verifications(verification_id INTEGER PRIMARY KEY AUTOINCREMENT,session_id TEXT NOT NULL UNIQUE,status TEXT NOT NULL,reason TEXT NOT NULL,expected_media_id TEXT NOT NULL,best_media_id TEXT NOT NULL,frames_total INTEGER NOT NULL,frames_ok INTEGER NOT NULL,frames_matched INTEGER NOT NULL,frames_mismatched INTEGER NOT NULL,mean_sim_expected REAL NOT NULL,min_sim_expected REAL NOT NULL,mean_phash_dist REAL NOT NULL,playback_reported INTEGER NOT NULL,playback_complete INTEGER NOT NULL,actual_play_ms INTEGER NOT NULL,slot_ms INTEGER NOT NULL,details_json TEXT NOT NULL,engine_version TEXT NOT NULL,created_at INTEGER NOT NULL);"
+            "INSERT INTO playback_sessions(session_id,expected_media_id,created_at) VALUES('old','ad-a',1);"
+            "INSERT INTO display_capture_evidence(session_id,idx,target_offset_ms,actual_offset_ms,status,source,utc_ms,created_at) VALUES('old',1,3000,3007,'failed','main_display',1,1);"
+            "PRAGMA journal_mode=DELETE; PRAGMA user_version=1;", nullptr, nullptr, nullptr), SQLITE_OK);
+        sqlite3_close(db);
+    }
+    auto file_bytes = [&] { std::ifstream f(db_path, std::ios::binary); return std::string((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>()); };
+    const std::string before = file_bytes();
+    PopConfig c; c.root_directory = dir.str(); PopStore s(c); std::string e;      // allow_schema_upgrade is false by default
+    ASSERT_TRUE(s.open(e)) << e;
+    EXPECT_FALSE(s.schema_v2());
+    EXPECT_EQ(s.summary().schema_version, 1);
+    auto ev = s.list_evidence("old");                                            // reading works, rows are screenshots by definition
+    ASSERT_EQ(ev.size(), 1u);
+    EXPECT_EQ(ev[0].capture_method, "brightscript_screenshot");
+    PopSession ps; EXPECT_TRUE(s.get_session("old", ps));
+    s.close();
+    EXPECT_EQ(file_bytes(), before) << "opening and reading a schema-1 pop.db must not change a single byte";
+    // normal screenshot operation still works on the legacy file ...
+    PopStore s2(c); ASSERT_TRUE(s2.open(e)) << e;
+    MockEmbeddingProvider prov(64);
+    EvidenceIn in; in.session_id = "old"; in.idx = 2; in.target_offset_ms = 15000; in.actual_offset_ms = 15007; in.utc_ms = kT0; in.jpeg = make_jpeg(0);
+    Evidence out; EXPECT_TRUE(s2.add_evidence(prov, in, out, e)) << e;
+    EXPECT_EQ(s2.summary().schema_version, 1);
+    // ... but OS-rendered-frame evidence is refused (it needs the schema upgrade, which must be asked for explicitly)
+    in.idx = 3; in.capture_method = "resilience_grpc"; in.uncertainty_ms = 250;
+    EXPECT_FALSE(s2.add_evidence(prov, in, out, e));
+    EXPECT_NE(e.find("allow_schema_upgrade"), std::string::npos) << e;
+    Verification v; EXPECT_TRUE(s2.verify_session("old", VerifyThresholds{}, v, e)) << e;
 }
 
 TEST(PopStore, ReferenceLibraryRoundTripAndValidation) {

@@ -10,7 +10,7 @@
 //
 //   argus_display_bridge [--socket /tmp/argus_display_bridge.sock] [--target unix:///run/brightsign/resilience/runtime_api.sock]
 //                        [--interest-file /run/brightsign/resilience/rendered_frame.interest] [--deadline-ms 700]
-//   argus_display_bridge --probe N [--probe-interval-ms 200] [--out DIR] [--target ...] [--interest-file ...]
+//   argus_display_bridge --probe N [--probe-interval-ms 200] [--out DIR] [--idle-check] [--target ...] [--interest-file ...]
 //       READ-ONLY probe (no socket, nothing is served): touches the interest file, then N times does Health / Capture / Health, saves each
 //       distinct frame as DIR/frame_<n>.jpg and prints one JSON line per cycle (freshness, daemon clock, our clock, sizes, latencies), then a
 //       summary. Used to confirm on a player that the OS service is present and to measure cadence, latency and clock agreement.
@@ -111,7 +111,7 @@ static void serve(int fd, Upstream& up) {
     ::close(fd);
 }
 
-static int run_probe(Upstream& up, int n, int interval_ms, const std::string& out_dir) {
+static int run_probe(Upstream& up, int n, int interval_ms, const std::string& out_dir, bool idle_check) {
     using clk = std::chrono::steady_clock;
     auto mono = [] { return std::chrono::duration_cast<std::chrono::milliseconds>(clk::now().time_since_epoch()).count(); };
     if (!out_dir.empty()) std::filesystem::create_directories(out_dir);
@@ -157,6 +157,13 @@ static int run_probe(Upstream& up, int n, int interval_ms, const std::string& ou
                           {"frame_gap_ms", {{"p50", pct(gaps, 0.5)}, {"p95", pct(gaps, 0.95)}, {"count", gaps.size()}}},
                           {"acquire_ms", {{"p50", pct(rtts, 0.5)}, {"p95", pct(rtts, 0.95)}}}};
     std::printf("%s\n", sum.dump().c_str());
+    if (idle_check) {   // stop touching the interest file: the producer must idle and the OS must then report STALE instead of serving an old frame
+        std::this_thread::sleep_for(std::chrono::seconds(9));
+        Health hi = up.health(); std::string jpeg;
+        const nlohmann::json cj = up.capture(jpeg);
+        std::printf("%s\n", nlohmann::json{{"idle_check", true}, {"waited_s", 9}, {"rpc_ok", hi.rpc_ok}, {"capture_available", hi.capture_available}, {"error_code", hi.error_code},
+                                             {"frame_served", !jpeg.empty()}, {"capture_error", cj.value("error_code", std::string())}}.dump().c_str());
+    }
     return rpc_fail == n ? 3 : 0;
 }
 
@@ -165,6 +172,7 @@ int main(int argc, char** argv) {
     std::string target = "unix:///run/brightsign/resilience/runtime_api.sock";
     std::string interest = "/run/brightsign/resilience/rendered_frame.interest";
     int deadline = 700, probe_n = 0, probe_interval = 200;
+    bool idle_check = false;
     std::string probe_out;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -175,11 +183,12 @@ int main(int argc, char** argv) {
         else if (a == "--deadline-ms") deadline = std::atoi(next().c_str());
         else if (a == "--probe") probe_n = std::atoi(next().c_str());
         else if (a == "--probe-interval-ms") probe_interval = std::atoi(next().c_str());
+        else if (a == "--idle-check") idle_check = true;
         else if (a == "--out") probe_out = next();
         else { std::fprintf(stderr, "unknown argument %s\n", a.c_str()); return 2; }
     }
     std::signal(SIGINT, on_sig); std::signal(SIGTERM, on_sig); std::signal(SIGPIPE, SIG_IGN);
-    if (probe_n > 0) { Upstream pu(target, interest, deadline); return run_probe(pu, probe_n, probe_interval, probe_out); }
+    if (probe_n > 0) { Upstream pu(target, interest, deadline); return run_probe(pu, probe_n, probe_interval, probe_out, idle_check); }
 
     sockaddr_un addr{};
     addr.sun_family = AF_UNIX;

@@ -338,6 +338,36 @@ run_vm_api_server() {
                       --exec ${SOC_HOME}/vm_api_server -- --config "${cfg}" --base-dir "${SOC_HOME}" --port 20310
 }
 
+# One-shot, READ-ONLY probe of the OS rendered-frame service. Runs only when an operator created /storage/sd/display_probe.request (the marker is renamed
+# to .done afterwards, so it never repeats). It changes nothing on the player: it records who/what the OS services are (diag.txt), the libraries the
+# bridge resolves (ldd.txt), and 100 Health/Capture cycles (probe.jsonl + frames/). Results are on the SD card, readable through the DWS file API.
+run_display_probe_once() {
+    local marker=/storage/sd/display_probe.request
+    [ -f "$marker" ] || return 0
+    SOC_NAME=$(get_soc_name)
+    SOC_HOME=${SCRIPT_PATH}/${SOC_NAME}
+    local bridge="${SOC_HOME}/argus_display_bridge"
+    if [ ! -x "$bridge" ]; then echo "display probe requested but argus_display_bridge is not packaged"; mv "$marker" "$marker.done" 2>/dev/null; return 0; fi
+    local out=/storage/sd/display_probe
+    mkdir -p "$out/frames"
+    (
+        {
+            echo "== date"; date
+            echo "== id (this process)"; id
+            echo "== resilience group"; grep -E "resilience|weston|brightsign" /etc/group 2>&1
+            echo "== /run/brightsign/resilience"; ls -lan /run/brightsign/resilience 2>&1
+            echo "== /dev/shm"; ls -lan /dev/shm 2>&1
+            echo "== processes"; ps 2>&1 | grep -E "resilience|rendered|weston" | grep -v grep
+            echo "== OS libraries"; ls -l /usr/lib/libgrpc++.so.1 /usr/lib/libprotobuf.so.22 /usr/lib/libstdc++.so.6 2>&1
+        } > "$out/diag.txt" 2>&1
+        LD_TRACE_LOADED_OBJECTS=1 "$bridge" > "$out/ldd.txt" 2>&1
+        sleep 20                                  # let the presentation and the OS services settle after boot
+        "$bridge" --probe 100 --probe-interval-ms 200 --idle-check --out "$out/frames" > "$out/probe.jsonl" 2> "$out/probe.err"
+        echo "exit $?" > "$out/probe.exit"
+        mv "$marker" "$marker.done"
+    ) &
+}
+
 # Block until a local TCP port is listening (bounded). Used to avoid the
 # attention_demo-vs-mosquitto startup race (see do_start). BusyBox-friendly:
 # uses ss and integer sleeps only.
@@ -568,6 +598,8 @@ do_start() {
             run_vm_api_server
         fi
     fi
+
+    run_display_probe_once
 
     # Start argus-exporter (Prometheus metrics exporter)
     # Check if disabled via registry (set port to 0 to disable)

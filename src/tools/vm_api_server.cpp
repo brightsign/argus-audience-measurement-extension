@@ -136,6 +136,7 @@ Cfg load_cfg(const std::string& path) {
         c.pop.thresholds.margin = th.value("margin", c.pop.thresholds.margin);
         c.pop.thresholds.min_play_ratio = th.value("min_play_ratio", c.pop.thresholds.min_play_ratio);
         c.pop.thresholds.min_match_fraction = th.value("min_match_fraction", c.pop.thresholds.min_match_fraction);
+        c.pop.allow_schema_upgrade = pp.value("allow_schema_upgrade", false);
         c.pop.capture_backend = pp.value("capture_backend", c.pop.capture_backend);          // brightscript_screenshot | resilience_grpc
         c.pop.grpc_before_ms = std::max(0, std::min(5000, pp.value("grpc_window_before_ms", c.pop.grpc_before_ms)));
         c.pop.grpc_after_ms = std::max(0, std::min(10000, pp.value("grpc_window_after_ms", c.pop.grpc_after_ms)));

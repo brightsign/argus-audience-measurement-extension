@@ -196,6 +196,9 @@ struct PopConfig {
     std::string root_directory;            // same directory as visual_memory.db
     int         busy_timeout_ms = 3000;
     bool        sync_full = true;
+    // An existing schema-1 pop.db is NOT upgraded unless this is set: it keeps working exactly as before (legacy mode, screenshot evidence
+    // only) and the file is not altered by opening it. Schema 2 adds the evidence capture-method columns (OS rendered frames).
+    bool        allow_schema_upgrade = false;
 };
 
 struct PopSummary {
@@ -218,7 +221,8 @@ public:
     PopStore(const PopStore&) = delete;
     PopStore& operator=(const PopStore&) = delete;
 
-    bool open(std::string& err);                       // creates/migrates <root>/pop.db
+    bool open(std::string& err);                       // creates <root>/pop.db (schema 2); upgrades a schema-1 file only if allow_schema_upgrade
+    bool schema_v2() const;                            // false = legacy schema-1 database opened without upgrade
     bool is_open() const;
     void close();
     PopSummary summary();

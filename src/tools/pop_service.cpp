@@ -70,7 +70,7 @@ json media_json(const MediaAsset& m) {
 
 PopService::PopService(PopCfg cfg, std::string storage_root, ProviderRunner run)
     : cfg_(std::move(cfg)), root_(std::move(storage_root)), run_(std::move(run)) {
-    PopConfig pc; pc.root_directory = root_;
+    PopConfig pc; pc.root_directory = root_; pc.allow_schema_upgrade = cfg_.allow_schema_upgrade;
     store_ = std::make_unique<PopStore>(pc);
 }
 PopService::~PopService() { stop(); }
@@ -358,6 +358,9 @@ bool PopService::schedule(const json& b, json& out, int& http, std::string& err)
     const std::string backend = b.value("capture_backend", cfg_.capture_backend);
     if (backend != "brightscript_screenshot" && backend != "resilience_grpc") { err = "capture_backend must be brightscript_screenshot or resilience_grpc"; return false; }
     const bool grpc = backend == "resilience_grpc";
+    if (grpc && !store_->schema_v2()) {
+        err = "pop.db is schema 1 and is left untouched: set visual_memory.pop.allow_schema_upgrade to use capture_backend resilience_grpc"; http = 409; return false;
+    }
     if (grpc && (!display_ || !display_->cfg().enabled)) {
         err = "capture_backend resilience_grpc needs visual_memory.display.enabled and the argus_display_bridge (OS Resilience rendered frames)"; http = 503; return false;
     }
@@ -509,7 +512,7 @@ json PopService::status() {
             {"db_bytes", s.db_bytes}}},
             {"adapter", {{"running", running_.load()}, {"events_path", cfg_.events_path}, {"file_bytes", file_size_}, {"offset", offset_}, {"lines", lines_},
                          {"events_ingested", events_}, {"errors", errors_}, {"boots", boots_}, {"last_event_utc_ms", last_event_utc_ms_}, {"last_error", last_error_}}},
-            {"capture_backend", cfg_.capture_backend}, {"display_source_available", display_ != nullptr && display_->cfg().enabled},
+            {"capture_backend", cfg_.capture_backend}, {"schema_legacy_v1", !store_->schema_v2()}, {"display_source_available", display_ != nullptr && display_->cfg().enabled},
             {"allow_test_jobs", cfg_.allow_test_jobs}, {"thresholds", th}, {"evidence_max_bytes", cfg_.evidence_max_bytes},
             {"evidence_retention_days", cfg_.evidence_retention_days}, {"source", cfg_.source_id},
             {"evidence_source", "presentation output of the player (display capture); not the audience camera"}};
