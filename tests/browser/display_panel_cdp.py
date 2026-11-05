@@ -5,7 +5,7 @@
 
 Real processes: the OS-service test double (real gRPC), argus_display_bridge, vm_api_server, the Go dashboard server (serving ./dashboard)
 and headless Chrome. Checks: hidden while the feature is disabled; visible with a decoded image and its metadata when enabled; follows a
-change of the displayed picture; shows black/frozen signals and the stale state; polling stops when the audience view is left (the OS
+change of the displayed picture; shows black/frozen signals and the stale state; polling stops when the Proof of Play view is left (the OS
 producer idles); no console errors from the panel. Synthetic pictures only.
 """
 import asyncio, base64, json, os, shutil, signal, subprocess, sys, tempfile, time, traceback, urllib.request, websockets
@@ -111,7 +111,7 @@ async def main():
             return False
 
         await cmd("Runtime.enable"); await cmd("Page.enable")
-        await cmd("Page.navigate", url=BASE)
+        await cmd("Page.navigate", url=BASE + "?t=%d#pop" % int(time.time() * 1000))
         await asyncio.sleep(2.5)
         check("disabled: the Display output panel is not rendered at all", await ev("document.getElementById('dispPanel').hidden === true && getComputedStyle(document.getElementById('dispPanel')).display === 'none'"))
 
@@ -122,7 +122,7 @@ async def main():
         time.sleep(1.0)
         api = start([API_BIN, "--config", cfg(True), "--port", str(API_PORT), "--provider", "mock:64", "--status-file", os.path.join(tmp, "st.json")], "api1.log")
         time.sleep(1.5)
-        await cmd("Page.navigate", url=BASE)
+        await cmd("Page.navigate", url=BASE + "?t=%d#pop" % int(time.time() * 1000))
         check("enabled: the panel appears", await wait_for("document.getElementById('dispPanel').hidden === false", 15))
         check("enabled: the placeholder text is gone once a frame is shown", await wait_for("getComputedStyle(document.getElementById('dispEmpty')).display === 'none'", 10))
         check("enabled: a frame is decoded and shown", await wait_for("(()=>{const i=document.getElementById('dispImg');return !i.hidden&&i.complete&&i.naturalWidth===640&&i.naturalHeight===360})()", 15))
@@ -156,8 +156,8 @@ async def main():
         await cmd("Page.navigate", url=BASE + "#memory")
         await asyncio.sleep(9.0)
         f1 = fstats(); await asyncio.sleep(2.5); f2 = fstats()
-        check("leaving the audience view: no more requests, the OS producer idles", f2["frames_produced"] == f1["frames_produced"] and f2["health_calls"] == f1["health_calls"], (f1, f2))
-        await cmd("Page.navigate", url=BASE)
+        check("leaving the Proof of Play view: no more requests, the OS producer idles", f2["frames_produced"] == f1["frames_produced"] and f2["health_calls"] == f1["health_calls"], (f1, f2))
+        await cmd("Page.navigate", url=BASE + "?t=%d#pop" % int(time.time() * 1000))
         check("coming back resumes the preview", await wait_for("(()=>{const i=document.getElementById('dispImg');return !i.hidden&&i.complete&&i.naturalWidth===640})()", 12))
         await shot("4_back")
 

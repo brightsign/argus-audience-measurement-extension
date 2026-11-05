@@ -37,7 +37,7 @@ OS: weston -> bs-rendered-frame-producer -> SHM -> bs-resilience-api-daemon --gR
 | `DisplayFrameSource` | `src/display/display_frame_source.*` | Polling, validation, ring, status. No gRPC, no BrightScript, no libvisualmemory. |
 | Routes | `src/tools/vm_api_server.cpp` | `GET /api/display/status`, `GET /api/display/frame.jpg[?after=<seq>]`. |
 | Proxy | `dashboard-server/main.go` | `/api/display/` mounted with the existing policy: GET only, optional token, never exposes the OS socket. |
-| Panel | `dashboard/display.js` | "Display output" panel in the audience view beside the camera preview. |
+| Panel | `dashboard/display.js` | "Display output" panel in the Proof of Play view, under the banner. |
 | PoP backend | `src/tools/pop_service.*`, `libs/visual-memory/src/pop_store.cpp` | Evidence selection, `capture_method` / provenance / uncertainty stored (pop.db schema v2), display-geometry references. |
 | Vendored contract | `third_party/resilience-proto/` | The OS `.proto` files, unchanged. |
 
@@ -134,7 +134,7 @@ for the same four scenarios on both backends.
    `ARGUS_DISPLAY_BRIDGE=$PWD/build-bridge-xt5/argus_display_bridge EXTRA_CMAKE_FLAGS="-DENABLE_VISUAL_MEMORY=ON -DENABLE_VISUAL_EMBEDDINGS=ON" make build SOCS=rk3588 && ./package --ext-only --soc RK3588`.
 3. **Probe first, read-only** (before enabling anything): with the package installed, run `argus_display_bridge --probe 100 --out /tmp/probe` once from a root shell
    and check: `rpc_failures 0`, `capture_available` true, provider 7, `clock_delta_ms` small, frame gaps near 200 ms. If the daemon or producer is missing, stop here.
-4. **Enable:** add the `display` block (section 6) to `/storage/sd/configs/argus-config.json`, restart Argus. Open the audience view: the "Display output" panel appears.
+4. **Enable:** add the `display` block (section 6) to `/storage/sd/configs/argus-config.json`, restart Argus. Open the Proof of Play tab: the "Display output" panel appears under the banner.
 5. **Proof of Play:** build the display-geometry references, set `pop.capture_backend` (or pass `capture_backend` per session), run the four scenarios.
 6. **Disable:** set `display.enabled` to `false` (the panel disappears, the bridge is no longer started, the OS producer idles within 5 s) and/or
    `pop.capture_backend` to `brightscript_screenshot`. No data migration is needed: pop.db v2 rows keep working, and the screenshot backend is unaffected.

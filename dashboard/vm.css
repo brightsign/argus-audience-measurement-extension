@@ -232,10 +232,10 @@ table.vm-table { border-collapse: collapse; width: 100%; font-size: 12px; }
 /* Display output preview (audience view). Author display rules would otherwise defeat the hidden attribute. */
 .disp-panel[hidden], .disp-frame img[hidden], .disp-empty[hidden] { display: none !important; }
 .disp-panel { margin-top: 12px; }
-.data-col .disp-panel { margin-top: 0; flex: 0 0 auto; }               /* in the audience view: beside the camera preview, above the history graphs */
-.data-col .disp-body { flex-direction: column; gap: 8px; }
-.data-col .disp-frame { flex: none; width: 100%; }
-.data-col .disp-meta { flex: none; width: 100%; grid-template-columns: max-content 1fr max-content 1fr; gap: 3px 10px; font-size: 12px; }
+
+
+
+
 .disp-body { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; }
 .disp-frame { position: relative; flex: 0 1 640px; max-width: 100%; aspect-ratio: 16 / 9; background: #000; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
 .disp-frame img { width: 100%; height: 100%; object-fit: contain; display: block; }

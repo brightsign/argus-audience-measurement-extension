@@ -48,7 +48,7 @@ async def main():
 
         await cmd("Runtime.enable"); await cmd("Page.enable")
         await cmd("Page.addScriptToEvaluateOnNewDocument", source="performance.setResourceTimingBufferSize(200000);")
-        await cmd("Page.navigate", url=BASE)
+        await cmd("Page.navigate", url=BASE + "#pop")
         t0 = time.time()
         for _ in range(60):
             if await ev("!document.getElementById('dispPanel').hidden"): break

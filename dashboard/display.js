@@ -1,7 +1,7 @@
 /* Display output preview: shows what the player is actually displaying (OS Resilience rendered frames: weston VOP2 writeback,
-   an approximation of the composed output, not a bit-exact HDMI readback), next to the audience-camera view.
+   an approximation of the composed output, not a bit-exact HDMI readback), in the Proof of Play view.
    Everything goes through the same-origin dashboard proxy (/api/display/, GET only). The panel stays hidden unless
-   visual_memory.display.enabled is true, and nothing is requested while the audience view or the tab is not visible: the
+   visual_memory.display.enabled is true, and nothing is requested while the Proof of Play view or the tab is not visible: the
    frame requests are themselves the "viewer interest" that makes the OS producer capture (it idles a few seconds after the last one). */
 (() => {
   "use strict";
@@ -11,7 +11,7 @@
   const panel = document.getElementById("dispPanel");
   if (!panel) return;
   const img = document.getElementById("dispImg"), empty = document.getElementById("dispEmpty"), meta = document.getElementById("dispMeta");
-  const view = document.getElementById("view-audience");
+  const view = document.getElementById("view-pop");
   let enabled = null, seq = 0, running = false, url = null, shown = [], st = null, lastRecv = 0, lastStatus = 0;
 
   const onScreen = () => !document.hidden && view && !view.hidden;

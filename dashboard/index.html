@@ -51,14 +51,6 @@
           <div class="tile"><span class="k-label">NPU Load</span><span class="k-val" id="kNpu">0%</span></div>
         </section>
 
-        <!-- Display output preview (OS rendered frames). Hidden unless visual_memory.display.enabled; polls only while this view is on screen. -->
-        <section class="panel disp-panel" id="dispPanel" aria-label="Display output" hidden>
-          <div class="panel-head"><h2>Display output</h2><span class="hint" id="dispHint">what the player is showing (approximate, composed)</span></div>
-          <div class="disp-body">
-            <div class="disp-frame"><img id="dispImg" alt="Display output preview" hidden><div class="disp-empty" id="dispEmpty">Waiting for a display frame…</div></div>
-            <dl class="disp-meta" id="dispMeta" aria-live="off"></dl>
-          </div>
-        </section>
 
 
         <section class="panel hist" aria-label="Presence history">
@@ -92,7 +84,16 @@
 
   <main id="view-memory" class="view vm-view" data-view="memory" hidden></main>
   <main id="view-search" class="view vm-view" data-view="search" hidden></main>
-  <main id="view-pop" class="view vm-view" data-view="pop" hidden></main>
+  <main id="view-pop" class="view vm-view" data-view="pop" hidden>
+    <!-- Display output preview (OS rendered frames). Hidden unless visual_memory.display.enabled; polls only while the Proof of Play view is on screen. -->
+    <section class="panel disp-panel" id="dispPanel" aria-label="Display output" hidden>
+      <div class="panel-head"><h2>Display output</h2><span class="hint" id="dispHint">what the player is showing (approximate, composed)</span></div>
+      <div class="disp-body">
+        <div class="disp-frame"><img id="dispImg" alt="Display output preview" hidden><div class="disp-empty" id="dispEmpty">Waiting for a display frame…</div></div>
+        <dl class="disp-meta" id="dispMeta" aria-live="off"></dl>
+      </div>
+    </section>
+  </main>
 
   <div class="tooltip" id="tooltip" hidden></div>
 

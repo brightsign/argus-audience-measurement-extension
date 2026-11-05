@@ -45,9 +45,10 @@
       banner: h("div", { class: "vm-banner" }), reg: h("section", { class: "panel pop-panel" }), sched: h("section", { class: "panel pop-panel" }),
       hist: h("section", { class: "panel pop-panel" }),
     };
+    const disp = document.getElementById("dispPanel");              // Display output preview (display.js): lives in this view, under the banner
     root.replaceChildren(h("div", { class: "vm-page" },
       h("div", { class: "panel-head" }, h("h2", { text: "Proof of Play" }), h("span", { class: "muted", id: "popLive", text: "" })),
-      S.view.banner, S.view.sched, S.view.hist, S.view.reg));
+      S.view.banner, ...(disp ? [disp] : []), S.view.sched, S.view.hist, S.view.reg));
   }
 
   function renderBanner() {
