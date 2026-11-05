@@ -64,7 +64,7 @@ A frame older than `max_age_ms` (1.2 s) is not served as current. A changed `boo
 
 The OS producer captures only while `/run/brightsign/resilience/rendered_frame.interest` is younger than 5 s. Argus touches it (via the bridge, every 2 s)
 **only** while a dashboard viewer is requesting frames (kept for 3 s after the last request) or a Proof of Play session is active. Otherwise there are no
-RPCs, no capture, no CPU. The dashboard panel requests nothing while the audience view or the browser tab is not visible.
+RPCs, no capture, no CPU. The dashboard panel requests nothing while the Proof of Play view or the browser tab is not visible.
 
 ## 5. Proof of Play with `resilience_grpc`
 
