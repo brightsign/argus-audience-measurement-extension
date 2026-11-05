@@ -7,7 +7,7 @@ Proof of Play is untouched and stays the default. Background and findings: `RESI
 **Status: implemented and tested on the host against a test double of the OS service. First hardware probe done on the dev XT5 (2026-11-05,
 `test_results/display_probe_xt5.json`):** the OS daemon and producer are present and serve genuine 640x360 JPEG frames of the presentation at ~4.7-5 FPS with
 provider `WESTON_VOP2_WRITEBACK`, the interest mechanism wakes the producer within one cycle, the daemon clock equals this process's monotonic clock (0-1 ms),
-and an idle producer correctly answers STALE. The display preview and the Proof of Play backend have **not** been enabled or measured on hardware yet.
+and an idle producer correctly answers STALE. The display preview was then enabled on hardware (Step 3, `test_results/display_preview_xt5.json`): about 4.4-5 FPS, frame age ~0.1-0.3 s, colours and framing match a DWS snapshot of the HDMI display (PSNR 29 dB), no visible effect on Argus FPS, and about +0.35 core of system CPU while a viewer is attached (mostly outside the processes Argus can see). The Proof of Play backend has **not** been run on hardware yet.
 Every number a full hardware run should produce is listed in section 7.
 
 ## 1. What it is, and what it is not

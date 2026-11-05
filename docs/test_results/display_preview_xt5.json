@@ -1,0 +1,582 @@
+{
+ "what": "Step 3 on the dev XT5: display preview enabled via visual_memory.display.enabled (only change to the config), vm_api_server restarted twice (enable, restore), no reboot, presentation meet-brightsign.mp4 looping, audience camera on /dev/video1",
+ "caveat": "Run A/B (first pair) is NOT comparable: the USB camera was in its low-light mode (~19-20 fps, backlog VM-12) during A and early B. The comparable runs are A2 (display off), C (enabled, no viewer) and B2 (enabled, browser viewer), all at 29.04 fps, 300 s each.",
+ "comparable_runs": {
+  "A2_display_off": {
+   "label": "display_off_A2",
+   "seconds": 300,
+   "samples": 300,
+   "errors": 0,
+   "system_cpu_busy_pct_of_all_cores": 8.8,
+   "duration_s": 299.0,
+   "processes": {
+    "mosquitto": {
+     "cpu_pct_of_one_core": 0.05,
+     "rss_mb_mean": 3.8,
+     "rss_mb_max": 3.8
+    },
+    "attention_demo_": {
+     "cpu_pct_of_one_core": 0.0,
+     "rss_mb_mean": 1.5,
+     "rss_mb_max": 1.5
+    },
+    "attention_demo": {
+     "cpu_pct_of_one_core": 50.59,
+     "rss_mb_mean": 96.7,
+     "rss_mb_max": 96.7
+    },
+    "image-stream-se": {
+     "cpu_pct_of_one_core": 0.96,
+     "rss_mb_mean": 10.2,
+     "rss_mb_max": 10.7
+    },
+    "dashboard-serve": {
+     "cpu_pct_of_one_core": 0.18,
+     "rss_mb_mean": 11.1,
+     "rss_mb_max": 11.2
+    },
+    "argus-exporter": {
+     "cpu_pct_of_one_core": 0.44,
+     "rss_mb_mean": 14.0,
+     "rss_mb_max": 14.5
+    },
+    "vm_api_server": {
+     "cpu_pct_of_one_core": 1.21,
+     "rss_mb_mean": 7.4,
+     "rss_mb_max": 7.4
+    }
+   },
+   "mem_available_mb": {
+    "min": 2935,
+    "mean": 2938
+   },
+   "npu_core_load_pct": {
+    "core0": {
+     "mean": 79.7,
+     "max": 85
+    },
+    "core1": {
+     "mean": 0,
+     "max": 0
+    },
+    "core2": {
+     "mean": 0,
+     "max": 0
+    }
+   },
+   "soc_temp_c": {
+    "mean": 37.2,
+    "max": 37.9
+   },
+   "argus_fps": {
+    "mean": 29.04,
+    "median": 29.0,
+    "min": 28.0,
+    "p5": 29.0,
+    "samples": 300,
+    "below_25": 0
+   },
+   "argus_fps_per_minute_mean": [
+    29.0,
+    29.1,
+    29.0,
+    29.1,
+    29.0
+   ],
+   "argus_npu_load_pct": {
+    "mean": 79.7,
+    "max": 85.0
+   }
+  },
+  "C_enabled_idle": {
+   "label": "display_enabled_idle",
+   "seconds": 300,
+   "samples": 300,
+   "errors": 0,
+   "system_cpu_busy_pct_of_all_cores": 8.39,
+   "duration_s": 299.0,
+   "processes": {
+    "mosquitto": {
+     "cpu_pct_of_one_core": 0.05,
+     "rss_mb_mean": 3.8,
+     "rss_mb_max": 3.8
+    },
+    "attention_demo_": {
+     "cpu_pct_of_one_core": 0.0,
+     "rss_mb_mean": 1.5,
+     "rss_mb_max": 1.5
+    },
+    "attention_demo": {
+     "cpu_pct_of_one_core": 51.32,
+     "rss_mb_mean": 96.7,
+     "rss_mb_max": 96.7
+    },
+    "image-stream-se": {
+     "cpu_pct_of_one_core": 0.94,
+     "rss_mb_mean": 10.3,
+     "rss_mb_max": 10.7
+    },
+    "dashboard-serve": {
+     "cpu_pct_of_one_core": 0.21,
+     "rss_mb_mean": 10.6,
+     "rss_mb_max": 10.8
+    },
+    "argus-exporter": {
+     "cpu_pct_of_one_core": 0.41,
+     "rss_mb_mean": 14.1,
+     "rss_mb_max": 14.5
+    },
+    "vm_api_server": {
+     "cpu_pct_of_one_core": 1.3,
+     "rss_mb_mean": 10.9,
+     "rss_mb_max": 10.9
+    }
+   },
+   "mem_available_mb": {
+    "min": 2916,
+    "mean": 2917
+   },
+   "npu_core_load_pct": {
+    "core0": {
+     "mean": 79.8,
+     "max": 85
+    },
+    "core1": {
+     "mean": 0,
+     "max": 0
+    },
+    "core2": {
+     "mean": 0,
+     "max": 0
+    }
+   },
+   "soc_temp_c": {
+    "mean": 37.2,
+    "max": 37.9
+   },
+   "argus_fps": {
+    "mean": 29.04,
+    "median": 29.0,
+    "min": 28.0,
+    "p5": 29.0,
+    "samples": 300,
+    "below_25": 0
+   },
+   "argus_npu_load_pct": {
+    "mean": 79.9,
+    "max": 85.0
+   },
+   "display": {
+    "last": {
+     "state": "idle",
+     "fps": 4.2,
+     "counters": {
+      "accepted": 3493,
+      "ambiguous_discarded": 36,
+      "clock_rejected": 0,
+      "invalid_jpeg": 0,
+      "oversize": 0,
+      "provider_rejected": 0,
+      "rpc_errors": 0,
+      "same_frame_skipped": 402,
+      "service_restarts": 0,
+      "stale_polls": 36
+     },
+     "acquire_ms": {
+      "p50": 2,
+      "p95": 3,
+      "samples": 200
+     },
+     "last_frame": {
+      "acquire_ms": 2,
+      "age_ms": 303430,
+      "bytes": 31133,
+      "capture_utc_ms": 1793908506649,
+      "height": 360,
+      "provider": 7,
+      "seq": 3493,
+      "uncertainty_ms": 252,
+      "width": 640
+     }
+    },
+    "fps_samples_mean": 4.2,
+    "frame_age_ms_median": 158429
+   }
+  },
+  "B2_enabled_viewer": {
+   "label": "display_on_B2",
+   "seconds": 300,
+   "samples": 300,
+   "errors": 0,
+   "system_cpu_busy_pct_of_all_cores": 13.12,
+   "duration_s": 299.0,
+   "processes": {
+    "mosquitto": {
+     "cpu_pct_of_one_core": 0.05,
+     "rss_mb_mean": 3.8,
+     "rss_mb_max": 3.8
+    },
+    "attention_demo_": {
+     "cpu_pct_of_one_core": 0.0,
+     "rss_mb_mean": 1.5,
+     "rss_mb_max": 1.5
+    },
+    "attention_demo": {
+     "cpu_pct_of_one_core": 52.23,
+     "rss_mb_mean": 96.7,
+     "rss_mb_max": 96.7
+    },
+    "image-stream-se": {
+     "cpu_pct_of_one_core": 2.14,
+     "rss_mb_mean": 10.3,
+     "rss_mb_max": 10.8
+    },
+    "dashboard-serve": {
+     "cpu_pct_of_one_core": 1.9,
+     "rss_mb_mean": 11.0,
+     "rss_mb_max": 11.5
+    },
+    "argus-exporter": {
+     "cpu_pct_of_one_core": 0.49,
+     "rss_mb_mean": 14.0,
+     "rss_mb_max": 14.8
+    },
+    "vm_api_server": {
+     "cpu_pct_of_one_core": 2.17,
+     "rss_mb_mean": 10.9,
+     "rss_mb_max": 10.9
+    }
+   },
+   "mem_available_mb": {
+    "min": 2907,
+    "mean": 2915
+   },
+   "npu_core_load_pct": {
+    "core0": {
+     "mean": 79.4,
+     "max": 85
+    },
+    "core1": {
+     "mean": 0,
+     "max": 0
+    },
+    "core2": {
+     "mean": 0,
+     "max": 0
+    }
+   },
+   "soc_temp_c": {
+    "mean": 38.0,
+    "max": 38.8
+   },
+   "argus_fps": {
+    "mean": 29.04,
+    "median": 29.0,
+    "min": 28.0,
+    "p5": 29.0,
+    "samples": 300,
+    "below_25": 0
+   },
+   "argus_fps_per_minute_mean": [
+    29.0,
+    29.0,
+    29.1,
+    29.0,
+    29.1
+   ],
+   "argus_npu_load_pct": {
+    "mean": 79.4,
+    "max": 85.0
+   },
+   "display": {
+    "last": {
+     "state": "ok",
+     "fps": 4.8,
+     "counters": {
+      "accepted": 4947,
+      "ambiguous_discarded": 39,
+      "clock_rejected": 0,
+      "invalid_jpeg": 0,
+      "oversize": 0,
+      "provider_rejected": 0,
+      "rpc_errors": 0,
+      "same_frame_skipped": 454,
+      "service_restarts": 0,
+      "stale_polls": 47
+     },
+     "acquire_ms": {
+      "p50": 2,
+      "p95": 3,
+      "samples": 200
+     },
+     "last_frame": {
+      "acquire_ms": 2,
+      "age_ms": 175,
+      "bytes": 26738,
+      "capture_utc_ms": 1793909136967,
+      "height": 360,
+      "provider": 7,
+      "seq": 4947,
+      "uncertainty_ms": 252,
+      "width": 640
+     }
+    },
+    "fps_samples_mean": 4.82,
+    "frame_age_ms_median": 165
+   }
+  }
+ },
+ "first_pair_not_comparable": {
+  "A_display_off": {
+   "label": "display_off",
+   "seconds": 600,
+   "samples": 600,
+   "errors": 0,
+   "system_cpu_busy_pct_of_all_cores": 6.75,
+   "duration_s": 599.0,
+   "processes": {
+    "mosquitto": {
+     "cpu_pct_of_one_core": 0.05,
+     "rss_mb_mean": 3.8,
+     "rss_mb_max": 3.8
+    },
+    "attention_demo_": {
+     "cpu_pct_of_one_core": 0.0,
+     "rss_mb_mean": 1.5,
+     "rss_mb_max": 1.5
+    },
+    "attention_demo": {
+     "cpu_pct_of_one_core": 37.98,
+     "rss_mb_mean": 96.5,
+     "rss_mb_max": 96.5
+    },
+    "image-stream-se": {
+     "cpu_pct_of_one_core": 0.69,
+     "rss_mb_mean": 10.0,
+     "rss_mb_max": 10.7
+    },
+    "dashboard-serve": {
+     "cpu_pct_of_one_core": 0.17,
+     "rss_mb_mean": 9.9,
+     "rss_mb_max": 10.4
+    },
+    "vm_api_server": {
+     "cpu_pct_of_one_core": 1.18,
+     "rss_mb_mean": 9.6,
+     "rss_mb_max": 9.6
+    },
+    "argus-exporter": {
+     "cpu_pct_of_one_core": 0.42,
+     "rss_mb_mean": 13.8,
+     "rss_mb_max": 14.5
+    }
+   },
+   "mem_available_mb": {
+    "min": 2923,
+    "mean": 2926
+   },
+   "npu_core_load_pct": {
+    "core0": {
+     "mean": 65.6,
+     "max": 84
+    },
+    "core1": {
+     "mean": 0,
+     "max": 0
+    },
+    "core2": {
+     "mean": 0,
+     "max": 0
+    }
+   },
+   "soc_temp_c": {
+    "mean": 36.4,
+    "max": 37.0
+   },
+   "argus_fps": {
+    "mean": 20.01,
+    "median": 19.0,
+    "min": 18.0,
+    "p5": 18.0,
+    "samples": 600,
+    "below_25": 537
+   },
+   "argus_npu_load_pct": {
+    "mean": 65.6,
+    "max": 84.0
+   }
+  },
+  "B_enabled_viewer": {
+   "label": "display_on",
+   "seconds": 600,
+   "samples": 600,
+   "errors": 0,
+   "system_cpu_busy_pct_of_all_cores": 12.74,
+   "duration_s": 599.0,
+   "processes": {
+    "mosquitto": {
+     "cpu_pct_of_one_core": 0.05,
+     "rss_mb_mean": 3.8,
+     "rss_mb_max": 3.8
+    },
+    "attention_demo_": {
+     "cpu_pct_of_one_core": 0.0,
+     "rss_mb_mean": 1.5,
+     "rss_mb_max": 1.5
+    },
+    "attention_demo": {
+     "cpu_pct_of_one_core": 50.45,
+     "rss_mb_mean": 96.7,
+     "rss_mb_max": 96.7
+    },
+    "image-stream-se": {
+     "cpu_pct_of_one_core": 2.1,
+     "rss_mb_mean": 10.3,
+     "rss_mb_max": 10.9
+    },
+    "dashboard-serve": {
+     "cpu_pct_of_one_core": 1.88,
+     "rss_mb_mean": 11.0,
+     "rss_mb_max": 11.6
+    },
+    "argus-exporter": {
+     "cpu_pct_of_one_core": 0.49,
+     "rss_mb_mean": 14.1,
+     "rss_mb_max": 14.4
+    },
+    "vm_api_server": {
+     "cpu_pct_of_one_core": 2.22,
+     "rss_mb_mean": 10.8,
+     "rss_mb_max": 11.1
+    }
+   },
+   "mem_available_mb": {
+    "min": 2922,
+    "mean": 2930
+   },
+   "npu_core_load_pct": {
+    "core0": {
+     "mean": 77.1,
+     "max": 85
+    },
+    "core1": {
+     "mean": 0,
+     "max": 0
+    },
+    "core2": {
+     "mean": 0,
+     "max": 0
+    }
+   },
+   "soc_temp_c": {
+    "mean": 37.7,
+    "max": 38.8
+   },
+   "argus_fps": {
+    "mean": 27.64,
+    "median": 29.0,
+    "min": 18.0,
+    "p5": 19.0,
+    "samples": 600,
+    "below_25": 83
+   },
+   "argus_npu_load_pct": {
+    "mean": 77.1,
+    "max": 85.0
+   },
+   "display": {
+    "last": {
+     "state": "ok",
+     "fps": 4.2,
+     "counters": {
+      "accepted": 2671,
+      "ambiguous_discarded": 31,
+      "clock_rejected": 0,
+      "invalid_jpeg": 0,
+      "oversize": 0,
+      "provider_rejected": 0,
+      "rpc_errors": 0,
+      "same_frame_skipped": 326,
+      "service_restarts": 0,
+      "stale_polls": 6
+     },
+     "acquire_ms": {
+      "p50": 2,
+      "p95": 3,
+      "samples": 200
+     },
+     "last_frame": {
+      "acquire_ms": 3,
+      "age_ms": 88,
+      "bytes": 25889,
+      "capture_utc_ms": 1793908233712,
+      "height": 360,
+      "provider": 7,
+      "seq": 2671,
+      "uncertainty_ms": 253,
+      "width": 640
+     }
+    },
+    "fps_samples_mean": 4.44,
+    "frame_age_ms_median": 229
+   }
+  }
+ },
+ "browser_viewer": {
+  "run1": {
+   "seconds": 640,
+   "frames_received_200": 2719,
+   "displayed_fps": 4.3,
+   "requests_204_nothing_newer": 415,
+   "console_errors": []
+  },
+  "run2": {
+   "seconds": 320,
+   "frames_received_200": 1462,
+   "displayed_fps": 4.69,
+   "requests_204_nothing_newer": 80,
+   "console_errors": []
+  }
+ },
+ "fidelity_vs_dws_snapshot": {
+  "method": "DWS 1280x800 snapshot resized to 576x360 and centred on 640x360 black vs the best-matching preview frame (offset -0.65 s)",
+  "psnr_db": 29.3,
+  "channel_correlation_rgb": [
+   0.964,
+   0.969,
+   0.982
+  ],
+  "mean_rgb_preview": [
+   29.4,
+   31.5,
+   84.7
+  ],
+  "mean_rgb_snapshot": [
+   30.3,
+   32.2,
+   85.2
+  ],
+  "side_bar_level": 0.0,
+  "same_right_edge_crop_of_the_video": true
+ },
+ "idle_and_wake": {
+  "linger_ms": 3000,
+  "after_idle_first_request": "503 while the OS reported STALE ('rendered-output capture stalled'), ok within ~3 s",
+  "display_state_when_no_viewer": "idle (no RPC)"
+ },
+ "content_flags": {
+  "video_duration_s": 121.64,
+  "video_has_black_start_s": 0.6,
+  "observed": "black flagged in 1 of 64 samples, frozen in 2 of 64; one 128 s trace shows a ~1 s dark segment (loop restart) and ~2 s of near-identical frames, i.e. real content, not a capture fault"
+ },
+ "not_measured": [
+  "CPU/RSS of argus_display_bridge, the OS producer, weston and bs-resilience-api-daemon (the installed vm_api_server's process list does not cover them)",
+  "gRPC p99 acquisition latency (status reports p50/p95 over the last 200 samples)",
+  "real capture-to-receipt latency (timing uncertainty stays the 250 ms budget)"
+ ],
+ "restored": {
+  "config_sha256": "7cd4c22488a718e0ce676e1dcda6ad3a9d961c7230a0ef5413ce9f8da1a744f0",
+  "autorun_sha256": "83076b0b4c6b71e7d2d05bb9b226fb3ab46575ef4d3a4973e923a87abd1609ab",
+  "pop_db_sha256_prefix": "8edd5c9838d50513"
+ }
+}
