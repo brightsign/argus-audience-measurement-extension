@@ -43,6 +43,7 @@
 #include <thread>
 
 #include "display/bridge_client.h"
+#include "display/bridge_supervisor.h"
 #include "display/display_frame_source.h"
 
 using json = nlohmann::json;
@@ -143,6 +144,10 @@ Cfg load_cfg(const std::string& path) {
         c.display.enabled = dp.value("enabled", false);
         c.display.backend = dp.value("backend", c.display.backend);
         c.display.bridge_socket = dp.value("bridge_socket", c.display.bridge_socket);
+        c.display.manage_bridge = dp.value("manage_bridge", c.display.manage_bridge);
+        c.display.bridge_binary = dp.value("bridge_binary", c.display.bridge_binary);
+        c.display.os_socket = dp.value("os_socket", c.display.os_socket);
+        c.display.interest_file = dp.value("interest_file", c.display.interest_file);
         c.display.poll_ms = std::max(50, std::min(2000, dp.value("poll_ms", c.display.poll_ms)));
         c.display.max_age_ms = std::max(200, std::min(10000, dp.value("max_age_ms", c.display.max_age_ms)));
         c.display.ring_frames = std::max(2, std::min(64, dp.value("ring_frames", c.display.ring_frames)));
@@ -300,6 +305,7 @@ struct App {
     std::string provider_kind = "auto";         // auto (rknn per config) | mock
 
     std::unique_ptr<argus_display::DisplayFrameSource> display;   // optional OS rendered-frame source (null when disabled)
+    std::unique_ptr<argus_display::BridgeSupervisor> bridge;      // supervised argus_display_bridge child (display.manage_bridge)
 
     std::mutex rd_mu;
     std::unique_ptr<VisualMemoryReader> reader;
@@ -1181,7 +1187,11 @@ Response route_display(App& a, const Request& rq) {
                                              {"detail", "visual_memory.display.enabled is false in the active configuration"}});
         return jerr(404, "display_disabled", "display output is not enabled (visual_memory.display.enabled)");
     }
-    if (sub == "status") return jok(a.display->status());
+    if (sub == "status") {
+        json st = a.display->status();
+        st["bridge"] = a.bridge ? a.bridge->status() : json{{"managed", false}};
+        return jok(st);
+    }
     if (sub == "frame.jpg") {
         a.display->touch_preview();
         argus_display::DisplayFrame f; int64_t age = 0; std::string why;
@@ -1290,6 +1300,13 @@ int main(int argc, char** argv) {
     std::signal(SIGTERM, on_signal); std::signal(SIGINT, on_signal); std::signal(SIGPIPE, SIG_IGN);
 
     if (app.cfg.display.enabled && app.cfg.display.backend == "bridge") {  // optional: OS rendered-frame source (no polling until a viewer or a PoP session needs it)
+        if (app.cfg.display.manage_bridge) {
+            const std::string bin = app.cfg.display.bridge_binary.empty() ? (app.base_dir.empty() ? std::string("argus_display_bridge") : app.base_dir + "/argus_display_bridge")
+                                                                          : app.cfg.display.bridge_binary;
+            app.bridge = std::make_unique<argus_display::BridgeSupervisor>(bin, std::vector<std::string>{
+                "--socket", app.cfg.display.bridge_socket, "--target", app.cfg.display.os_socket, "--interest-file", app.cfg.display.interest_file});
+            app.bridge->start();
+        }
         app.display = std::make_unique<argus_display::DisplayFrameSource>(
             app.cfg.display, std::make_unique<argus_display::BridgeClient>(app.cfg.display.bridge_socket, 1500, app.cfg.display.max_jpeg_bytes));
         app.display->start();
@@ -1340,6 +1357,7 @@ int main(int argc, char** argv) {
     janitor.join();
     if (app.pop) app.pop->stop();
     if (app.display) app.display->stop();
+    if (app.bridge) app.bridge->stop();
     for (int i = 0; i < 50 && g_conn.load() > 0; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(100));
     return 0;
 }

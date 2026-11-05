@@ -1,7 +1,11 @@
+# Build of the display-frame feature. Host (default): core + bridge + test double + unit tests. Cross build of just the bridge for the player:
+#   source <resilience sdk>/environment-setup-aarch64-oe-linux
+#   cmake -S tests/display -B build-bridge-xt5 -DDISPLAY_BUILD_TESTS=OFF -DCMAKE_TOOLCHAIN_FILE=$OECORE_NATIVE_SYSROOT/usr/share/cmake/OEToolchainConfig.cmake
 # Host build of the display-frame feature: core + bridge + test double + unit tests. Needs grpc++/protobuf/protoc/grpc_cpp_plugin.
 #   cmake -S tests/display -B build-display && cmake --build build-display -j && ctest --test-dir build-display
 cmake_minimum_required(VERSION 3.16)
 project(display_frames_host CXX)
+option(DISPLAY_BUILD_TESTS "Build the OS-service test double and the unit tests (host only)" ON)
 set(CMAKE_CXX_STANDARD 17)
 set(R ${CMAKE_CURRENT_SOURCE_DIR}/../..)
 find_package(Threads REQUIRED)
@@ -35,12 +39,13 @@ add_executable(argus_display_bridge ${R}/src/tools/display_grpc_bridge.cpp)
 target_include_directories(argus_display_bridge PRIVATE ${R}/src ${R}/include/3rdparty)
 target_link_libraries(argus_display_bridge PRIVATE display_core resilience_proto Threads::Threads)
 
+if(DISPLAY_BUILD_TESTS)
 add_executable(fake_rendered_output_server fake_rendered_output_server.cpp)
 target_include_directories(fake_rendered_output_server PRIVATE ${R}/include/3rdparty)
 target_link_libraries(fake_rendered_output_server PRIVATE resilience_proto Threads::Threads)
-
 find_package(GTest)
-if(GTest_FOUND)
+endif()
+if(DISPLAY_BUILD_TESTS AND GTest_FOUND)
   enable_testing()
   add_executable(display_source_tests test_display_source.cpp)
   target_include_directories(display_source_tests PRIVATE ${R}/src ${R}/include/3rdparty)

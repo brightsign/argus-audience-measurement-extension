@@ -277,7 +277,8 @@ if(ENABLE_VISUAL_MEMORY)
     # Dashboard API: read-only HTTP/JSON adapter over libvisualmemory's VisualMemoryReader. A separate
     # process (never on the capture thread); the dashboard-server proxies /api/vm/* to it (loopback only).
     find_package(Threads REQUIRED)
-    add_executable(vm_api_server src/tools/vm_api_server.cpp src/tools/pop_service.cpp)
+    add_executable(vm_api_server src/tools/vm_api_server.cpp src/tools/pop_service.cpp src/display/display_frame_source.cpp src/display/bridge_client.cpp)
+    target_include_directories(vm_api_server PRIVATE src)
     add_executable(vm_ingest_dir src/tools/vm_ingest_dir.cpp)   # dev/demo tool, not packaged
     target_link_libraries(vm_ingest_dir PRIVATE ${VM_LINK_LIB} Threads::Threads)
     if(ENABLE_VISUAL_EMBEDDINGS)

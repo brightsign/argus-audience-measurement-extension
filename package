@@ -305,6 +305,17 @@ copy_binaries() {
             fi
         done
 
+        # OS rendered-frame bridge (optional; the only gRPC component, built separately with the Resilience SDK:
+        # see docs/RESILIENCE_DISPLAY_FRAMES.md). Packaged only when present; vm_api_server starts it when visual_memory.display.enabled.
+        for _vdb in "${ARGUS_DISPLAY_BRIDGE:-}" "$source_dir/argus_display_bridge" "$build_dir/argus_display_bridge"; do
+            if [[ -n "$_vdb" && -f "$_vdb" ]]; then
+                cp "$_vdb" "$package_soc_dir/argus_display_bridge"
+                chmod +x "$package_soc_dir/argus_display_bridge"
+                log "  -> packaged argus_display_bridge from $_vdb"
+                break
+            fi
+        done
+
         # Copy image stream server binary
         if [[ -f "$source_dir/image-stream-server" ]]; then
             cp "$source_dir/image-stream-server" "$package_soc_dir/"

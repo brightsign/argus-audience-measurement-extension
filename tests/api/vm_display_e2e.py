@@ -21,6 +21,7 @@ API_BIN, BRIDGE_BIN, FAKE_BIN = sys.argv[1:4]
 PORT, PORT2 = 20451, 20452
 tmp = tempfile.mkdtemp(prefix="display_e2e_")
 procs, fails = [], []
+bridge_pid = -1
 
 
 def check(name, cond, extra=""):
@@ -119,7 +120,9 @@ def vm_cfg(display, port_name):
                                    "sd_path_prefix_from": "SD:/", "sd_path_prefix_to": sd + "/", "allow_test_jobs": True,
                                    "capture_backend": "resilience_grpc" if display else "brightscript_screenshot"}}}
     if display:
-        c["visual_memory"]["display"] = {"enabled": True, "bridge_socket": bsock, "poll_ms": 100, "max_age_ms": 1200}
+        # vm_api_server starts and supervises argus_display_bridge itself (manage_bridge), exactly as on the player
+        c["visual_memory"]["display"] = {"enabled": True, "bridge_socket": bsock, "poll_ms": 100, "max_age_ms": 1200, "bridge_binary": BRIDGE_BIN,
+                                         "os_socket": "unix://" + dsock, "interest_file": interest}
     p = os.path.join(tmp, f"cfg_{port_name}.json"); json.dump(c, open(p, "w"))
     return p
 
@@ -143,11 +146,11 @@ try:
     # ------------------------------------------------------------------ 1. start the chain
     fake = start([FAKE_BIN, "--socket", dsock, "--frames-dir", frames, "--interest-file", interest, "--control-file", control, "--stats-file", stats], "fake.log")
     check("fake OS service up", wait_until(lambda: os.path.exists(dsock), 8))
-    bridge = start([BRIDGE_BIN, "--socket", bsock, "--target", "unix://" + dsock, "--interest-file", interest], "bridge.log")
-    check("bridge up", wait_until(lambda: os.path.exists(bsock), 8))
     cfg = vm_cfg(True, "on")
     api = start([API_BIN, "--config", cfg, "--port", str(PORT), "--provider", "mock:64", "--status-file", os.path.join(tmp, "st1.json")], "api_on.log")
     check("vm_api_server up", wait_until(lambda: call(PORT, "GET", "/api/display/status")[0] == 200, 10))
+    check("the bridge was started and is supervised by vm_api_server", bool(wait_until(lambda: os.path.exists(bsock), 8)) and call(PORT, "GET", "/api/display/status")[1]["bridge"]["running"] is True)
+    bridge_pid = call(PORT, "GET", "/api/display/status")[1]["bridge"]["pid"]
 
     # ------------------------------------------------------------------ 2. interest gating: nothing runs without a viewer
     time.sleep(1.5)
@@ -243,10 +246,13 @@ try:
         return b if b["counters"]["service_restarts"] >= 1 and b["state"] == "ok" else None
     stt = wait_until(restarted, 12, 0.3)
     check("OS service restarts: reconnects by itself, new boot id counted, frames flow again", bool(stt) and get_frame()[0] == 200, call(PORT, "GET", "/api/display/status")[1]["counters"])
-    stop(bridge)
-    wait_until(lambda: (lambda b: b if b["state"] == "unavailable" else (get_frame() and None))(call(PORT, "GET", "/api/display/status")[1]), 6, 0.3)
-    bridge = start([BRIDGE_BIN, "--socket", bsock, "--target", "unix://" + dsock, "--interest-file", interest], "bridge2.log")
-    check("bridge restarts: recovers", bool(wait_until(lambda: get_frame()[0] == 200, 10, 0.3)))
+    os.kill(call(PORT, "GET", "/api/display/status")[1]["bridge"]["pid"], signal.SIGKILL)            # the bridge crashes
+    def bridge_back():
+        get_frame()
+        b = call(PORT, "GET", "/api/display/status")[1]
+        return b if b["bridge"]["restarts"] >= 1 and b["bridge"]["running"] and b["state"] == "ok" else None
+    bb = wait_until(bridge_back, 15, 0.3)
+    check("bridge killed: the supervisor restarts it and frames flow again", bool(bb) and get_frame()[0] == 200, call(PORT, "GET", "/api/display/status")[1]["bridge"])
 
     # ------------------------------------------------------------------ 6. Proof of Play with the resilience_grpc backend
     mono0 = time.time()
@@ -359,6 +365,12 @@ except BaseException:
     traceback.print_exc(); fails.append("the test aborted with an exception")
 finally:
     for p in procs: stop(p)
+    try:
+        alive = os.path.exists(f"/proc/{bridge_pid}") and open(f"/proc/{bridge_pid}/cmdline", "rb").read().startswith(BRIDGE_BIN.encode())
+    except Exception:
+        alive = False
+    print(("PASS" if not alive else "FAIL") + " stopping vm_api_server stops the supervised bridge (no orphan)")
+    if alive: fails.append("orphaned bridge")
     time.sleep(0.3)
     shutil.rmtree(tmp, ignore_errors=True)
     print("OK: 0 check(s) failed" if not fails else f"FAILED: {len(fails)} check(s): {fails}")

@@ -68,6 +68,10 @@ struct DisplayCfg {
     bool        enabled = false;                                  // visual_memory.display.enabled
     std::string backend = "bridge";                               // "bridge" (argus_display_bridge) | "none"
     std::string bridge_socket = "/tmp/argus_display_bridge.sock";
+    bool        manage_bridge = true;                             // vm_api_server runs argus_display_bridge as a supervised child
+    std::string bridge_binary;                                    // default: <base-dir>/argus_display_bridge
+    std::string os_socket = "unix:///run/brightsign/resilience/runtime_api.sock";   // OS RenderedOutputService
+    std::string interest_file = "/run/brightsign/resilience/rendered_frame.interest";
     int         poll_ms = 200;                                    // 50..2000; the OS producer runs at 5 FPS
     int         max_age_ms = 1200;                                // a frame older than this is not served as current
     int         ring_frames = 16;                                 // bounded in-memory ring (preview + Proof of Play window)
