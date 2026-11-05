@@ -191,7 +191,10 @@ void PopService::process_line(const std::string& line, int64_t read_utc_ms) {
     if (grpc_session && ev == "play_started" && display_) {
         std::lock_guard<std::mutex> pl(plan_mu_);
         auto it = plans_.find(sid);
-        if (it != plans_.end() && !it->second.started) { it->second.started = true; it->second.play_start_utc = utc; display_->hold(sid); }
+        if (it != plans_.end() && !it->second.started) {
+            it->second.started = true; it->second.play_start_utc = utc; it->second.ready_at_start = display_->ready(); it->second.prewarm_released = false;
+            display_->hold(sid);
+        }
     }
     e.detail_json = line.size() <= 4000 ? line : std::string("{}");
     std::string err;
@@ -262,6 +265,10 @@ void PopService::grpc_loop() {
         {   // plans that never started (the play never happened) or ran far past their slot are dropped, and the source released
             std::lock_guard<std::mutex> pl(plan_mu_);
             for (auto it = plans_.begin(); it != plans_.end();) {
+                if (!it->second.started && !it->second.prewarm_released && t - it->second.created_ms > static_cast<int64_t>(cfg_.grpc_prewarm_s) * 1000) {
+                    if (display_) display_->release(it->first);               // the player has not started: stop keeping the OS producer awake (re-held at play_started)
+                    it->second.prewarm_released = true;
+                }
                 const bool never = !it->second.started && t - it->second.created_ms > 600000;
                 const bool over = it->second.started && t - it->second.play_start_utc > it->second.slot_ms + 60000;
                 if (never || over) { if (display_) display_->release(it->first); it = plans_.erase(it); } else ++it;
@@ -279,23 +286,35 @@ void PopService::grpc_collect(const std::string& sid, bool final_pass, int64_t e
     for (size_t i = 0; i < p.offsets_ms.size(); ++i) {
         if (p.done[i]) continue;
         const int64_t tgt = p.play_start_utc + p.offsets_ms[i];
+        // An offset whose window reaches the nominal end of the slot is decided in the final pass, when the real end of the play is known (a frame
+        // captured around the end may already show what comes after the advertisement).
+        if (!final_pass && p.offsets_ms[i] + cfg_.grpc_after_ms + cfg_.grpc_end_guard_ms > p.slot_ms) continue;
         if (final_pass) {
             if (tgt > end_utc_ms) { std::lock_guard<std::mutex> pl(plan_mu_); plans_[sid].done[i] = 1; continue; }      // the play ended before this offset: no capture, as with screenshots
         } else if (now < tgt + 300) continue;                                          // wait until frames just after the target exist, then pick the closest
         bool done = false;
+        const int idx = static_cast<int>(i) + 1;
         if (p.break_capture) {
-            done = grpc_record(sid, static_cast<int>(i) + 1, p.offsets_ms[i], "display capture disabled by the break_capture test hook", nullptr, p.play_start_utc);
+            done = grpc_record(sid, idx, p.offsets_ms[i], "display capture disabled by the break_capture test hook", nullptr, p.play_start_utc);
         } else {
-            auto fr = display_->nearest(tgt, cfg_.grpc_before_ms, cfg_.grpc_after_ms);
+            // A frame is evidence only if it cannot belong to the time before the play or after it. Its true display moment lies in
+            // [capture - uncertainty, capture]; the start of the play is known to within the adapter's event timing (start guard).
+            const int64_t earliest = p.play_start_utc + cfg_.grpc_start_guard_ms;
+            const int64_t latest = (final_pass && end_utc_ms > 0) ? end_utc_ms - cfg_.grpc_end_guard_ms : INT64_MAX;
+            auto usable = [&](const argus_display::DisplayFrame& f) {
+                return f.capture_utc_ms - f.uncertainty_ms >= earliest && f.capture_utc_ms <= latest && f.uncertainty_ms <= cfg_.grpc_max_uncertainty_ms;
+            };
+            auto fr = display_->nearest_if(tgt, cfg_.grpc_before_ms, cfg_.grpc_after_ms, usable);
             if (fr) {
-                if (fr->uncertainty_ms > cfg_.grpc_max_uncertainty_ms)
-                    done = grpc_record(sid, static_cast<int>(i) + 1, p.offsets_ms[i], "display frame time uncertainty " + std::to_string(fr->uncertainty_ms) + " ms exceeds the limit", nullptr, p.play_start_utc);
-                else done = grpc_record(sid, static_cast<int>(i) + 1, p.offsets_ms[i], "", &*fr, p.play_start_utc);
+                done = grpc_record(sid, idx, p.offsets_ms[i], "", &*fr, p.play_start_utc);
             } else if (final_pass || now > tgt + cfg_.grpc_after_ms + 500) {
+                auto any = display_->nearest(tgt, cfg_.grpc_before_ms, cfg_.grpc_after_ms);
                 const auto st = display_->status();
-                done = grpc_record(sid, static_cast<int>(i) + 1, p.offsets_ms[i],
-                                   "no fresh display frame within " + std::to_string(cfg_.grpc_before_ms) + "/" + std::to_string(cfg_.grpc_after_ms) +
-                                   " ms of the target (display source: " + st.value("state", std::string("unknown")) + ")", nullptr, p.play_start_utc);
+                std::string why;
+                if (any && any->uncertainty_ms > cfg_.grpc_max_uncertainty_ms) why = "display frame time uncertainty " + std::to_string(any->uncertainty_ms) + " ms exceeds the limit";
+                else if (any) why = "transition-adjacent: the only frames near the target may belong to the time before or after the play (timing uncertain by up to " + std::to_string(any->uncertainty_ms) + " ms)";
+                else why = "no fresh display frame within " + std::to_string(cfg_.grpc_before_ms) + "/" + std::to_string(cfg_.grpc_after_ms) + " ms of the target (display source: " + st.value("state", std::string("unknown")) + ")";
+                done = grpc_record(sid, idx, p.offsets_ms[i], why, nullptr, p.play_start_utc);
             }
         }
         if (done) { std::lock_guard<std::mutex> pl(plan_mu_); auto it = plans_.find(sid); if (it != plans_.end()) it->second.done[i] = 1; }
@@ -315,7 +334,9 @@ bool PopService::grpc_record(const std::string& sid, int idx, int64_t target_ms,
     }
     in.actual_offset_ms = static_cast<int>(frame->capture_utc_ms - play_start_utc);
     in.took_ms = static_cast<int>(frame->acquire_ms); in.utc_ms = frame->capture_utc_ms; in.uncertainty_ms = static_cast<int>(frame->uncertainty_ms);
-    in.provenance = "weston_vop2_writeback (OS provider " + std::to_string(frame->provider) + "); approximate composed display output";
+    bool ready0 = false;
+    { std::lock_guard<std::mutex> pl(plan_mu_); auto it = plans_.find(sid); if (it != plans_.end()) ready0 = it->second.ready_at_start; }
+    in.provenance = "weston_vop2_writeback p" + std::to_string(frame->provider) + "; ready_at_start=" + (ready0 ? "1" : "0") + "; time bound=rpc+configured budget";
     in.jpeg.assign(frame->jpeg->begin(), frame->jpeg->end());
     std::string why2; bool done = false, stored = false;
     const bool have = run_ && run_([&](EmbeddingProvider& p) { stored = store_->add_evidence(p, in, out, err); done = true; }, why2);
@@ -339,7 +360,14 @@ bool PopService::schedule(const json& b, json& out, int& http, std::string& err)
     double slot = b.value("slot_s", exp.slot_s);
     if (!(slot >= 1 && slot <= 3600)) { err = "slot_s must be 1..3600"; return false; }
     std::vector<int64_t> offs;
-    if (b.contains("capture_offsets_s")) {
+    const bool dense = b.contains("capture_every_s");
+    if (dense) {
+        if (b.contains("capture_offsets_s")) { err = "give capture_every_s or capture_offsets_s, not both"; return false; }
+        const double every = b.value("capture_every_s", 0.0);
+        if (!(every >= 0.5 && every <= slot)) { err = "capture_every_s must be 0.5..slot_s"; return false; }
+        for (double t = every; t <= slot - 1.0 + 1e-9; t += every) offs.push_back(static_cast<int64_t>(t * 1000 + 0.5));
+        if (offs.empty() || static_cast<int>(offs.size()) > cfg_.grpc_max_dense_captures) { err = "capture_every_s would give 0 or more than " + std::to_string(cfg_.grpc_max_dense_captures) + " captures"; return false; }
+    } else if (b.contains("capture_offsets_s")) {
         if (!b["capture_offsets_s"].is_array() || b["capture_offsets_s"].size() > 10) { err = "capture_offsets_s must be an array of at most 10 numbers"; return false; }
         for (const auto& v : b["capture_offsets_s"]) {
             if (!v.is_number() || v.get<double>() < 0 || v.get<double>() > slot) { err = "capture offsets must be within the slot"; return false; }
@@ -358,15 +386,36 @@ bool PopService::schedule(const json& b, json& out, int& http, std::string& err)
     const std::string backend = b.value("capture_backend", cfg_.capture_backend);
     if (backend != "brightscript_screenshot" && backend != "resilience_grpc") { err = "capture_backend must be brightscript_screenshot or resilience_grpc"; return false; }
     const bool grpc = backend == "resilience_grpc";
+    if (dense && !(backend == "resilience_grpc")) { err = "capture_every_s is only available with capture_backend resilience_grpc"; return false; }
     if (grpc && !store_->schema_v2()) {
         err = "pop.db is schema 1 and is left untouched: set visual_memory.pop.allow_schema_upgrade to use capture_backend resilience_grpc"; http = 409; return false;
     }
     if (grpc && (!display_ || !display_->cfg().enabled)) {
         err = "capture_backend resilience_grpc needs visual_memory.display.enabled and the argus_display_bridge (OS Resilience rendered frames)"; http = 503; return false;
     }
+    bool prewarmed = false;
+    if (grpc) {
+        // Wake the OS producer now (it only captures while interest is signalled) and require a genuinely FRESH frame before the session is accepted, so the
+        // first seconds of the play are never lost to the producer's start-up (it answers UNAVAILABLE/STALE for ~1 s after waking).
+        const bool require_ready = b.value("require_ready", true);
+        if (!require_ready && !cfg_.allow_test_jobs) { err = "require_ready:false needs visual_memory.pop.allow_test_jobs"; http = 403; return false; }
+        display_->hold(sid); prewarmed = true;
+        bool ok = false; int64_t age = -1;
+        for (int waited = 0; waited <= cfg_.grpc_ready_timeout_ms && !ok; waited += 50) {
+            ok = display_->ready(&age);
+            if (!ok) std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+        if (!ok && require_ready) {
+            display_->release(sid);
+            const auto st = display_->status();
+            err = "display capture is not ready (OS service state: " + st.value("state", std::string("unknown")) + "): " + st.value("detail", std::string()) +
+                  ". No session was scheduled; check /api/display/status";
+            http = 503; return false;
+        }
+    }
     PopSession s; s.session_id = sid; s.job_id = "job-" + sid; s.expected_media_id = expected; s.slot_ms = static_cast<int64_t>(slot * 1000);
     s.captures_requested = static_cast<int>(offs.size()); s.source = cfg_.source_id; s.scheduled_utc_ms = now_ms();
-    if (!store_->schedule_session(s, err)) { http = err.find("exists") != std::string::npos ? 409 : 400; return false; }
+    if (!store_->schedule_session(s, err)) { if (prewarmed) display_->release(sid); http = err.find("exists") != std::string::npos ? 409 : 400; return false; }
 
     json job = {{"job_id", s.job_id}, {"session_id", sid}, {"media_id", play}, {"expected_media_id", expected}, {"media_file", pm.uri},
                 {"max_play_ms", s.slot_ms}, {"capture_offsets_ms", grpc ? std::vector<int64_t>{} : offs}, {"capture_width", 640}, {"capture_height", 400},
@@ -375,7 +424,7 @@ bool PopService::schedule(const json& b, json& out, int& http, std::string& err)
     if (interrupt >= 0) job["interrupt_at_ms"] = static_cast<int64_t>(interrupt * 1000);
     if (b.value("break_capture", false) && !grpc) job["capture_dir"] = "SD:/pop/no_such_dir";        // a real, failing Screenshot() call
     char name[96]; std::snprintf(name, sizeof(name), "%013lld_%s.json", static_cast<long long>(now_ms()), sid.c_str());
-    if (!write_text_atomic(fs::path(cfg_.jobs_dir) / name, job.dump())) { err = "cannot write the job file into " + cfg_.jobs_dir; http = 503; return false; }
+    if (!write_text_atomic(fs::path(cfg_.jobs_dir) / name, job.dump())) { if (prewarmed) display_->release(sid); err = "cannot write the job file into " + cfg_.jobs_dir; http = 503; return false; }
     if (grpc) {
         GrpcPlan gp; gp.offsets_ms = offs; gp.done.assign(offs.size(), 0); gp.slot_ms = s.slot_ms; gp.created_ms = now_ms(); gp.break_capture = b.value("break_capture", false);
         std::lock_guard<std::mutex> pl(plan_mu_);

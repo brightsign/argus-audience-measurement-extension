@@ -241,16 +241,29 @@ bool DisplayFrameSource::newer_than(uint64_t seq, DisplayFrame& out, int64_t& ag
 }
 
 std::optional<DisplayFrame> DisplayFrameSource::nearest(int64_t target_utc_ms, int64_t before_ms, int64_t after_ms) {
+    return nearest_if(target_utc_ms, before_ms, after_ms, nullptr);
+}
+
+std::optional<DisplayFrame> DisplayFrameSource::nearest_if(int64_t target_utc_ms, int64_t before_ms, int64_t after_ms, const std::function<bool(const DisplayFrame&)>& usable) {
     std::lock_guard<std::mutex> lk(mu_);
     const DisplayFrame* best = nullptr;
     int64_t bd = INT64_MAX;
     for (const auto& f : ring_) {
         const int64_t d = f.capture_utc_ms - target_utc_ms;
         if (d < -before_ms || d > after_ms) continue;
+        if (usable && !usable(f)) continue;
         if (std::llabs(d) < bd) { bd = std::llabs(d); best = &f; }
     }
     if (!best) return std::nullopt;
     return *best;
+}
+
+bool DisplayFrameSource::ready(int64_t* age_ms) {
+    std::lock_guard<std::mutex> lk(mu_);
+    if (state_ != "ok" || ring_.empty()) return false;
+    const int64_t age = mono_ms() - ring_.back().capture_mono_ms;
+    if (age_ms) *age_ms = age;
+    return age <= cfg_.max_age_ms;
 }
 
 json DisplayFrameSource::status() {
@@ -296,6 +309,7 @@ json DisplayFrameSource::status() {
     std::string dh = state_ == "ok" ? "available" : (state_ == "idle" ? (ring_.empty() ? "idle" : "idle") : state_ == "stale" ? "stale" : "unavailable");
     if (state_ == "ok" && !ring_.empty() && now - ring_.back().capture_mono_ms > cfg_.max_age_ms) dh = "stale";
     j["display_health"] = dh;
+    j["ready"] = state_ == "ok" && !ring_.empty() && now - ring_.back().capture_mono_ms <= cfg_.max_age_ms;
     return j;
 }
 

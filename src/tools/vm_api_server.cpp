@@ -40,6 +40,7 @@
 #include <map>
 #include <mutex>
 #include <sstream>
+#include <sys/stat.h>
 #include <thread>
 
 #include "display/bridge_client.h"
@@ -64,7 +65,7 @@ int64_t steady_ms() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 
-std::atomic<bool> g_stop{false};
+std::atomic<bool> g_stop{false}, g_reexec{false};
 void on_signal(int) { g_stop = true; }
 
 // ---------------------------------------------------------------- configuration
@@ -137,6 +138,12 @@ Cfg load_cfg(const std::string& path) {
         c.pop.thresholds.min_play_ratio = th.value("min_play_ratio", c.pop.thresholds.min_play_ratio);
         c.pop.thresholds.min_match_fraction = th.value("min_match_fraction", c.pop.thresholds.min_match_fraction);
         c.pop.allow_schema_upgrade = pp.value("allow_schema_upgrade", false);
+        c.pop.storage_root = pp.value("storage_root", std::string());
+        c.pop.grpc_start_guard_ms = std::max(0, std::min(5000, pp.value("grpc_start_guard_ms", c.pop.grpc_start_guard_ms)));
+        c.pop.grpc_end_guard_ms = std::max(0, std::min(5000, pp.value("grpc_end_guard_ms", c.pop.grpc_end_guard_ms)));
+        c.pop.grpc_ready_timeout_ms = std::max(0, std::min(30000, pp.value("grpc_ready_timeout_ms", c.pop.grpc_ready_timeout_ms)));
+        c.pop.grpc_prewarm_s = std::max(5, std::min(1800, pp.value("grpc_prewarm_s", c.pop.grpc_prewarm_s)));
+        c.pop.grpc_max_dense_captures = std::max(3, std::min(120, pp.value("grpc_max_dense_captures", c.pop.grpc_max_dense_captures)));
         c.pop.capture_backend = pp.value("capture_backend", c.pop.capture_backend);          // brightscript_screenshot | resilience_grpc
         c.pop.grpc_before_ms = std::max(0, std::min(5000, pp.value("grpc_window_before_ms", c.pop.grpc_before_ms)));
         c.pop.grpc_after_ms = std::max(0, std::min(10000, pp.value("grpc_window_after_ms", c.pop.grpc_after_ms)));
@@ -1284,6 +1291,7 @@ int main(int argc, char** argv) {
     App app;
     int port = 20310;
     std::string cfg_path;
+    bool no_reexec = false;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
         auto next = [&]() -> std::string { return i + 1 < argc ? argv[++i] : ""; };
@@ -1295,6 +1303,7 @@ int main(int argc, char** argv) {
         else if (a == "--base-dir") app.base_dir = next();
         else if (a == "--provider") app.provider_kind = next();      // auto | mock (dev/tests only)
         else if (a == "--root") { app.cfg.storage_root = next(); }   // dev: bypass config
+        else if (a == "--no-reexec") no_reexec = true;               // do not restart in place when the config file changes
         else { std::fprintf(stderr, "usage: vm_api_server --config <argus-config.json> [--port N] [--status-file F] [--base-dir D] [--provider auto|mock]\n"); return 2; }
     }
     if (!cfg_path.empty()) { const std::string root = app.cfg.storage_root; app.cfg = load_cfg(cfg_path); if (!root.empty()) app.cfg.storage_root = root; }
@@ -1328,13 +1337,16 @@ int main(int argc, char** argv) {
             }
             why = "NPU busy"; return false;
         };
-        app.pop = std::make_unique<argus_pop::PopService>(app.cfg.pop, app.cfg.storage_root, runner);
+        // Proof of Play can keep its database, references and evidence in its own directory (visual_memory.pop.storage_root), so a test or a
+        // schema upgrade never touches the Visual Memory store or an existing pop.db there.
+        const std::string pop_root = app.cfg.pop.storage_root.empty() ? app.cfg.storage_root : app.cfg.pop.storage_root;
+        app.pop = std::make_unique<argus_pop::PopService>(app.cfg.pop, pop_root, runner);
         if (app.display) app.pop->set_display(app.display.get());
         std::string perr;
         if (!app.pop->start(perr)) { std::fprintf(stderr, "vm_api_server: Proof of Play store unavailable: %s\n", perr.c_str()); app.pop.reset(); }
     }
 
-    int ls = ::socket(AF_INET, SOCK_STREAM, 0);
+    int ls = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
     int one = 1; setsockopt(ls, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
     sockaddr_in addr{}; addr.sin_family = AF_INET; addr.sin_port = htons(static_cast<uint16_t>(port));
     addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);                       // loopback ONLY
@@ -1344,7 +1356,31 @@ int main(int argc, char** argv) {
     std::fprintf(stderr, "vm_api_server: 127.0.0.1:%d configured=%d search=%d config=%s\n", port,
                  app.cfg.configured, app.cfg.vector_search && app.cfg.embedding, app.cfg.config_path.c_str());
 
-    std::thread janitor([&] { while (!g_stop) { for (int i = 0; i < 50 && !g_stop; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(100)); app.maybe_unload(); } });
+    // Config changes need no root shell: when the config file changes (and is valid JSON) this process finishes its work and re-executes itself in
+    // place (same PID, so the start script's pidfile stays valid). The bridge child is stopped first. A half-written or invalid file is ignored.
+    struct stat st0{}; const bool have_cfg = !cfg_path.empty() && ::stat(cfg_path.c_str(), &st0) == 0;
+    int64_t seen_mtime_ns = have_cfg ? st0.st_mtim.tv_sec * 1000000000LL + st0.st_mtim.tv_nsec : 0; off_t seen_size = have_cfg ? st0.st_size : 0;
+    std::thread janitor([&] {
+        int tick = 0;
+        while (!g_stop) {
+            for (int i = 0; i < 10 && !g_stop; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            if (++tick % 5 == 0) app.maybe_unload();
+            if (!no_reexec && have_cfg && tick % 2 == 0) {                              // every 2 s
+                struct stat st{};
+                if (::stat(cfg_path.c_str(), &st) == 0 && (st.st_mtim.tv_sec * 1000000000LL + st.st_mtim.tv_nsec != seen_mtime_ns || st.st_size != seen_size)) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1500));      // let a copy finish
+                    struct stat st2{};
+                    if (::stat(cfg_path.c_str(), &st2) == 0 && st2.st_size == st.st_size) {
+                        bool valid = false;
+                        try { std::ifstream f(cfg_path); json::parse(f, nullptr, true, true); valid = true; } catch (...) {}
+                        seen_mtime_ns = st2.st_mtim.tv_sec * 1000000000LL + st2.st_mtim.tv_nsec; seen_size = st2.st_size;
+                        if (valid) { std::fprintf(stderr, "vm_api_server: configuration changed, restarting in place\n"); g_reexec = true; g_stop = true; }
+                        else std::fprintf(stderr, "vm_api_server: configuration changed but is not valid JSON yet; keeping the running configuration\n");
+                    }
+                }
+            }
+        }
+    });
     while (!g_stop) {
         pollfd p{ls, POLLIN, 0};
         if (::poll(&p, 1, 200) <= 0) continue;
@@ -1360,5 +1396,12 @@ int main(int argc, char** argv) {
     if (app.display) app.display->stop();
     if (app.bridge) app.bridge->stop();
     for (int i = 0; i < 50 && g_conn.load() > 0; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    if (g_reexec.load()) {                                                  // new configuration: start again from scratch with the same arguments
+        app.pop.reset(); app.display.reset(); app.bridge.reset();
+        std::vector<char*> av; for (int i = 0; i < argc; ++i) av.push_back(argv[i]); av.push_back(nullptr);
+        ::execv("/proc/self/exe", av.data());
+        std::perror("vm_api_server: re-exec failed");
+        return 1;
+    }
     return 0;
 }

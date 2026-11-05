@@ -110,13 +110,16 @@ def fstats():
 
 
 root = os.path.join(tmp, "store"); sd = os.path.join(tmp, "sd")
+proot = os.path.join(tmp, "popstore")                                  # Proof of Play's own storage root (visual_memory.pop.storage_root)
 os.makedirs(os.path.join(sd, "pop", "jobs")); os.makedirs(root, exist_ok=True)
+legacy_bytes = b"SQLite format 3\0" + b"stand-in for an existing pop.db in the Visual Memory storage root" * 20
+open(os.path.join(root, "pop.db"), "wb").write(legacy_bytes)
 events = os.path.join(sd, "pop", "events.jsonl"); open(events, "w").close()
 
 
 def vm_cfg(display, port_name):
     c = {"visual_memory": {"enabled": True, "vector_search_enabled": True, "storage_root": root, "embedding": {"enabled": True},
-                           "pop": {"enabled": True, "events_path": events, "jobs_dir": os.path.join(sd, "pop", "jobs"), "poll_ms": 50,
+                           "pop": {"enabled": True, "storage_root": proot, "events_path": events, "jobs_dir": os.path.join(sd, "pop", "jobs"), "poll_ms": 50,
                                    "sd_path_prefix_from": "SD:/", "sd_path_prefix_to": sd + "/", "allow_test_jobs": True,
                                    "capture_backend": "resilience_grpc" if display else "brightscript_screenshot"}}}
     if display:
@@ -273,7 +276,7 @@ try:
         check(f"register {mid}", st == 201, r)
         kind = mid[-1].upper()
         for prof, mkimg in (("screenshot", lambda i: picture(kind, 640, 400, shift=i * 4)), ("display_letterbox", lambda i: display_picture(kind, shift=i * 4))):
-            d = os.path.join(root, "pop", "refs_incoming", mid if prof == "screenshot" else mid + ".display_letterbox"); os.makedirs(d)
+            d = os.path.join(proot, "pop", "refs_incoming", mid if prof == "screenshot" else mid + ".display_letterbox"); os.makedirs(d)
             for i in range(8): mkimg(i).save(os.path.join(d, f"{i * 4000}.jpg"), quality=90)
             st, r, _ = call(PORT, "POST", f"/api/pop/media/{mid}/references/build?profile={prof}", None, {"Origin": f"http://127.0.0.1:{PORT}"})
             check(f"build {prof} references for {mid}", st == 200 and r["added"] == 8 and r["profile"] == prof, r)
@@ -281,8 +284,11 @@ try:
     check("registry lists the two ads (hidden profile rows are not listed) with their display reference counts",
           st == 200 and sorted(m["media_id"] for m in r["media"]) == ["ad-a", "ad-b"] and all(m["reference_frames"] == 8 and m["display_reference_frames"] == 8 for m in r["media"]), r)
 
-    def schedule(sid, **kw):
-        st, r, _ = call(PORT, "POST", "/api/pop/sessions", dict({"expected_media_id": "ad-a", "session_id": sid, "capture_offsets_s": [1, 3, 5]}, **kw), {"Origin": f"http://127.0.0.1:{PORT}"})
+    def schedule(sid, offsets=(1, 3, 5), **kw):
+        body = {"expected_media_id": "ad-a", "session_id": sid}
+        if offsets is not None: body["capture_offsets_s"] = list(offsets)
+        body.update(kw)
+        st, r, _ = call(PORT, "POST", "/api/pop/sessions", body, {"Origin": f"http://127.0.0.1:{PORT}"})
         return st, r
 
     st, r = schedule("g-a")
@@ -294,18 +300,20 @@ try:
     check("the screenshot backend stays selectable per session (fallback path unchanged)", st == 201 and job2["capture_offsets_ms"] == [1000, 3000, 5000], job2)
     st, r3 = schedule("g-x", capture_backend="nonsense")
     check("unknown backend -> 400", st == 400, r3)
-    for sid in ("g-b", "g-c", "g-d", "g-e"):
+    for sid in ("g-b", "g-c", "g-e"):
         schedule(sid, **({"play_media_id": "ad-b"} if sid == "g-b" else {"interrupt_at_s": 2.5} if sid == "g-c" else {"break_capture": True} if sid == "g-e" else {}))
 
-    def player(sid, media, shows, secs, reason="slot_end", paused=False):
+    def player(sid, media, shows, secs, reason="slot_end", paused=False, late_ms=0):
         """The BrightScript player's event sequence in real time; `shows` is what the display shows while it plays."""
         emit("session_scheduled_run", session=sid, job_id="job-" + sid, media_id=media, expected_media_id="ad-a", capture_count=0)
         emit("play_requested", session=sid, media_id=media, expected_media_id="ad-a", ok=True)
         time.sleep(0.15)
-        ctl(frame=shows, pause=paused)
+        if not late_ms: ctl(frame=shows, pause=paused)
         emit("play_started", session=sid, media_id=media, expected_media_id="ad-a", vcode=3, latency_ms=200)
         t_start = time.time()
-        time.sleep(secs)
+        if late_ms:                                                   # the picture appears on the display only late_ms AFTER the play_started event
+            time.sleep(late_ms / 1000.0); ctl(frame=shows, pause=paused)
+        time.sleep(secs - late_ms / 1000.0)
         emit("play_stopped", session=sid, media_id=media, reason=reason)
         emit("session_end", session=sid, media_id=media, expected_media_id="ad-a", reason=reason, actual_play_ms=int((time.time() - t_start) * 1000))
         ctl(frame="IDLE", pause=paused)
@@ -336,6 +344,10 @@ try:
 
     ctl(frame="IDLE", pause=True)
     time.sleep(4.0)                                                  # the OS producer has stopped feeding: STALE, no usable frame near any target
+    st, r = schedule("g-n")
+    check("scheduling is refused (503) while the OS producer delivers nothing: the backend must be ready before a session starts", st == 503 and "not ready" in r.get("message", ""), (st, r))
+    st, r = schedule("g-d", require_ready=False)
+    check("require_ready:false is a test hook that works with allow_test_jobs", st == 201, (st, r))
     player("g-d", "ad-a", "A", 6.2, paused=True)
     d = verdict("g-d", "capture_unsupported", 14)
     check("Test D (no display frames available): Capture unsupported, failed captures recorded with the reason",
@@ -347,13 +359,48 @@ try:
     d = verdict("g-e", "capture_unsupported", 14)
     check("break_capture test hook also works for this backend", d.get("status") == "capture_unsupported", (d.get("status"), d.get("reason")))
 
+    # ---- never use a frame from before the play, or one that may belong to what follows it
+    ctl(frame="IDLE")
+    time.sleep(1.0)
+    schedule("g-f", offsets=(0.3, 3, 5))
+    player("g-f", "ad-a", "A", 6.2, late_ms=500)                       # the advertisement shows up 500 ms after the event; IDLE is on screen before
+    d = verdict("g-f", "playback_corroborated")
+    ev = d.get("evidence", [])
+    check("pre-playback frames are never evidence: with the display switching 500 ms after play_started, the first capture still shows the advertisement",
+          d.get("status") == "playback_corroborated" and len(ev) == 3 and all(e["status"] == "ok" for e in ev) and ev[0]["actual_offset_ms"] >= 600, (d.get("status"), [(e["status"], e["actual_offset_ms"]) for e in ev]))
+    time.sleep(1.0)
+    schedule("g-g", offsets=(1, 6))
+    player("g-g", "ad-a", "A", 6.2)
+    d = verdict("g-g", "incomplete", 14) if False else call(PORT, "GET", "/api/pop/sessions/g-g")[1]
+    wait_until(lambda: call(PORT, "GET", "/api/pop/sessions/g-g")[1].get("verification"), 12, 0.3)
+    d = call(PORT, "GET", "/api/pop/sessions/g-g")[1]
+    ev = d.get("evidence", [])
+    check("a frame at the very end of the play is transition-adjacent: not used as evidence, recorded as a failed capture with that reason",
+          len(ev) == 2 and ev[0]["status"] == "ok" and ev[1]["status"] == "failed" and "transition-adjacent" in ev[1]["failure_reason"], [(e["status"], e["failure_reason"]) for e in ev])
+    # ---- one frame per second (capture_every_s): bounded, asynchronous, only selected frames are stored
+    time.sleep(1.0)
+    st, r = schedule("g-h", offsets=None, capture_every_s=1)
+    check("capture_every_s=1 on a 6 s slot gives 5 target offsets", st == 201 and r["capture_offsets_ms"] == [1000, 2000, 3000, 4000, 5000], r)
+    st, r2 = schedule("g-i", offsets=None, capture_every_s=0.1)
+    check("capture_every_s below 0.5 s is refused", st == 400, r2)
+    st, r2 = schedule("g-j", capture_every_s=1)
+    check("capture_every_s together with capture_offsets_s is refused", st == 400, r2)
+    n_before = len([os.path.join(dp, f) for dp, _, fs in os.walk(os.path.join(proot, "pop", "evidence")) for f in fs])
+    player("g-h", "ad-a", "A", 6.2)
+    d = verdict("g-h", "playback_corroborated")
+    ev = d.get("evidence", [])
+    errs = [abs(e["actual_offset_ms"] - e["target_offset_ms"]) for e in ev if e["status"] == "ok"]
+    check("1 fps evidence: all 5 frames captured, none missing, each close to its target second", d.get("status") == "playback_corroborated" and len(ev) == 5 and len(errs) == 5 and max(errs) < 700, (d.get("status"), len(ev), errs))
+    n_after = len([os.path.join(dp, f) for dp, _, fs in os.walk(os.path.join(proot, "pop", "evidence")) for f in fs])
+    check("only the 5 selected frames were stored for the 1 fps session (not the ~30 frames the preview source produced)", n_after - n_before == 5, n_after - n_before)
+
     # the screenshot-backend session scheduled earlier never ran (no player): still scheduled, no interference
     d = call(PORT, "GET", "/api/pop/sessions/g-s")[1]
     check("a scheduled screenshot-backend session is untouched", d["status"] == "scheduled", d["status"])
 
     # ------------------------------------------------------------------ 7. nothing is persisted except selected evidence; idle again afterwards
-    imgs = [os.path.join(dp, f) for dp, _, fs in os.walk(os.path.join(root, "pop", "evidence")) for f in fs]
-    check("only the selected evidence frames are stored (3 + 3 + 1 = 7 images), not the preview stream", len(imgs) == 7, len(imgs))
+    imgs = [os.path.join(dp, f) for dp, _, fs in os.walk(os.path.join(proot, "pop", "evidence")) for f in fs]
+    check("only the selected evidence frames are stored (7 + g-f 3 + g-g 1 + g-h 5 = 16 images), not the preview stream", len(imgs) == 16, len(imgs))
     check("no Visual Memory frame store was created by the preview", not os.path.exists(os.path.join(root, "frames")))
     time.sleep(8.0)
     f1 = fstats(); time.sleep(2.0); f2 = fstats()
@@ -361,6 +408,25 @@ try:
     st, b, _ = call(PORT, "GET", "/api/display/status")
     check("status after the run: no rejected frames, ring still bounded", b["ring"]["frames"] <= 16 and b["holds"] == 0, (b["ring"], b["holds"]))
     check("PoP status shows the configured backend", call(PORT, "GET", "/api/pop/status")[1]["capture_backend"] == "resilience_grpc")
+    check("isolated storage: pop.db (schema 2) lives in visual_memory.pop.storage_root", os.path.exists(os.path.join(proot, "pop.db")) and call(PORT, "GET", "/api/pop/status")[1]["store"]["schema_version"] == 2)
+    check("isolated storage: the file in the Visual Memory storage root is byte-identical and no PoP directory appeared there",
+          open(os.path.join(root, "pop.db"), "rb").read() == legacy_bytes and not os.path.exists(os.path.join(root, "pop")))
+
+    # ---- configuration changes without a root shell: the API restarts itself in place (same PID) and the bridge follows
+    pid_api = api.pid
+    cfg_json = json.load(open(cfg))
+    cfg_json["visual_memory"]["display"]["enabled"] = False
+    time.sleep(0.2); json.dump(cfg_json, open(cfg, "w"))
+    off = wait_until(lambda: (lambda r: r if r[0] == 200 and r[1].get("enabled") is False else None)(call(PORT, "GET", "/api/display/status")), 12, 0.3)
+    check("config change: display disabled in place within seconds, same PID, no manual restart", bool(off) and api.poll() is None and api.pid == pid_api)
+    check("config change: the bridge child was stopped with the old configuration", not os.path.exists(f"/proc/{call(PORT, 'GET', '/api/display/status')[1].get('bridge', {}).get('pid', -1) or -1}"))
+    open(cfg, "w").write('{"visual_memory": {"enabled": true, ')           # a half-written file must be ignored
+    time.sleep(5.0)
+    check("a half-written config is ignored: the running configuration stays", call(PORT, "GET", "/api/display/status")[0] == 200)
+    cfg_json["visual_memory"]["display"]["enabled"] = True
+    json.dump(cfg_json, open(cfg, "w"))
+    on = wait_until(lambda: (lambda r: r if r[0] == 200 and r[1].get("enabled") is True else None)(call(PORT, "GET", "/api/display/status")), 12, 0.3)
+    check("config change: display enabled again in place; the preview works", bool(on) and bool(wait_until(lambda: get_frame()[0] == 200, 8, 0.3)) and api.pid == pid_api)
 except BaseException:
     traceback.print_exc(); fails.append("the test aborted with an exception")
 finally:

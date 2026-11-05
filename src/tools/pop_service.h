@@ -33,11 +33,17 @@ struct PopCfg {
     uint64_t    evidence_max_bytes = 512ull * 1024 * 1024;
     int         evidence_retention_days = 30;
     bool        allow_test_jobs = false;                           // play a media other than the expected one, interrupt, break capture
+    std::string storage_root;                                          // visual_memory.pop.storage_root: own directory (pop.db, refs, evidence). Empty = visual_memory.storage_root
     bool        allow_schema_upgrade = false;                      // upgrade an existing schema-1 pop.db to schema 2 (needed for resilience_grpc evidence)
     std::string capture_backend = "brightscript_screenshot";       // or "resilience_grpc" (OS rendered frames, needs visual_memory.display.enabled)
     int         grpc_before_ms = 300;                              // accept a display frame this long before the target offset ...
     int         grpc_after_ms = 800;                               // ... or this long after it
     int         grpc_max_uncertainty_ms = 1500;                    // reject a frame whose time uncertainty exceeds this
+    int         grpc_start_guard_ms = 400;                         // the earliest possible display moment of a frame must be this long after the play_started event
+    int         grpc_end_guard_ms = 400;                           // ... and its capture must be this long before the play end (transition-adjacent frames are not evidence)
+    int         grpc_ready_timeout_ms = 4000;                      // scheduling waits this long for a fresh display frame before refusing (require_ready)
+    int         grpc_prewarm_s = 120;                              // keep the OS producer awake this long between scheduling and the player starting
+    int         grpc_max_dense_captures = 60;                      // upper bound for capture_every_s sessions
     visualmemory::VerifyThresholds thresholds;
 };
 
@@ -107,7 +113,7 @@ private:
         std::vector<int64_t> offsets_ms;
         std::vector<char> done;
         int64_t slot_ms = 0, play_start_utc = 0, created_ms = 0;
-        bool started = false, break_capture = false;
+        bool started = false, break_capture = false, ready_at_start = false, prewarm_released = false;
     };
     argus_display::DisplayFrameSource* display_ = nullptr;
     std::mutex plan_mu_;

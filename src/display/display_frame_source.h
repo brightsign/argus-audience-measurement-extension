@@ -19,6 +19,7 @@
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -117,7 +118,11 @@ public:
     bool newer_than(uint64_t seq, DisplayFrame& out, int64_t& age_ms);
     // The frame closest to `target_utc_ms` inside [target - before_ms, target + after_ms], if any.
     std::optional<DisplayFrame> nearest(int64_t target_utc_ms, int64_t before_ms, int64_t after_ms);
+    // Same, but only frames accepted by `usable` (e.g. not transition-adjacent) are considered.
+    std::optional<DisplayFrame> nearest_if(int64_t target_utc_ms, int64_t before_ms, int64_t after_ms, const std::function<bool(const DisplayFrame&)>& usable);
 
+    // True only when the OS service is delivering: state ok, a frame newer than max_age_ms, accepted provenance, same clock. Never true from stale data.
+    bool ready(int64_t* age_ms = nullptr);
     nlohmann::json status();
     const DisplayCfg& cfg() const { return cfg_; }
 
