@@ -369,8 +369,8 @@ try:
     check("pre-playback frames are never evidence: with the display switching 500 ms after play_started, the first capture still shows the advertisement",
           d.get("status") == "playback_corroborated" and len(ev) == 3 and all(e["status"] == "ok" for e in ev) and ev[0]["actual_offset_ms"] >= 600, (d.get("status"), [(e["status"], e["actual_offset_ms"]) for e in ev]))
     time.sleep(1.0)
-    schedule("g-g", offsets=(1, 6))
-    player("g-g", "ad-a", "A", 6.2)
+    schedule("g-g", offsets=(1, 5.95))
+    player("g-g", "ad-a", "A", 6.0)       # target 5.95 s is always before the end (6.0 s); latest usable capture = end - 400 ms guard = 5.6 s < window start (5.95 - 0.3 = 5.65 s): deterministic
     d = verdict("g-g", "incomplete", 14) if False else call(PORT, "GET", "/api/pop/sessions/g-g")[1]
     wait_until(lambda: call(PORT, "GET", "/api/pop/sessions/g-g")[1].get("verification"), 12, 0.3)
     d = call(PORT, "GET", "/api/pop/sessions/g-g")[1]

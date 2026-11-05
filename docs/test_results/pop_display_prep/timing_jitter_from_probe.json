@@ -1,0 +1,10 @@
+{
+ "frames": 91,
+ "slope": 0.9996,
+ "residual_std_ms": 37,
+ "residual_p5_ms": -34,
+ "residual_p95_ms": 30,
+ "residual_min_ms": -192,
+ "residual_max_ms": 128,
+ "video_match_resolution_ms": 40
+}

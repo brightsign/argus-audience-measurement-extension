@@ -3,7 +3,7 @@
 #   make_reference_frames.sh <video|rtsp-url> <out_dir> [interval_s] [max_seconds] [profile]
 #   profile "screenshot" (default): 640x400, aspect not preserved (matches roVideoMode.Screenshot() of a 1280x800 output).
 #   profile "display_letterbox": 640x360 canvas with the picture scaled to 576x360 and centred on black (matches the OS rendered frames:
-#            the 1280x800 display letterboxed into 640x360). ASSUMED transform: confirm on the XT5 by comparing the first reference with a
+#            the 1280x800 display letterboxed into 640x360). VALIDATED geometry (native top-left crop of a 1920x1080 rectangle, median MSE 17.4 on real frames); still compare the first reference with a
 #            real frame before trusting verdicts. Copy these to <store>/pop/refs_incoming/<media_id>.display_letterbox/ and build with
 #            POST /api/pop/media/<id>/references/build?profile=display_letterbox.
 # Writes <out_dir>/<offset_ms>.jpg at the display-capture geometry (640x400, aspect NOT preserved: the player's
@@ -12,7 +12,7 @@
 src="$1"; out="$2"; every="${3:-1}"; maxs="${4:-0}"; profile="${5:-screenshot}"
 case "$profile" in
   screenshot)        vf_scale="scale=640:400" ;;
-  display_letterbox) vf_scale="scale=576:360,pad=640:360:32:0:black" ;;
+  display_letterbox) vf_scale="scale=1920:1080,crop=1280:800:0:0,scale=576:360:flags=lanczos,pad=640:360:32:0:black" ;;  # validated on real XT5 frames (scripts/pop/validate_display_geometry.py)
   *) echo "unknown profile '$profile' (screenshot|display_letterbox)" >&2; exit 2 ;;
 esac
 [ -n "$src" ] && [ -n "$out" ] || { echo "usage: $0 <video|rtsp-url> <out_dir> [interval_s] [max_seconds]" >&2; exit 2; }

@@ -585,7 +585,7 @@ json PopService::system_json() {
     }
     out["loadavg"] = slurp("/proc/loadavg").substr(0, 24);
     {   // per-process counters for the processes that matter to the audience pipeline and to D5
-        static const char* names[] = {"attention_demo", "image-stream-se", "dashboard-serve", "vm_api_server", "argus-exporter", "mosquitto", "bs-resilience-ap", "BrightSign"};
+        static const char* names[] = {"attention_demo", "image-stream-se", "dashboard-serve", "vm_api_server", "argus-exporter", "mosquitto", "bs-resilience-ap", "BrightSign", "argus_display_b", "bs-rendered-fra", "weston"};
         json procs = json::array();
         std::error_code ec;
         for (auto it = fs::directory_iterator("/proc", ec); !ec && it != fs::directory_iterator(); it.increment(ec)) {
