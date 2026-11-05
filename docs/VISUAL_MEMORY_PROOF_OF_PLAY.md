@@ -29,7 +29,7 @@ dashboard-server ──proxy /api/pop/*──► vm_api_server                  
 | Mechanism | Result on the XT5 (BrightSignOS 9.1.139) |
 |---|---|
 | **BrightScript `roVideoPlayer`, local MP4** | **Works and is the validated path.** `PlayFile({Filename:"x.mp4"})`; events through `roMessagePort`: code 3 = playing (arrives ~270 ms after the request), 8 = media ended; `roVideoEvent` has `GetInt()`/`GetData()` only (no `GetMessage()`). 1080p25 and 2160p30 H.264 both play and are captured. |
-| **BrightScript `roVideoPlayer`, RTSP** | **Works, with a firmware quirk:** `PlayFile({Url:"rtsp://…"})` returns true; `{Filename:"rtsp://…"}` and a plain string both return **false** (the documentation example is wrong for this firmware). `GetStreamInfo()` then reports H264 1920x1080, 29.97 fps, encapsulation RTSP. |
+| **BrightScript `roVideoPlayer`, RTSP** | **Works for the one source tested (an H.264 1080p RTSP publisher on the LAN), with a firmware quirk:** `PlayFile({Url:"rtsp://…"})` returns true; `{Filename:"rtsp://…"}` and a plain string both return **false** (the documentation example is wrong for this firmware). `GetStreamInfo()` then reports H264 1920x1080, 29.97 fps, encapsulation RTSP. |
 | **HTML5 / JS (`roHtmlWidget`, `<video>`)** | **Not validated.** The resilience extension's autorun notes that enabling `brightsign_js_objects_enabled` suppressed widget events on this firmware family; an HTML playback path would need its own event bridge and its own capture test. Treated as unsupported until tested (VM-19). |
 | **Screenshot of the output** | See below. |
 
@@ -49,7 +49,7 @@ dashboard-server ──proxy /api/pop/*──► vm_api_server                  
 ## Playback event contract (adapter input)
 One JSON object per line in `events_path`. The BrightScript application has **no wall clock** on this firmware (`roDateTime` is epoch 0, `roSystemTime` fails; VM-16), so every event
 carries `mono_ms` (ms since the application started) and the adapter assigns UTC = `anchor + mono_ms`, where `anchor` is the smallest `(time read − mono_ms)` seen since the last
-`boot` event. Wall-clock error ≈ one poll period (200 ms) plus the player's flush delay.
+`boot` event. The wall-clock error is **bounded by design** at about one poll period (200 ms) plus the player's flush delay (a few ms for a flushed line); it was **not independently measured** against a reference clock on the XT5 (a quantitative check needs a clock the player and host both observe). Events read long after they were written (adapter down) are stamped late.
 
 | `ev` | Meaning / fields |
 |---|---|
@@ -98,7 +98,7 @@ otherwise *inconclusive*. Session status, in this priority order:
 | Visual match | screenshots match but the events do not (yet) show a complete play |
 | Playback reported | playback reported; screenshots missing or inconclusive |
 
-Partial screenshot loss does not change the verdict; the reason notes how many failed. Defaults: `match_sim 0.80`, `reject_sim 0.60`, `margin 0.05`, `min_play_ratio 0.90`, `min_match_fraction 0.60` (VM-20).
+Partial screenshot loss does not change the verdict; the reason notes how many failed. Defaults: `match_sim 0.80`, `reject_sim 0.60`, `margin 0.05`, `min_play_ratio 0.90`, `min_match_fraction 0.60` (VM-20). **Evidence base:** 3 screenshots of Ad A (similarity 0.900-0.992, lowest on the fast neon-logo animation at 3 s), 3 screenshots of Ad B played while A was expected (0.573-0.592), 3 RTSP screenshots (0.924-0.969 against same-time frames, 0.767-0.783 against stale ones). The gap between 0.592 and 0.900 is wide for these two clips, but nine frames from two advertisements are **not** a statistically calibrated operating point; look-alike advertisements, very short or static scenes and other content have not been tested.
 
 ## Dashboard
 The **Proof of Play** tab replaces the old preview page: status/adapter chips, a *schedule a play* form (test hooks only with `allow_test_jobs`), the **playback history** (filters, CSV export), the
@@ -136,7 +136,7 @@ Timeline of `xt5-a1` (player clock): scheduled run +0 ms, `PlayFile` +149 ms, st
 | NPU load core 0 / 1 / 2 (sampled at 1 Hz) | 79 / 0 / 0 % | 79 / 0 / 0 % |
 | SoC temperature | 35.8 °C | 36.0 °C |
 
-A screenshot takes 290-380 ms inside the player application (BrightScript) and SQLite writes happen in the separate `vm_api_server` process; the presentation did not stall (play time 30,015-30,510 ms of a 30,000 ms slot) and
+NPU load was sampled at 1 Hz and the PoP embeddings run in ~120 ms bursts on core 1, so the 0 % mean for core 1 means 'not visible at this sampling rate', not 'unused'. A screenshot takes 290-380 ms inside the player application (BrightScript) and SQLite writes happen in the separate `vm_api_server` process; the presentation did not stall (play time 30,015-30,510 ms of a 30,000 ms slot) and
 Argus kept 29 FPS. Embedding a reference frame takes ~120 ms (122 frames in 14.5 s).
 
 ## Run it
@@ -149,10 +149,14 @@ Argus kept 29 FPS. Embedding a reference frame takes ~120 ms (122 frames in 14.5
 ## Rollback (development XT5)
 * **Autorun:** the original presentation script is `/storage/sd/autorun.brs.pre-d5` (sha256 `83076b0b4c6b71e7d2d05bb9b226fb3ab46575ef4d3a4973e923a87abd1609ab`). Restore it over `autorun.brs` (or delete `SD:/pop/enabled`), then reboot.
 * **Configuration:** the original is `/storage/sd/configs/argus-config.json.pre-d5` (sha256 `fd984a47b87459bec8c7feb6b4394d4300b9f5326a836b8a2a3e5811ab6c7c94`). Copy it over `argus-config.json` and reboot.
-* **Extension:** previous packages stay on the SD card (`argus-ext-1793816098.zip` = the D1-D4 build, `…800886`, `…779707`). In a root shell: `bsext_init stop`, `cd /usr/local && unzip -o /storage/sd/<zip> && bash ./ext_npu_argus_install-lvm.sh`, then a **full reboot**
+* **Extension:** previous packages stay on the SD card (`argus-ext-1793816098.zip` = the D1-D3 build (D4 was only run from /tmp on spare ports and is first installed as part of the D5 package, disabled by default), `…800886`, `…779707`). In a root shell: `bsext_init stop`, `cd /usr/local && unzip -o /storage/sd/<zip> && bash ./ext_npu_argus_install-lvm.sh`, then a **full reboot**
   (the DWS call `PUT /api/v1/control/reboot` or `reboot`; leaving the root shell with `exit` restarts only the player software and does not re-mount the replaced extension volume).
 * Data written by D5 lives in `<storage_root>/pop.db` and `<storage_root>/pop/`; deleting them removes all D5 data and nothing else.
 
+## Privacy of the data D5 creates
+Screenshots, reference frames and (with Visual Memory enabled) the audience-camera frames can show identifiable people: the reference clips and the RTSP source used in the validation contain people. `pop/evidence/` and `pop/refs/` are
+subject to the retention settings above, but `pop/refs/` and `pop/refs_incoming/` are not pruned automatically. Keep screenshots, stores and `pop.db` out of Git and delete the store directory when a validation ends.
+
 ## Limitations
 See `libs/visual-memory/BACKLOG.md` VM-16…VM-20: no wall clock in BrightScript (adapter-assigned UTC), `Screenshot()` completes asynchronously, live streams need same-time references, only file and RTSP playback were validated,
-thresholds are calibrated on two advertisements, and the DWS credential must never be stored in the repository (the validation used `~/.bsp_dws_pw` on the host only).
+thresholds are calibrated on two advertisements, and DWS credentials must never be stored in the repository (the validation read them from an owner-only file on the host).
