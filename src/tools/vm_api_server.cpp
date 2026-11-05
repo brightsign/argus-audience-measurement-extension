@@ -12,6 +12,7 @@
 #include "visualmemory/mock_embedding_provider.h"
 #include "visualmemory/object_index.h"
 #include "visualmemory/reader.h"
+#include "pop_service.h"
 #ifdef ARGUS_VISUAL_EMBEDDINGS
 #include "rknn_embedding_provider.h"
 #endif
@@ -82,6 +83,7 @@ struct Cfg {
     uint64_t    objects_max_regions = 10000;
     int         objects_retention_days = 30;
     int         objects_min_roi_px = 16;
+    argus_pop::PopCfg pop;                    // visual_memory.pop.* (D5 Proof of Play; off by default)
     std::string config_path;
     std::string read_error;
 };
@@ -112,6 +114,23 @@ Cfg load_cfg(const std::string& path) {
         c.objects_max_regions = ob.value("max_regions", static_cast<uint64_t>(10000));
         c.objects_retention_days = ob.value("retention_days", 30);
         c.objects_min_roi_px = std::max(8, std::min(256, ob.value("min_roi_px", 16)));
+        const json pp = vm.value("pop", json::object());
+        c.pop.enabled = pp.value("enabled", false);
+        c.pop.events_path = pp.value("events_path", c.pop.events_path);
+        c.pop.jobs_dir = pp.value("jobs_dir", c.pop.jobs_dir);
+        c.pop.source_id = pp.value("source_id", c.pop.source_id);
+        c.pop.sd_from = pp.value("sd_path_prefix_from", c.pop.sd_from);       // BrightScript "SD:/" -> Linux path
+        c.pop.sd_to = pp.value("sd_path_prefix_to", c.pop.sd_to);
+        c.pop.poll_ms = std::max(50, std::min(5000, pp.value("poll_ms", 200)));
+        c.pop.evidence_max_bytes = pp.value("evidence_max_bytes", c.pop.evidence_max_bytes);
+        c.pop.evidence_retention_days = pp.value("evidence_retention_days", 30);
+        c.pop.allow_test_jobs = pp.value("allow_test_jobs", false);
+        const json th = pp.value("thresholds", json::object());
+        c.pop.thresholds.match_sim = th.value("match_sim", c.pop.thresholds.match_sim);
+        c.pop.thresholds.reject_sim = th.value("reject_sim", c.pop.thresholds.reject_sim);
+        c.pop.thresholds.margin = th.value("margin", c.pop.thresholds.margin);
+        c.pop.thresholds.min_play_ratio = th.value("min_play_ratio", c.pop.thresholds.min_play_ratio);
+        c.pop.thresholds.min_match_fraction = th.value("min_match_fraction", c.pop.thresholds.min_match_fraction);
         const json a = vm.value("api", json::object());
         c.npu_core = a.value("npu_core", 1);
         c.search_timeout_ms = std::max(1000, std::min(60000, a.value("search_timeout_ms", 10000)));
@@ -287,6 +306,8 @@ struct App {
         if (!objects && why) *why = "object index unavailable: " + obj_err;
         return objects.get();
     }
+
+    std::unique_ptr<argus_pop::PopService> pop;   // D5 (null unless visual_memory.pop.enabled)
 
     std::mutex prov_mu;
     std::shared_ptr<EmbeddingProvider> provider;
@@ -936,8 +957,146 @@ Response handle_object_search(App& a, const Request& rq, int fd) {
     Response r = jok(out); r.status = http; return r;
 }
 
+// ---------------------------------------------------------------- D5 Proof of Play (/api/pop/*)
+std::vector<std::string> split_path(const std::string& s) {
+    std::vector<std::string> v; std::string cur;
+    for (char c : s) { if (c == '/') { if (!cur.empty()) v.push_back(cur); cur.clear(); } else cur += c; }
+    if (!cur.empty()) v.push_back(cur);
+    return v;
+}
+bool safe_id(const std::string& s) {
+    if (s.empty() || s.size() > 64) return false;
+    for (unsigned char c : s) if (!(std::isalnum(c) || c == '.' || c == '_' || c == '-')) return false;
+    return s != "." && s != "..";
+}
+Response jpeg_response(const std::vector<uint8_t>& b) {
+    Response r; r.ctype = "image/jpeg"; r.cache = "private, max-age=300";
+    r.body.assign(reinterpret_cast<const char*>(b.data()), b.size());
+    return r;
+}
+json media_to_json(const MediaAsset& m) {
+    return {{"media_id", m.media_id}, {"display_name", m.display_name}, {"kind", m.kind}, {"uri", m.uri}, {"sha256", m.sha256}, {"codec", m.codec},
+            {"duration_s", m.duration_s}, {"slot_s", m.slot_s}, {"width", m.width}, {"height", m.height}, {"fps", m.fps},
+            {"created_utc_ms", m.created_utc_ms}, {"updated_utc_ms", m.updated_utc_ms}, {"reference_frames", m.reference_frames}};
+}
+
+Response route_pop(App& a, const Request& rq) {
+    const bool get = rq.method == "GET" || rq.method == "HEAD", post = rq.method == "POST";
+    const std::vector<std::string> seg = split_path(rq.path.substr(8));                 // after "/api/pop"
+    if (seg.empty()) return jerr(404, "not_found", "unknown route");
+    if (seg[0] == "status") {
+        if (!get) return jerr(405, "method_not_allowed", "GET only");
+        if (!a.pop || !a.cfg.pop.enabled) return jok({{"enabled", false}, {"message", "Proof of Play is not enabled (visual_memory.pop.enabled)"}});
+        return jok(a.pop->status());
+    }
+    if (!a.pop || !a.cfg.pop.enabled) return jerr(503, "not_enabled", "Proof of Play is not enabled (visual_memory.pop.enabled)");
+    argus_pop::PopService& ps = *a.pop;
+    if (seg[0] == "system") return get ? jok(ps.system_json()) : jerr(405, "method_not_allowed", "GET only");
+    PopStore& st = ps.store();
+
+    if (seg[0] == "media") {
+        if (seg.size() == 1) {
+            if (get) { json arr = json::array(); for (const auto& m : st.list_media()) arr.push_back(media_to_json(m)); return jok({{"media", arr}}); }
+            if (!post) return jerr(405, "method_not_allowed", "GET or POST only");
+            json b = json::parse(rq.body, nullptr, false);
+            if (!b.is_object()) return jerr(400, "invalid_argument", "expected a JSON object");
+            MediaAsset m; m.media_id = b.value("media_id", std::string()); m.display_name = b.value("display_name", std::string());
+            m.kind = b.value("kind", std::string("file")); m.uri = b.value("uri", std::string()); m.sha256 = b.value("sha256", std::string());
+            m.codec = b.value("codec", std::string()); m.duration_s = b.value("duration_s", 0.0); m.slot_s = b.value("slot_s", 30.0);
+            m.width = b.value("width", 0); m.height = b.value("height", 0); m.fps = b.value("fps", 0.0);
+            std::string err;
+            if (!st.register_media(m, err)) return jerr(400, "invalid_argument", err);
+            MediaAsset out; st.get_media(m.media_id, out);
+            Response r = jok(media_to_json(out)); r.status = 201; return r;
+        }
+        if (!safe_id(seg[1])) return jerr(400, "invalid_argument", "bad media id");
+        if (seg.size() == 2) {
+            if (!get) return jerr(405, "method_not_allowed", "GET only");
+            MediaAsset m; if (!st.get_media(seg[1], m)) return jerr(404, "not_found", "unknown media");
+            return jok(media_to_json(m));
+        }
+        if (seg[2] == "references") {
+            if (seg.size() == 3) {
+                if (!get) return jerr(405, "method_not_allowed", "GET only");
+                json arr = json::array();
+                for (const auto& r : st.list_references(seg[1]))
+                    arr.push_back({{"ref_id", r.ref_id}, {"offset_ms", r.offset_ms}, {"width", r.width}, {"height", r.height},
+                                   {"image_url", "/api/pop/media/" + seg[1] + "/references/" + std::to_string(r.ref_id) + "/image"}});
+                return jok({{"media_id", seg[1]}, {"references", arr}});
+            }
+            if (seg.size() == 4 && seg[3] == "build") {
+                if (!post) return jerr(405, "method_not_allowed", "POST only");
+                json out; int http = 400; std::string err;
+                if (!ps.build_references(seg[1], out, http, err, rq.query.count("replace") && rq.query.at("replace") == "1")) return jerr(http, http == 404 ? "not_found" : http == 503 ? "provider_unavailable" : "invalid_argument", err);
+                return jok(out);
+            }
+            if (seg.size() == 5 && seg[4] == "image") {
+                int64_t id; if (!get || !parse_i64(seg[3], id)) return jerr(400, "invalid_argument", "bad reference id");
+                std::vector<uint8_t> b; if (!st.reference_jpeg(id, b)) return jerr(404, "not_found", "no such reference image");
+                return jpeg_response(b);
+            }
+        }
+        return jerr(404, "not_found", "unknown route");
+    }
+
+    if (seg[0] == "sessions") {
+        if (seg.size() == 1) {
+            if (post) {
+                json b = json::parse(rq.body, nullptr, false);
+                json out; int http = 400; std::string err;
+                if (!ps.schedule(b, out, http, err)) return jerr(http, http == 404 ? "not_found" : http == 403 ? "forbidden" : http == 409 ? "conflict" : http == 503 ? "unavailable" : "invalid_argument", err);
+                Response r = jok(out); r.status = 201; return r;
+            }
+            if (!get) return jerr(405, "method_not_allowed", "GET or POST only");
+            SessionFilter f; f.expected_media_id = rq.query.count("media_id") ? rq.query.at("media_id") : "";
+            f.status = rq.query.count("status") ? rq.query.at("status") : "";
+            int64_t v;
+            if (rq.query.count("start_utc_ms") && parse_i64(rq.query.at("start_utc_ms"), v)) f.start_utc_ms = v;
+            if (rq.query.count("end_utc_ms") && parse_i64(rq.query.at("end_utc_ms"), v)) f.end_utc_ms = v;
+            if (!f.status.empty()) { PopStatus tmp; if (!parse_pop_status(f.status, tmp)) return jerr(400, "invalid_argument", "unknown status"); }
+            int64_t lim = 50, off = 0;
+            if (rq.query.count("limit") && (!parse_i64(rq.query.at("limit"), lim) || lim < 1 || lim > 500)) return jerr(400, "invalid_argument", "limit must be 1..500");
+            if (rq.query.count("offset") && (!parse_i64(rq.query.at("offset"), off) || off < 0)) return jerr(400, "invalid_argument", "bad offset");
+            uint64_t total = 0; json arr = json::array();
+            for (const auto& s : st.list_sessions(f, static_cast<int>(lim), static_cast<int>(off), &total)) arr.push_back(ps.session_json(s));
+            return jok({{"total", total}, {"limit", lim}, {"offset", off}, {"sessions", arr}});
+        }
+        if (seg[1] == "export.csv") {
+            if (!get) return jerr(405, "method_not_allowed", "GET only");
+            SessionFilter f; f.expected_media_id = rq.query.count("media_id") ? rq.query.at("media_id") : ""; f.status = rq.query.count("status") ? rq.query.at("status") : "";
+            Response r; r.ctype = "text/csv; charset=utf-8"; r.body = ps.export_csv(f); return r;
+        }
+        if (!safe_id(seg[1])) return jerr(400, "invalid_argument", "bad session id");
+        if (seg.size() == 2 || (seg.size() == 3 && seg[2] == "export")) {
+            if (!get) return jerr(405, "method_not_allowed", "GET only");
+            bool found = false; json d = ps.session_detail(seg[1], &found);
+            if (!found) return jerr(404, "not_found", "unknown session");
+            Response r = jok(d);
+            if (seg.size() == 3) r.cache = "no-store";
+            return r;
+        }
+        if (seg.size() == 3 && seg[2] == "verify") {
+            if (!post) return jerr(405, "method_not_allowed", "POST only");
+            json out; int http = 400; std::string err;
+            if (!ps.verify(seg[1], out, http, err)) return jerr(http, http == 404 ? "not_found" : "internal", err);
+            return jok(out);
+        }
+        if (seg.size() == 5 && seg[2] == "evidence" && seg[4] == "image") {
+            int64_t id; if (!get || !parse_i64(seg[3], id)) return jerr(400, "invalid_argument", "bad evidence id");
+            std::vector<uint8_t> b;
+            bool owns = false;
+            for (const auto& e : st.list_evidence(seg[1])) if (e.evidence_id == id) owns = true;
+            if (!owns) return jerr(404, "not_found", "no such evidence in this session");
+            if (!st.evidence_jpeg(id, b)) return jerr(410, "image_expired", "screenshot is no longer retained");
+            return jpeg_response(b);
+        }
+    }
+    return jerr(404, "not_found", "unknown route");
+}
+
 Response route(App& a, const Request& rq, int fd) {
     const std::string& p = rq.path;
+    if (p.rfind("/api/pop/", 0) == 0) return route_pop(a, rq);
     if (p.rfind("/api/vm/", 0) != 0) return jerr(404, "not_found", "unknown route");
     const std::string sub = p.substr(8);
     const bool get = rq.method == "GET" || rq.method == "HEAD", post = rq.method == "POST";
@@ -1018,6 +1177,26 @@ int main(int argc, char** argv) {
     if (!cfg_path.empty()) { const std::string root = app.cfg.storage_root; app.cfg = load_cfg(cfg_path); if (!root.empty()) app.cfg.storage_root = root; }
     std::signal(SIGTERM, on_signal); std::signal(SIGINT, on_signal); std::signal(SIGPIPE, SIG_IGN);
 
+    if (app.cfg.configured && app.cfg.pop.enabled) {                       // D5: PoP store + playback-event adapter
+        auto runner = [&app](const std::function<void(EmbeddingProvider&)>& fn, std::string& why) {
+            for (int i = 0; i < 200; ++i) {                                // single-flight with searches (the NPU context is shared)
+                bool e = false;
+                if (app.searching.compare_exchange_strong(e, true)) {
+                    std::shared_ptr<EmbeddingProvider> p = app.get_provider(why);
+                    bool ok = false;
+                    if (p) { fn(*p); ok = true; }
+                    app.last_search_ms = steady_ms(); app.searching = false;
+                    return ok;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            }
+            why = "NPU busy"; return false;
+        };
+        app.pop = std::make_unique<argus_pop::PopService>(app.cfg.pop, app.cfg.storage_root, runner);
+        std::string perr;
+        if (!app.pop->start(perr)) { std::fprintf(stderr, "vm_api_server: Proof of Play store unavailable: %s\n", perr.c_str()); app.pop.reset(); }
+    }
+
     int ls = ::socket(AF_INET, SOCK_STREAM, 0);
     int one = 1; setsockopt(ls, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
     sockaddr_in addr{}; addr.sin_family = AF_INET; addr.sin_port = htons(static_cast<uint16_t>(port));
@@ -1040,6 +1219,7 @@ int main(int argc, char** argv) {
     }
     ::close(ls);
     janitor.join();
+    if (app.pop) app.pop->stop();
     for (int i = 0; i < 50 && g_conn.load() > 0; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(100));
     return 0;
 }

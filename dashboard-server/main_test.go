@@ -198,3 +198,34 @@ func TestUpstreamDown(t *testing.T) {
 		t.Errorf("502 mapping: %d %s", w.Code, w.Body)
 	}
 }
+
+func TestPopEndpointsPostPolicy(t *testing.T) {
+	h, s := handler(t, "")
+	allowed := []string{"/api/pop/media", "/api/pop/sessions", "/api/pop/media/ad-a/references/build", "/api/pop/sessions/s1/verify"}
+	for _, p := range allowed {
+		n := s.n
+		if w := do(h, "POST", p, []byte(`{"expected_media_id":"ad-a"}`), okOrigin); w.Code != 200 || s.n != n+1 {
+			t.Errorf("POST %s: %d", p, w.Code)
+		}
+		if w := do(h, "POST", p, []byte(`{}`), nil); w.Code != 403 {
+			t.Errorf("POST %s without origin: %d", p, w.Code)
+		}
+		if w := do(h, "POST", p, make([]byte, vmObjMaxBody+1), okOrigin); w.Code != 413 {
+			t.Errorf("POST %s oversize: %d", p, w.Code)
+		}
+	}
+	for _, p := range []string{"/api/pop/status", "/api/pop/media/ad-a", "/api/pop/media/ad-a/references", "/api/pop/media/a/b/references/build",
+		"/api/pop/sessions/s1", "/api/pop/sessions/s1/export", "/api/pop/sessions/s1/evidence/1/image", "/api/pop/sessions/export.csv", "/api/pop/sessions/verify"} {
+		if w := do(h, "POST", p, []byte("{}"), okOrigin); w.Code != 405 {
+			t.Errorf("POST %s: got %d want 405", p, w.Code)
+		}
+	}
+	for _, m := range []string{"DELETE", "PUT", "PATCH"} {
+		if w := do(h, m, "/api/pop/sessions/s1", nil, okOrigin); w.Code != 405 {
+			t.Errorf("%s: %d", m, w.Code)
+		}
+	}
+	if w := do(h, "GET", "/api/pop/sessions/s1/evidence/1/image", nil, nil); w.Code != 200 {
+		t.Errorf("GET image: %d", w.Code)
+	}
+}

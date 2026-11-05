@@ -33,6 +33,17 @@
       "max_regions": 10000,
       "retention_days": 30,
       "min_roi_px": 16
+    },
+    "pop": {
+      "enabled": false,
+      "events_path": "/storage/sd/pop/events.jsonl",
+      "jobs_dir": "/storage/sd/pop/jobs",
+      "source_id": "main_display",
+      "poll_ms": 200,
+      "evidence_max_bytes": 536870912,
+      "evidence_retention_days": 30,
+      "allow_test_jobs": false,
+      "thresholds": { "match_sim": 0.80, "reject_sim": 0.60, "margin": 0.05, "min_play_ratio": 0.90, "min_match_fraction": 0.60 }
     }
   },
 

@@ -761,7 +761,7 @@
       const on = a.dataset.tab === view; a.classList.toggle("active", on);
       if (on) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
     });
-    const titles = { audience: "Audience Measurement", memory: "Visual Memory", search: "Visual Search", pop: "Proof of Play (preview)" };
+    const titles = { audience: "Audience Measurement", memory: "Visual Memory", search: "Visual Search", pop: "Proof of Play" };
     document.title = "Argus — " + titles[view];
     if (view === "memory") { initMemory(); memGallery.load(); renderMemStatus(); }
     if (view === "search") {
@@ -772,6 +772,7 @@
       else if (prm.get("mode") === "objects") { setSearchMode("objects"); history.replaceState(null, "", "#search"); }
       else setSearchMode(searchMode);
     }
+    if (view === "pop" && window.VMUI && window.VMUI.pop) window.VMUI.pop();
     if (view === "audience") window.dispatchEvent(new Event("resize"));
     window.scrollTo(0, 0);
   }
@@ -780,6 +781,8 @@
     makeTimeFilter, sourceSelect, makeGallery, openDetail, onStatus, pollStatus, refreshTs, tzSubscribe: (f) => tz.subs.push(f),
     showSearchMode: (m) => setSearchMode(m), objects: null,
     registerObjects(o) { VMUI.objects = o; if (SR.built) setSearchMode(searchMode); },
+    pop: null,
+    registerPop(show) { VMUI.pop = show; if (currentView === "pop") show(); },
   };
   window.addEventListener("hashchange", route);
   onStatus(renderPill);

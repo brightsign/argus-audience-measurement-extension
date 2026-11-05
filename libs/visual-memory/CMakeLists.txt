@@ -123,6 +123,8 @@ add_library(visualmemory STATIC
     src/search_core.cpp
     src/reader.cpp
     src/object_index.cpp
+    src/pop_store.cpp
+    src/pop_verify.cpp
 )
 add_library(visualmemory::visualmemory ALIAS visualmemory)
 

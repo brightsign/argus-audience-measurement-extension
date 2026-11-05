@@ -70,9 +70,12 @@ std::string FileStore::make_relative_path(const std::string& source_id,
     gmtime_r(&t, &tmv);
 #endif
     char buf[512];
-    std::snprintf(buf, sizeof(buf), "frames/%04d/%s/%s/%s/%lld_%llu_%016llx.jpg",
+    // Hourly partition (VM-15): frames/YYYY/MM/DD/HH/<source>/ keeps every directory far below the FAT32 entry limit
+    // even at sub-second sustained capture. Older stores used frames/YYYY/MM/DD/<source>/; both layouts coexist because
+    // the database keeps the full relative path of every frame.
+    std::snprintf(buf, sizeof(buf), "frames/%04d/%s/%s/%s/%s/%lld_%llu_%016llx.jpg",
                   tmv.tm_year + 1900, two(tmv.tm_mon + 1).c_str(),
-                  two(tmv.tm_mday).c_str(), sanitise_segment(source_id).c_str(),
+                  two(tmv.tm_mday).c_str(), two(tmv.tm_hour).c_str(), sanitise_segment(source_id).c_str(),
                   static_cast<long long>(capture_utc_ms),
                   static_cast<unsigned long long>(seq),
                   static_cast<unsigned long long>(random64()));

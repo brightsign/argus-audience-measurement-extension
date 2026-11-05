@@ -130,6 +130,15 @@ flowchart TD
 | `visual_memory.objects.max_regions` | int | `10000` | Cap on indexed regions; the oldest-indexed regions beyond it are deleted when a new one is added. Independent of the frame JPEG quota and retention. |
 | `visual_memory.objects.retention_days` | int | `30` | Regions indexed longer ago than this are deleted (retention follows when a region was indexed, not the parent frame's capture time). `0` = keep. |
 | `visual_memory.objects.min_roi_px` | int | `16` | Smallest accepted selection side, in stored-image pixels (8..256). |
+| `visual_memory.pop.enabled` | bool | `false` | D5 Proof of Play (read by `vm_api_server`, not by the Argus capture process). Starts the playback-event adapter and enables `/api/pop/*` and the dashboard's Proof of Play page. Needs `visual_memory.enabled` and Stage 2 embeddings (the MobileNetV2 model embeds display screenshots). Data is stored in `<storage_root>/pop.db` and `<storage_root>/pop/` (separate from `visual_memory.db`). Needs a player application that writes playback events and screenshots (`scripts/pop/pop_autorun.brs`). |
+| `visual_memory.pop.events_path` | string | `/storage/sd/pop/events.jsonl` | JSON-lines file the player application appends playback events to; the adapter tails it (offset persisted in `<storage_root>/pop/adapter_state.json`). |
+| `visual_memory.pop.jobs_dir` | string | `/storage/sd/pop/jobs` | Directory the scheduler writes play jobs into for the player application. |
+| `visual_memory.pop.source_id` | string | `main_display` | Source name of the display-capture evidence (also the directory name in `pop/evidence/YYYY/MM/DD/HH/<source>/`). |
+| `visual_memory.pop.poll_ms` | int | `200` | Event file poll period (50..5000). It bounds the wall-clock accuracy of event times. |
+| `visual_memory.pop.evidence_max_bytes` | int | `536870912` | Cap on retained screenshot bytes; the oldest screenshots are deleted first. Rows, embeddings and scores stay. Independent of the Visual Memory frame quota. |
+| `visual_memory.pop.evidence_retention_days` | int | `30` | Screenshots older than this are deleted (`0` = keep). |
+| `visual_memory.pop.allow_test_jobs` | bool | `false` | Lets `POST /api/pop/sessions` play a media other than the expected one, interrupt early or break screenshots (used for the wrong-ad / interrupted / missing-evidence scenarios). Leave off in production. |
+| `visual_memory.pop.thresholds.*` | float | `match_sim 0.80`, `reject_sim 0.60`, `margin 0.05`, `min_play_ratio 0.90`, `min_match_fraction 0.60` | Verification decision thresholds (see `docs/VISUAL_MEMORY_PROOF_OF_PLAY.md`). Calibrated on the XT5 with two advertisements; recalibrate for new content.
 
 #### Video File (Testing)
 

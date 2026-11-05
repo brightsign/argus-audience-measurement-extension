@@ -133,6 +133,28 @@ applies. Scores are cosine similarities of image embeddings, **not identificatio
 POST only on `/api/vm/search/*`, `/api/vm/objects` and `/api/vm/objects/search` (same-origin required; object bodies are
 capped at 16 KiB). No route accepts a filesystem path.
 
+## D5 Proof of Play endpoints (optional; `visual_memory.pop.enabled`, off by default)
+Served by the same `vm_api_server` and proxied by the dashboard server under `/api/pop/` with the same rules (POST only on the routes
+marked POST, same-origin required, 16 KiB body cap, token if configured). When disabled, `GET /api/pop/status` answers `{"enabled":false}`
+and every other route answers `503 not_enabled`. Full description: `docs/VISUAL_MEMORY_PROOF_OF_PLAY.md`.
+
+| Route | Purpose |
+|---|---|
+| `GET /api/pop/status` | Store counters, adapter state (events ingested, errors, last message), thresholds, evidence source. |
+| `GET /api/pop/system` | Read-only snapshot for performance work: system CPU jiffies, MemAvailable, per-process CPU jiffies/RSS for the Argus processes, NPU load, temperatures. |
+| `GET /api/pop/media`, `POST /api/pop/media` | List / register (upsert) an advertisement: `media_id, display_name, kind(file\|rtsp), uri, sha256, codec, duration_s, slot_s, width, height, fps`. |
+| `GET /api/pop/media/{id}`, `GET .../references` | Asset and its reference frames (`ref_id, offset_ms, image_url`). |
+| `POST /api/pop/media/{id}/references/build[?replace=1]` | Embeds every `<store>/pop/refs_incoming/<id>/<offset_ms>.jpg` into the reference library (`replace=1` first clears the old set: live sources). |
+| `GET /api/pop/media/{id}/references/{ref_id}/image` | Reference frame JPEG. |
+| `GET /api/pop/sessions?media_id&status&start_utc_ms&end_utc_ms&limit&offset` | Playback history with the verdict (`status`, `status_label`, `reason`, counters). |
+| `POST /api/pop/sessions` | Schedule a play: `{expected_media_id, session_id?, slot_s?, capture_offsets_s?}` (+ test hooks `play_media_id, interrupt_at_s, break_capture` when `allow_test_jobs`). Writes the job file for the player application; 201. |
+| `GET /api/pop/sessions/{id}` (`/export`) | Session, events, evidence, reference frames of the expected media and the stored verification with per-frame scores. |
+| `POST /api/pop/sessions/{id}/verify` | Re-run the verification with the current thresholds. |
+| `GET /api/pop/sessions/{id}/evidence/{evidence_id}/image` | Display screenshot JPEG (410 once retention removed it). |
+| `GET /api/pop/sessions/export.csv[?media_id&status]` | One CSV row per session. |
+
+Status values: `scheduled`, `playback_reported`, `visual_match`, `playback_corroborated`, `mismatch`, `incomplete`, `capture_unsupported`.
+
 ## Proxy-level responses (dashboard-server, before the request reaches `vm_api_server`)
 `401 unauthorized` (token configured, missing/wrong), `403 forbidden` (POST with missing/foreign Origin/Referer),
 `405 method_not_allowed`, `413 too_large` (body > 8 MiB), `502 vm_api_unavailable` (API process down).

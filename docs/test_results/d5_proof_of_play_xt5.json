@@ -1,0 +1,1032 @@
+{
+ "device": "BrightSign XT1145 (XT5 family) USD38H000019, BrightSignOS 9.1.139-debug",
+ "display_output": "1280x800x60p",
+ "capture_api": "roVideoMode.Screenshot() (BrightScript, in the player application)",
+ "model": "MobileNetV2 FP16 RKNN (same as Visual Memory), 1280-d, pp1",
+ "thresholds": {
+  "margin": 0.05000000074505806,
+  "match_sim": 0.800000011920929,
+  "min_match_fraction": 0.6,
+  "min_play_ratio": 0.9,
+  "reject_sim": 0.6000000238418579
+ },
+ "media": [
+  {
+   "media_id": "ad-a",
+   "kind": "file",
+   "uri": "meet-brightsign.mp4",
+   "sha256": "e2d0c1a88ec9b2543e389b0bba62f5b3215b6556385ebcacaa5d65b6edb3f93a",
+   "codec": "h264",
+   "duration_s": 121.64,
+   "width": 1920,
+   "height": 1080,
+   "fps": 25.0,
+   "slot_s": 30.0,
+   "reference_frames": 122
+  },
+  {
+   "media_id": "ad-b",
+   "kind": "file",
+   "uri": "snowy_river.mp4",
+   "sha256": "885b3680550a2be28a5d88cca4f393897e81d8515222a3481e24dd1f521c8c6d",
+   "codec": "h264",
+   "duration_s": 15.019,
+   "width": 3840,
+   "height": 2160,
+   "fps": 29.97,
+   "slot_s": 30.0,
+   "reference_frames": 30
+  },
+  {
+   "media_id": "live-cam",
+   "kind": "rtsp",
+   "uri": "rtsp://192.168.0.203:8554/cam1",
+   "sha256": "",
+   "codec": "h264",
+   "duration_s": 0.0,
+   "width": 1920,
+   "height": 1080,
+   "fps": 29.97,
+   "slot_s": 30.0,
+   "reference_frames": 34
+  }
+ ],
+ "sessions": [
+  {
+   "session_id": "xt5-a1",
+   "expected_media_id": "ad-a",
+   "played_media_id": "ad-a",
+   "status": "playback_corroborated",
+   "status_label": "Playback corroborated",
+   "reason": "playback events complete (30015 ms of 30000 ms) and 3 of 3 screenshots match 'ad-a' (mean similarity 0.950)",
+   "state": "ended",
+   "end_reason": "slot_end",
+   "actual_play_ms": 30015,
+   "slot_ms": 30000,
+   "start_utc_ms": 1793871200063,
+   "evidence": [
+    {
+     "idx": 1,
+     "status": "ok",
+     "failure_reason": "",
+     "target_offset_ms": 3000,
+     "actual_offset_ms": 3006,
+     "took_ms": 317,
+     "width": 640,
+     "height": 400,
+     "bytes": 27350,
+     "sha256": "c88d56df953b6611f407b0d0a1c05e62287307e916b59bf9a53f35d33a0e1467",
+     "phash": "b3b6b67664262c88"
+    },
+    {
+     "idx": 2,
+     "status": "ok",
+     "failure_reason": "",
+     "target_offset_ms": 15000,
+     "actual_offset_ms": 15045,
+     "took_ms": 323,
+     "width": 640,
+     "height": 400,
+     "bytes": 61646,
+     "sha256": "7d815264bef2cd8193f5ce5991895e7649fc877e642768fe1a4387324be43dcb",
+     "phash": "cccca533d19e2b84"
+    },
+    {
+     "idx": 3,
+     "status": "ok",
+     "failure_reason": "",
+     "target_offset_ms": 27000,
+     "actual_offset_ms": 27010,
+     "took_ms": 289,
+     "width": 640,
+     "height": 400,
+     "bytes": 71096,
+     "sha256": "8df7db6013c44254fb4ab1344af45eb6285b7943469cef993b3530909cdbfcd9",
+     "phash": "494a9efb5602731c"
+    }
+   ],
+   "frame_scores": [
+    {
+     "actual_offset_ms": 3006,
+     "best_other_media": "ad-b",
+     "best_ref_offset_ms": 2000,
+     "evidence_id": 1,
+     "idx": 1,
+     "phash_dist_expected": 20,
+     "sim_expected": 0.8999,
+     "sim_other": 0.5029,
+     "verdict": "match"
+    },
+    {
+     "actual_offset_ms": 15045,
+     "best_other_media": "live-cam",
+     "best_ref_offset_ms": 15000,
+     "evidence_id": 2,
+     "idx": 2,
+     "phash_dist_expected": 0,
+     "sim_expected": 0.9918,
+     "sim_other": 0.6383,
+     "verdict": "match"
+    },
+    {
+     "actual_offset_ms": 27010,
+     "best_other_media": "live-cam",
+     "best_ref_offset_ms": 27000,
+     "evidence_id": 3,
+     "idx": 3,
+     "phash_dist_expected": 6,
+     "sim_expected": 0.9584,
+     "sim_other": 0.7118,
+     "verdict": "match"
+    }
+   ],
+   "events": [
+    {
+     "type": "session_scheduled_run",
+     "mono_ms": 66369,
+     "utc_ms": 1793871199899,
+     "detail": {
+      "capture_count": 3,
+      "interrupt_at_ms": -1,
+      "max_play_ms": 30000
+     }
+    },
+    {
+     "type": "play_requested",
+     "mono_ms": 66518,
+     "utc_ms": 1793871200048,
+     "detail": {
+      "ok": true
+     }
+    },
+    {
+     "type": "play_started",
+     "mono_ms": 66533,
+     "utc_ms": 1793871200063,
+     "detail": {
+      "latency_ms": 159,
+      "vcode": 3,
+      "vdata": 0
+     }
+    },
+    {
+     "type": "capture_ok",
+     "mono_ms": 69856,
+     "utc_ms": 1793871203377,
+     "detail": {
+      "actual_offset_ms": 3006,
+      "height": 400,
+      "idx": 1,
+      "target_offset_ms": 3000,
+      "took_ms": 317,
+      "width": 640
+     }
+    },
+    {
+     "type": "capture_ok",
+     "mono_ms": 81901,
+     "utc_ms": 1793871215422,
+     "detail": {
+      "actual_offset_ms": 15045,
+      "height": 400,
+      "idx": 2,
+      "target_offset_ms": 15000,
+      "took_ms": 323,
+      "width": 640
+     }
+    },
+    {
+     "type": "capture_ok",
+     "mono_ms": 93833,
+     "utc_ms": 1793871227354,
+     "detail": {
+      "actual_offset_ms": 27010,
+      "height": 400,
+      "idx": 3,
+      "target_offset_ms": 27000,
+      "took_ms": 289,
+      "width": 640
+     }
+    },
+    {
+     "type": "play_stopped",
+     "mono_ms": 96542,
+     "utc_ms": 1793871230063,
+     "detail": {
+      "reason": "slot_end"
+     }
+    },
+    {
+     "type": "session_end",
+     "mono_ms": 96548,
+     "utc_ms": 1793871230069,
+     "detail": {
+      "actual_play_ms": 30015,
+      "reason": "slot_end"
+     }
+    }
+   ]
+  },
+  {
+   "session_id": "xt5-b1",
+   "expected_media_id": "ad-a",
+   "played_media_id": "ad-b",
+   "status": "mismatch",
+   "status_label": "Mismatch",
+   "reason": "3 of 3 screenshots do not resemble 'ad-a' (mean similarity 0.584); closest registered media: ad-b",
+   "state": "ended",
+   "end_reason": "slot_end",
+   "actual_play_ms": 30018,
+   "slot_ms": 30000,
+   "start_utc_ms": 1793871258690,
+   "evidence": [
+    {
+     "idx": 1,
+     "status": "ok",
+     "failure_reason": "",
+     "target_offset_ms": 3000,
+     "actual_offset_ms": 3009,
+     "took_ms": 292,
+     "width": 640,
+     "height": 400,
+     "bytes": 86099,
+     "sha256": "7e3a69fca499d8b34c8c7ffecefe1477fc1b1a0e7c3b3fe8abea6deb7c38a000",
+     "phash": "87a4b68d89f8ab30"
+    },
+    {
+     "idx": 2,
+     "status": "ok",
+     "failure_reason": "",
+     "target_offset_ms": 15000,
+     "actual_offset_ms": 15020,
+     "took_ms": 332,
+     "width": 640,
+     "height": 400,
+     "bytes": 84137,
+     "sha256": "d8e61bf80fdaef3dfc59a11adc677b834b50cbbd89219ad8ddea523134977686",
+     "phash": "85b4b2cd8df88b30"
+    },
+    {
+     "idx": 3,
+     "status": "ok",
+     "failure_reason": "",
+     "target_offset_ms": 27000,
+     "actual_offset_ms": 27069,
+     "took_ms": 333,
+     "width": 640,
+     "height": 400,
+     "bytes": 84933,
+     "sha256": "2a4e8867916fded25b9b304ad4a2712e21f728f0ed3ac64eb887fa7f06abbc0f",
+     "phash": "85b4b68d8df82932"
+    }
+   ],
+   "frame_scores": [
+    {
+     "actual_offset_ms": 3009,
+     "best_other_media": "ad-b",
+     "best_ref_offset_ms": 69000,
+     "evidence_id": 4,
+     "idx": 1,
+     "phash_dist_expected": 20,
+     "sim_expected": 0.5862,
+     "sim_other": 0.99,
+     "verdict": "mismatch"
+    },
+    {
+     "actual_offset_ms": 15020,
+     "best_other_media": "ad-b",
+     "best_ref_offset_ms": 69000,
+     "evidence_id": 5,
+     "idx": 2,
+     "phash_dist_expected": 20,
+     "sim_expected": 0.5921,
+     "sim_other": 0.9885,
+     "verdict": "mismatch"
+    },
+    {
+     "actual_offset_ms": 27069,
+     "best_other_media": "ad-b",
+     "best_ref_offset_ms": 69000,
+     "evidence_id": 6,
+     "idx": 3,
+     "phash_dist_expected": 20,
+     "sim_expected": 0.5734,
+     "sim_other": 0.9873,
+     "verdict": "mismatch"
+    }
+   ],
+   "events": [
+    {
+     "type": "session_scheduled_run",
+     "mono_ms": 124783,
+     "utc_ms": 1793871258304,
+     "detail": {
+      "capture_count": 3,
+      "interrupt_at_ms": -1,
+      "max_play_ms": 30000
+     }
+    },
+    {
+     "type": "play_requested",
+     "mono_ms": 125057,
+     "utc_ms": 1793871258578,
+     "detail": {
+      "ok": true
+     }
+    },
+    {
+     "type": "play_started",
+     "mono_ms": 125169,
+     "utc_ms": 1793871258690,
+     "detail": {
+      "latency_ms": 382,
+      "vcode": 3,
+      "vdata": 0
+     }
+    },
+    {
+     "type": "capture_ok",
+     "mono_ms": 128470,
+     "utc_ms": 1793871261991,
+     "detail": {
+      "actual_offset_ms": 3009,
+      "height": 400,
+      "idx": 1,
+      "target_offset_ms": 3000,
+      "took_ms": 292,
+      "width": 640
+     }
+    },
+    {
+     "type": "capture_ok",
+     "mono_ms": 140521,
+     "utc_ms": 1793871274042,
+     "detail": {
+      "actual_offset_ms": 15020,
+      "height": 400,
+      "idx": 2,
+      "target_offset_ms": 15000,
+      "took_ms": 332,
+      "width": 640
+     }
+    },
+    {
+     "type": "capture_ok",
+     "mono_ms": 152571,
+     "utc_ms": 1793871286092,
+     "detail": {
+      "actual_offset_ms": 27069,
+      "height": 400,
+      "idx": 3,
+      "target_offset_ms": 27000,
+      "took_ms": 333,
+      "width": 640
+     }
+    },
+    {
+     "type": "play_stopped",
+     "mono_ms": 155183,
+     "utc_ms": 1793871288692,
+     "detail": {
+      "reason": "slot_end"
+     }
+    },
+    {
+     "type": "session_end",
+     "mono_ms": 155187,
+     "utc_ms": 1793871288692,
+     "detail": {
+      "actual_play_ms": 30018,
+      "reason": "slot_end"
+     }
+    }
+   ]
+  },
+  {
+   "session_id": "xt5-c1",
+   "expected_media_id": "ad-a",
+   "played_media_id": "ad-a",
+   "status": "incomplete",
+   "status_label": "Incomplete",
+   "reason": "playback ended early (interrupted) after 10054 ms of a 30000 ms slot",
+   "state": "ended",
+   "end_reason": "interrupted",
+   "actual_play_ms": 10054,
+   "slot_ms": 30000,
+   "start_utc_ms": 1793871288773,
+   "evidence": [
+    {
+     "idx": 1,
+     "status": "ok",
+     "failure_reason": "",
+     "target_offset_ms": 3000,
+     "actual_offset_ms": 3009,
+     "took_ms": 328,
+     "width": 640,
+     "height": 400,
+     "bytes": 27350,
+     "sha256": "92ce95251c104f5105f13f074a80a5289f600b1b0e8f54beb1a5c0446664c183",
+     "phash": "b3b6b67664262c88"
+    }
+   ],
+   "frame_scores": [
+    {
+     "actual_offset_ms": 3009,
+     "best_other_media": "ad-b",
+     "best_ref_offset_ms": 2000,
+     "evidence_id": 7,
+     "idx": 1,
+     "phash_dist_expected": 20,
+     "sim_expected": 0.8999,
+     "sim_other": 0.5029,
+     "verdict": "match"
+    }
+   ],
+   "events": [
+    {
+     "type": "session_scheduled_run",
+     "mono_ms": 155193,
+     "utc_ms": 1793871288692,
+     "detail": {
+      "capture_count": 3,
+      "interrupt_at_ms": 10000,
+      "max_play_ms": 30000
+     }
+    },
+    {
+     "type": "play_requested",
+     "mono_ms": 155236,
+     "utc_ms": 1793871288735,
+     "detail": {
+      "ok": true
+     }
+    },
+    {
+     "type": "play_started",
+     "mono_ms": 155274,
+     "utc_ms": 1793871288773,
+     "detail": {
+      "latency_ms": 78,
+      "vcode": 3,
+      "vdata": 0
+     }
+    },
+    {
+     "type": "capture_ok",
+     "mono_ms": 158611,
+     "utc_ms": 1793871292110,
+     "detail": {
+      "actual_offset_ms": 3009,
+      "height": 400,
+      "idx": 1,
+      "target_offset_ms": 3000,
+      "took_ms": 328,
+      "width": 640
+     }
+    },
+    {
+     "type": "play_stopped",
+     "mono_ms": 165325,
+     "utc_ms": 1793871298824,
+     "detail": {
+      "reason": "interrupted"
+     }
+    },
+    {
+     "type": "session_end",
+     "mono_ms": 165328,
+     "utc_ms": 1793871298827,
+     "detail": {
+      "actual_play_ms": 10054,
+      "reason": "interrupted"
+     }
+    }
+   ]
+  },
+  {
+   "session_id": "xt5-d1",
+   "expected_media_id": "ad-a",
+   "played_media_id": "ad-a",
+   "status": "capture_unsupported",
+   "status_label": "Capture unsupported",
+   "reason": "playback was reported but no screenshot of the display could be obtained: visual verification unavailable",
+   "state": "ended",
+   "end_reason": "slot_end",
+   "actual_play_ms": 30016,
+   "slot_ms": 30000,
+   "start_utc_ms": 1793871298938,
+   "evidence": [
+    {
+     "idx": 1,
+     "status": "failed",
+     "failure_reason": "screenshot file missing or empty after a successful capture report",
+     "target_offset_ms": 3000,
+     "actual_offset_ms": 3010,
+     "took_ms": 327,
+     "width": 0,
+     "height": 0,
+     "bytes": 0,
+     "sha256": "",
+     "phash": "0000000000000000"
+    },
+    {
+     "idx": 2,
+     "status": "failed",
+     "failure_reason": "screenshot file missing or empty after a successful capture report",
+     "target_offset_ms": 15000,
+     "actual_offset_ms": 15058,
+     "took_ms": 326,
+     "width": 0,
+     "height": 0,
+     "bytes": 0,
+     "sha256": "",
+     "phash": "0000000000000000"
+    },
+    {
+     "idx": 3,
+     "status": "failed",
+     "failure_reason": "screenshot file missing or empty after a successful capture report",
+     "target_offset_ms": 27000,
+     "actual_offset_ms": 27005,
+     "took_ms": 298,
+     "width": 0,
+     "height": 0,
+     "bytes": 0,
+     "sha256": "",
+     "phash": "0000000000000000"
+    }
+   ],
+   "frame_scores": [],
+   "events": [
+    {
+     "type": "session_scheduled_run",
+     "mono_ms": 165335,
+     "utc_ms": 1793871298834,
+     "detail": {
+      "capture_count": 3,
+      "interrupt_at_ms": -1,
+      "max_play_ms": 30000
+     }
+    },
+    {
+     "type": "play_requested",
+     "mono_ms": 165419,
+     "utc_ms": 1793871298918,
+     "detail": {
+      "ok": true
+     }
+    },
+    {
+     "type": "play_started",
+     "mono_ms": 165439,
+     "utc_ms": 1793871298938,
+     "detail": {
+      "latency_ms": 101,
+      "vcode": 3,
+      "vdata": 0
+     }
+    },
+    {
+     "type": "capture_ok",
+     "mono_ms": 168776,
+     "utc_ms": 1793871302275,
+     "detail": {
+      "actual_offset_ms": 3010,
+      "height": 400,
+      "idx": 1,
+      "target_offset_ms": 3000,
+      "took_ms": 327,
+      "width": 640
+     }
+    },
+    {
+     "type": "capture_ok",
+     "mono_ms": 180823,
+     "utc_ms": 1793871314322,
+     "detail": {
+      "actual_offset_ms": 15058,
+      "height": 400,
+      "idx": 2,
+      "target_offset_ms": 15000,
+      "took_ms": 326,
+      "width": 640
+     }
+    },
+    {
+     "type": "capture_ok",
+     "mono_ms": 192742,
+     "utc_ms": 1793871326241,
+     "detail": {
+      "actual_offset_ms": 27005,
+      "height": 400,
+      "idx": 3,
+      "target_offset_ms": 27000,
+      "took_ms": 298,
+      "width": 640
+     }
+    },
+    {
+     "type": "play_stopped",
+     "mono_ms": 195452,
+     "utc_ms": 1793871328951,
+     "detail": {
+      "reason": "slot_end"
+     }
+    },
+    {
+     "type": "session_end",
+     "mono_ms": 195455,
+     "utc_ms": 1793871328954,
+     "detail": {
+      "actual_play_ms": 30016,
+      "reason": "slot_end"
+     }
+    }
+   ]
+  },
+  {
+   "session_id": "xt5-e1",
+   "expected_media_id": "live-cam",
+   "played_media_id": "live-cam",
+   "status": "incomplete",
+   "status_label": "Incomplete",
+   "reason": "playback ended early (play_failed) after 0 ms of a 30000 ms slot",
+   "state": "ended",
+   "end_reason": "play_failed",
+   "actual_play_ms": 0,
+   "slot_ms": 30000,
+   "start_utc_ms": 0,
+   "evidence": [],
+   "frame_scores": [],
+   "events": [
+    {
+     "type": "session_scheduled_run",
+     "mono_ms": 195470,
+     "utc_ms": 1793871328969,
+     "detail": {
+      "capture_count": 3,
+      "interrupt_at_ms": -1,
+      "max_play_ms": 30000
+     }
+    },
+    {
+     "type": "play_requested",
+     "mono_ms": 195472,
+     "utc_ms": 1793871328971,
+     "detail": {
+      "ok": false
+     }
+    },
+    {
+     "type": "play_error",
+     "mono_ms": 195475,
+     "utc_ms": 1793871328974,
+     "detail": {
+      "reason": "PlayFile returned false"
+     }
+    },
+    {
+     "type": "session_end",
+     "mono_ms": 195478,
+     "utc_ms": 1793871328977,
+     "detail": {
+      "actual_play_ms": 0,
+      "reason": "play_failed"
+     }
+    }
+   ]
+  },
+  {
+   "session_id": "xt5-e2",
+   "expected_media_id": "live-cam",
+   "played_media_id": "live-cam",
+   "status": "playback_reported",
+   "status_label": "Playback reported",
+   "reason": "playback reported; screenshots inconclusive (0 match, 0 mismatch of 2)",
+   "state": "ended",
+   "end_reason": "slot_end",
+   "actual_play_ms": 30055,
+   "slot_ms": 30000,
+   "start_utc_ms": 1793871651541,
+   "evidence": [
+    {
+     "idx": 1,
+     "status": "ok",
+     "failure_reason": "",
+     "target_offset_ms": 3000,
+     "actual_offset_ms": 3009,
+     "took_ms": 378,
+     "width": 640,
+     "height": 400,
+     "bytes": 58951,
+     "sha256": "ae998f4c29c65b2792ef921e59a56b7d58e7c4fec97b55207cf044d0feb57c68",
+     "phash": "2f495b5ef0c9c882"
+    },
+    {
+     "idx": 2,
+     "status": "ok",
+     "failure_reason": "",
+     "target_offset_ms": 15000,
+     "actual_offset_ms": 15006,
+     "took_ms": 291,
+     "width": 640,
+     "height": 400,
+     "bytes": 69487,
+     "sha256": "d18a7648ea3bfb67d2ddbb6edf19b1bdceed28918c2d987e2c45bed45e1fd6b1",
+     "phash": "860f01783f755716"
+    }
+   ],
+   "frame_scores": [
+    {
+     "actual_offset_ms": 3009,
+     "best_other_media": "ad-a",
+     "best_ref_offset_ms": 6000,
+     "evidence_id": 11,
+     "idx": 1,
+     "phash_dist_expected": 26,
+     "sim_expected": 0.7668,
+     "sim_other": 0.7632,
+     "verdict": "inconclusive"
+    },
+    {
+     "actual_offset_ms": 15006,
+     "best_other_media": "ad-a",
+     "best_ref_offset_ms": 4000,
+     "evidence_id": 12,
+     "idx": 2,
+     "phash_dist_expected": 32,
+     "sim_expected": 0.783,
+     "sim_other": 0.7441,
+     "verdict": "inconclusive"
+    }
+   ],
+   "events": [
+    {
+     "type": "session_scheduled_run",
+     "mono_ms": 44276,
+     "utc_ms": 1793871648084,
+     "detail": {
+      "capture_count": 3,
+      "interrupt_at_ms": -1,
+      "max_play_ms": 30000
+     }
+    },
+    {
+     "type": "play_requested",
+     "mono_ms": 46529,
+     "utc_ms": 1793871650315,
+     "detail": {
+      "ok": true
+     }
+    },
+    {
+     "type": "play_started",
+     "mono_ms": 47757,
+     "utc_ms": 1793871651541,
+     "detail": {
+      "latency_ms": 3477,
+      "vcode": 3,
+      "vdata": 0
+     }
+    },
+    {
+     "type": "capture_ok",
+     "mono_ms": 51144,
+     "utc_ms": 1793871654928,
+     "detail": {
+      "actual_offset_ms": 3009,
+      "height": 400,
+      "idx": 1,
+      "target_offset_ms": 3000,
+      "took_ms": 378,
+      "width": 640
+     }
+    },
+    {
+     "type": "capture_ok",
+     "mono_ms": 63054,
+     "utc_ms": 1793871666838,
+     "detail": {
+      "actual_offset_ms": 15006,
+      "height": 400,
+      "idx": 2,
+      "target_offset_ms": 15000,
+      "took_ms": 291,
+      "width": 640
+     }
+    },
+    {
+     "type": "capture_ok",
+     "mono_ms": 75097,
+     "utc_ms": 1793871678876,
+     "detail": {
+      "actual_offset_ms": 27018,
+      "height": 400,
+      "idx": 3,
+      "target_offset_ms": 27000,
+      "took_ms": 322,
+      "width": 640
+     }
+    },
+    {
+     "type": "play_stopped",
+     "mono_ms": 77807,
+     "utc_ms": 1793871681586,
+     "detail": {
+      "reason": "slot_end"
+     }
+    },
+    {
+     "type": "session_end",
+     "mono_ms": 77813,
+     "utc_ms": 1793871681592,
+     "detail": {
+      "actual_play_ms": 30055,
+      "reason": "slot_end"
+     }
+    }
+   ]
+  },
+  {
+   "session_id": "xt5-e3",
+   "expected_media_id": "live-cam",
+   "played_media_id": "live-cam",
+   "status": "playback_corroborated",
+   "status_label": "Playback corroborated",
+   "reason": "playback events complete (30064 ms of 30000 ms) and 3 of 3 screenshots match 'live-cam' (mean similarity 0.950)",
+   "state": "ended",
+   "end_reason": "slot_end",
+   "actual_play_ms": 30064,
+   "slot_ms": 30000,
+   "start_utc_ms": 1793872487482,
+   "evidence": [
+    {
+     "idx": 1,
+     "status": "ok",
+     "failure_reason": "",
+     "target_offset_ms": 3000,
+     "actual_offset_ms": 3008,
+     "took_ms": 351,
+     "width": 640,
+     "height": 400,
+     "bytes": 67664,
+     "sha256": "917c67041edd3eec1d6238f891add7d34885b3e400f884845df00b9671949bd4",
+     "phash": "0e07217877d55716"
+    },
+    {
+     "idx": 2,
+     "status": "ok",
+     "failure_reason": "",
+     "target_offset_ms": 15000,
+     "actual_offset_ms": 15080,
+     "took_ms": 323,
+     "width": 640,
+     "height": 400,
+     "bytes": 61524,
+     "sha256": "8d17025a5b2ba201eb2ea26f8c9fc0d62b2415d6939b7ddef48955e29d7e9ed0",
+     "phash": "4a0b5bc3d9a90e78"
+    },
+    {
+     "idx": 3,
+     "status": "ok",
+     "failure_reason": "",
+     "target_offset_ms": 27000,
+     "actual_offset_ms": 27022,
+     "took_ms": 324,
+     "width": 640,
+     "height": 400,
+     "bytes": 61283,
+     "sha256": "308219bd7bb8327c5188b8e5c6042713c3083a68dd9279e7e8c37260a678537c",
+     "phash": "ce9f1514b1853c2e"
+    }
+   ],
+   "frame_scores": [
+    {
+     "actual_offset_ms": 3008,
+     "best_other_media": "ad-a",
+     "best_ref_offset_ms": 1000,
+     "evidence_id": 13,
+     "idx": 1,
+     "phash_dist_expected": 6,
+     "sim_expected": 0.9554,
+     "sim_other": 0.7334,
+     "verdict": "match"
+    },
+    {
+     "actual_offset_ms": 15080,
+     "best_other_media": "ad-a",
+     "best_ref_offset_ms": 16000,
+     "evidence_id": 14,
+     "idx": 2,
+     "phash_dist_expected": 12,
+     "sim_expected": 0.9239,
+     "sim_other": 0.7054,
+     "verdict": "match"
+    },
+    {
+     "actual_offset_ms": 27022,
+     "best_other_media": "ad-a",
+     "best_ref_offset_ms": 28000,
+     "evidence_id": 15,
+     "idx": 3,
+     "phash_dist_expected": 4,
+     "sim_expected": 0.9693,
+     "sim_other": 0.7331,
+     "verdict": "match"
+    }
+   ],
+   "events": [
+    {
+     "type": "session_scheduled_run",
+     "mono_ms": 53464,
+     "utc_ms": 1793872485212,
+     "detail": {
+      "capture_count": 3,
+      "interrupt_at_ms": -1,
+      "max_play_ms": 30000
+     }
+    },
+    {
+     "type": "play_requested",
+     "mono_ms": 54584,
+     "utc_ms": 1793872486255,
+     "detail": {
+      "ok": true
+     }
+    },
+    {
+     "type": "play_started",
+     "mono_ms": 55811,
+     "utc_ms": 1793872487482,
+     "detail": {
+      "latency_ms": 2343,
+      "vcode": 3,
+      "vdata": 0
+     }
+    },
+    {
+     "type": "capture_ok",
+     "mono_ms": 59170,
+     "utc_ms": 1793872490841,
+     "detail": {
+      "actual_offset_ms": 3008,
+      "height": 400,
+      "idx": 1,
+      "target_offset_ms": 3000,
+      "took_ms": 351,
+      "width": 640
+     }
+    },
+    {
+     "type": "capture_ok",
+     "mono_ms": 71214,
+     "utc_ms": 1793872502817,
+     "detail": {
+      "actual_offset_ms": 15080,
+      "height": 400,
+      "idx": 2,
+      "target_offset_ms": 15000,
+      "took_ms": 323,
+      "width": 640
+     }
+    },
+    {
+     "type": "capture_ok",
+     "mono_ms": 83157,
+     "utc_ms": 1793872514760,
+     "detail": {
+      "actual_offset_ms": 27022,
+      "height": 400,
+      "idx": 3,
+      "target_offset_ms": 27000,
+      "took_ms": 324,
+      "width": 640
+     }
+    },
+    {
+     "type": "play_stopped",
+     "mono_ms": 85868,
+     "utc_ms": 1793872517471,
+     "detail": {
+      "reason": "slot_end"
+     }
+    },
+    {
+     "type": "session_end",
+     "mono_ms": 85875,
+     "utc_ms": 1793872517478,
+     "detail": {
+      "actual_play_ms": 30064,
+      "reason": "slot_end"
+     }
+    }
+   ]
+  }
+ ],
+ "notes": [
+  "Screenshots are not committed (they show people).",
+  "xt5-e2: RTSP verified against reference frames sampled earlier from the live stream: scene drift gives sim 0.77/0.78 -> inconclusive (honest result).",
+  "xt5-e3: RTSP with supplemental frames sampled from the same stream during playback (host ffmpeg), screenshots of the display match them.",
+  "xt5-e1: RTSP play failed with Filename key; fixed to the Url key (see docs)."
+ ]
+}

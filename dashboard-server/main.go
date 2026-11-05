@@ -87,6 +87,7 @@ func main() {
 
 	// Visual Memory API (read-only gallery + bounded search POSTs).
 	mux.Handle("/api/vm/", newVMHandler(&url.URL{Scheme: "http", Host: *vmUp}, vmToken))
+	mux.Handle("/api/pop/", newVMHandler(&url.URL{Scheme: "http", Host: *vmUp}, vmToken)) // D5 Proof of Play: same policy, same upstream
 
 	// Connection hints for the browser so the dashboard is not hard-coded.
 	mux.HandleFunc("/config.json", func(w http.ResponseWriter, r *http.Request) {
@@ -188,7 +189,23 @@ func vmPostAllowed(p string) bool {
 }
 
 // vmSmallBody: JSON-only object endpoints (bounded to vmObjMaxBody).
-func vmSmallBody(p string) bool { return p == "/api/vm/objects" || p == "/api/vm/objects/search" }
+func vmSmallBody(p string) bool {
+	if p == "/api/vm/objects" || p == "/api/vm/objects/search" || p == "/api/pop/media" || p == "/api/pop/sessions" {
+		return true
+	}
+	// /api/pop/media/{id}/references/build and /api/pop/sessions/{id}/verify (exactly one id segment)
+	seg := strings.Split(strings.Trim(p, "/"), "/")
+	if len(seg) == 5 && seg[0] == "api" && seg[1] == "pop" && seg[2] == "media" && seg[3] != "" && seg[4] == "references" {
+		return false
+	}
+	if len(seg) == 6 && seg[0] == "api" && seg[1] == "pop" && seg[2] == "media" && seg[3] != "" && seg[4] == "references" && seg[5] == "build" {
+		return true
+	}
+	if len(seg) == 5 && seg[0] == "api" && seg[1] == "pop" && seg[2] == "sessions" && seg[3] != "" && seg[4] == "verify" {
+		return true
+	}
+	return false
+}
 
 // newVMHandler builds the /api/vm/ handler: method/path allow-list, body cap,
 // same-origin check for POST, optional shared-secret token, JSON 502.
@@ -252,7 +269,7 @@ func newVMHandler(target *url.URL, token string) http.Handler {
 						vmErr(w, 401, "unauthorized", "wrong token")
 						return
 					}
-					http.SetCookie(w, &http.Cookie{Name: vmCookie, Value: token, Path: "/api/vm/",
+					http.SetCookie(w, &http.Cookie{Name: vmCookie, Value: token, Path: "/api/",
 						HttpOnly: true, SameSite: http.SameSiteStrictMode})
 				}
 				vmJSON(w, 200, map[string]bool{"ok": true})
@@ -268,7 +285,7 @@ func newVMHandler(target *url.URL, token string) http.Handler {
 		case http.MethodPost:
 			if !vmPostAllowed(r.URL.Path) {
 				w.Header().Set("Allow", "GET, HEAD")
-				vmErr(w, 405, "method_not_allowed", "POST is only allowed on /api/vm/search/*, /api/vm/objects and /api/vm/objects/search")
+				vmErr(w, 405, "method_not_allowed", "POST is only allowed on /api/vm/search/*, /api/vm/objects, /api/vm/objects/search and the /api/pop/ media, sessions and verify routes")
 				return
 			}
 			if !sameOrigin(r) {
