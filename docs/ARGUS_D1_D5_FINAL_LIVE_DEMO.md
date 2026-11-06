@@ -98,6 +98,7 @@ Fallback comparison: set the backend selector to `brightscript_screenshot` (same
 | First frame "capture unsupported" or STALE | The producer wakes on the first request (the 503 / STALE at start is expected; the service retries). Persistent failure: check Display output panel, then `/api/display/status`. |
 | Mismatch expected but result is Incomplete / inconclusive | Do not force it. Report the scores; they are real. |
 | Camera FPS low | Low light lowers USB camera FPS (about 19 to 20 FPS); compare at equal light. |
+| Display output says "frozen for N s" after an ad | Expected. When a slot ends, the test autorun stops the video and the screen keeps the last frame, so the OS health check correctly reports a static picture (frame difference 0.0000). During play the flag is off (measured: frame difference 0.004 to 0.15, `frozen_frame` false). Run the next scenario, or say so when presenting. |
 | Dashboard unreachable | Wait about 90 s after any reboot; check `/api/pop/status`. |
 
 Never open a root console while presenting: it stops the BrightScript presentation and the DWS. Do not enable Telnet. The gRPC socket is local (Unix) only.
