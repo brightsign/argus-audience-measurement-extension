@@ -160,7 +160,7 @@ The original presentation is not modified. For the demonstration the existing D5
               "capture_backend": "resilience_grpc", "allow_test_jobs": true } }
    ```
    `pop.storage_root` creates a NEW schema-2 `pop.db` under `/storage/sd/pop-grpc-demo`; the existing schema-1 `pop.db` in the Visual Memory root is not opened, migrated or modified (`allow_schema_upgrade` stays false). `events_path` / `jobs_dir` stay the defaults used by the autorun (`/storage/sd/pop/events.jsonl`, `/storage/sd/pop/jobs`).
-3. **Files on the SD card:** `snowy_river.mp4` (15 s) next to the already present `meet-brightsign.mp4`; the reference bundle's `refs_incoming/` into `/storage/sd/pop-grpc-demo/pop/refs_incoming/`; `/storage/sd/pop/enabled` (turns job mode on).
+3. **Files on the SD card:** `snowy_river.mp4` (15 s) next to the already present `meet-brightsign.mp4`; the reference bundle's `refs_incoming/` into `/storage/sd/pop-grpc-demo/pop/refs_incoming/`; `/storage/sd/pop/enabled` (turns job mode on; it must contain text, an empty file keeps the autorun in loop mode).
 4. **Autorun:** back up `autorun.brs` (SHA-256 recorded, `autorun.brs.pre-d5`), copy `scripts/pop/pop_autorun.brs` as `autorun.brs`, restart the player application. The original presentation is untouched as a file backup; the test autorun behaves identically while `SD:/pop/enabled` is absent.
 
 ### 12.3 Demonstration procedure (after approval)
