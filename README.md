@@ -231,6 +231,23 @@ Precedence: `config.json` `dashboard.port` > registry > default.
 
 The dashboard UI lives in `./dashboard` (static HTML/CSS/JS); edit it there and it ships with the next `make package`. The `dashboard-server` cross-compiles as part of the normal build (`make dashboard-server` builds it standalone to verify).
 
+## Visual Memory (optional)
+
+Visual Memory gives the player a searchable **visual history on-device**. It periodically stores JPEG frames with SQLite metadata and, when enabled, computes an image embedding for each frame and keeps the **vector in the same SQLite database** (via the vendored `sqlite-vec` `vec0` virtual table). The player can then answer *"find the most similar historical frames"* with an exact top-K cosine search — no cloud, no facial recognition.
+
+```mermaid
+flowchart LR
+    CAM[Camera / Display frames] --> S1[Stage 1<br/>JPEG + SQLite metadata]
+    S1 --> S2[Stage 2 worker<br/>embed - L2 normalise]
+    S2 --> VEC[(SQLite + sqlite-vec<br/>vec0 vector table)]
+    VEC --> SEARCH[Exact top-K cosine search]
+    SEARCH --> APPS[Object Search / Proof of Play]
+```
+
+It is **disabled by default** at both build and config level, and Stage 1 behaviour is unchanged when it is off. On top of the vector store it provides **Object Search (D4)**, **Proof of Play (D5)**, and on-device display-history capture.
+
+**[Visual Memory documentation →](docs/VISUAL_MEMORY.md)**
+
 ## Build Packages
 
 The build produces two zip packages, each containing the same binaries, models, and configs for all supported SOCs. They differ in how they are deployed to a BrightSign player.
@@ -372,6 +389,7 @@ Argus uses ByteTrack to maintain stable person IDs across frames. Each tracked p
 | **[MQTT Schema Reference](docs/mqtt-message-format.md)** | Complete v7.0 message format |
 | **[Prometheus & Grafana](docs/prometheus-grafana-setup.md)** | Metrics, dashboards, and alerting |
 | **[Tracking Explained](docs/TRACKING-EXPLAINED.md)** | How person tracking works |
+| **[Visual Memory](docs/VISUAL_MEMORY.md)** | On-device visual history and vector search (optional); index to all Visual Memory docs |
 | **[Architecture Design](docs/DESIGN.md)** | System architecture deep-dive |
 | **[C++ Architecture](docs/cpp-design.md)** | Code structure and modification guide |
 
