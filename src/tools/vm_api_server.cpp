@@ -131,6 +131,24 @@ Cfg load_cfg(const std::string& path) {
         c.pop.evidence_max_bytes = pp.value("evidence_max_bytes", c.pop.evidence_max_bytes);
         c.pop.evidence_retention_days = pp.value("evidence_retention_days", 30);
         c.pop.allow_test_jobs = pp.value("allow_test_jobs", false);
+        {   // Phase 2: display history (1 FPS during registered sessions), OFF by default
+            const json hp = pp.value("history", json::object());
+            auto& h = c.pop.history;
+            h.enabled = hp.value("enabled", false);
+            h.interval_ms = std::max(250, std::min(10000, hp.value("interval_ms", h.interval_ms)));
+            h.phase_ms = std::max(0, std::min(10000, hp.value("phase_ms", h.phase_ms)));
+            h.window_ms = std::max(50, std::min(h.interval_ms, hp.value("window_ms", h.window_ms)));
+            h.commit_delay_ms = std::max(500, std::min(10000, hp.value("commit_delay_ms", h.commit_delay_ms)));
+            h.queue_capacity = std::max(2, std::min(64, hp.value("queue_capacity", h.queue_capacity)));
+            h.max_frames_per_session = std::max(1, std::min(100000, hp.value("max_frames_per_session", h.max_frames_per_session)));
+            h.max_bytes = hp.value("max_bytes", h.max_bytes);
+            h.jpeg_retention_days = std::max(0, hp.value("jpeg_retention_days", h.jpeg_retention_days));
+            h.metadata_retention_days = std::max(0, hp.value("metadata_retention_days", h.metadata_retention_days));
+            h.min_free_bytes = hp.value("min_free_bytes", h.min_free_bytes);
+            h.max_pending_embeddings = hp.value("max_pending_embeddings", h.max_pending_embeddings);
+            h.max_rows = hp.value("max_rows", h.max_rows);
+            h.embed_batch = std::max(1, std::min(16, hp.value("embed_batch", h.embed_batch)));
+        }
         const json th = pp.value("thresholds", json::object());
         c.pop.thresholds.match_sim = th.value("match_sim", c.pop.thresholds.match_sim);
         c.pop.thresholds.reject_sim = th.value("reject_sim", c.pop.thresholds.reject_sim);
@@ -1130,6 +1148,26 @@ Response route_pop(App& a, const Request& rq) {
         return jerr(404, "not_found", "unknown route");
     }
 
+    if (seg[0] == "history") {                                                          // Phase 2 display history (read-only)
+        if (!get) return jerr(405, "method_not_allowed", "GET only");
+        if (seg.size() == 2 && seg[1] == "status") { Response r = jok(ps.history_status()); r.cache = "no-store"; return r; }
+        if (seg.size() == 2 && seg[1] == "frames") {
+            int64_t lim = 100, off = 0;
+            if (rq.query.count("limit") && (!parse_i64(rq.query.at("limit"), lim) || lim < 1 || lim > 1000)) return jerr(400, "invalid_argument", "limit must be 1..1000");
+            if (rq.query.count("offset") && (!parse_i64(rq.query.at("offset"), off) || off < 0)) return jerr(400, "invalid_argument", "bad offset");
+            const std::string sid = rq.query.count("session_id") ? rq.query.at("session_id") : std::string();
+            if (sid.size() > 64) return jerr(400, "invalid_argument", "bad session_id");
+            Response r = jok(ps.history_frames(sid, static_cast<int>(lim), static_cast<int>(off))); r.cache = "no-store"; return r;
+        }
+        if (seg.size() == 3 && seg[2] == "image") {
+            int64_t id; if (!parse_i64(seg[1], id)) return jerr(400, "invalid_argument", "bad frame id");
+            HistoryFrame hf; if (!st.get_history(id, hf)) return jerr(404, "not_found", "no such display-history frame");
+            std::vector<uint8_t> b;
+            if (!st.history_jpeg(id, b)) return jerr(410, "image_expired", "the JPEG of this frame is no longer retained (its vector and metadata are)");
+            return jpeg_response(b);
+        }
+        return jerr(404, "not_found", "unknown route");
+    }
     if (seg[0] == "search" && seg.size() == 2 && seg[1] == "display") {                // Visual Search, source "BrightSign Display"
         if (get) {                                                                       // historical coverage of the searchable evidence
             const std::string m = rq.query.count("method") ? rq.query.at("method") : std::string("resilience_grpc");
@@ -1138,6 +1176,7 @@ Response route_pop(App& a, const Request& rq) {
             return jok({{"capture_method", m}, {"evidence_rows", c.rows_total}, {"searchable_rows", c.rows_searchable}, {"images_retained", c.images_retained},
                         {"sessions", c.sessions}, {"oldest_utc_ms", c.oldest_utc_ms ? json(c.oldest_utc_ms) : json(nullptr)},
                         {"newest_utc_ms", c.newest_utc_ms ? json(c.newest_utc_ms) : json(nullptr)}, {"schema_v2", st.schema_v2()},
+                        {"checkpoint_rows", c.checkpoint_rows}, {"history_rows", c.history_rows}, {"history_recording", ps.history_enabled()},
                         {"min_similarity_default", ps.cfg().thresholds.match_sim}});
         }
         if (!post) return jerr(405, "method_not_allowed", "GET or POST only");

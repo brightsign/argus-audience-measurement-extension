@@ -12,6 +12,8 @@
 #include "visualmemory/pop.h"
 
 #include <atomic>
+#include <condition_variable>
+#include <deque>
 #include <map>
 #include <functional>
 #include <memory>
@@ -46,6 +48,25 @@ struct PopCfg {
     int         grpc_prewarm_s = 120;                              // keep the OS producer awake this long between scheduling and the player starting
     int         grpc_max_dense_captures = 60;                      // upper bound for capture_every_s sessions
     visualmemory::VerifyThresholds thresholds;
+
+    // Phase 2: about one display frame per second while a registered advertisement session plays (visual_memory.pop.history). OFF by default.
+    // Needs capture_backend resilience_grpc (the OS rendered frames); never records outside a session; separate from the three verification checkpoints.
+    struct History {
+        bool        enabled = false;
+        int         interval_ms = 1000;               // 250..10000
+        int         phase_ms = 0;                     // target offsets are phase + k*interval: 0 makes the 3, 15, 27 s verification checkpoints coincide with history targets (their frames are reused)
+        int         window_ms = 300;                  // a frame is taken within +/- this of the target
+        int         commit_delay_ms = 1500;           // a staged frame is committed this long after its capture, so a session end can still cancel it
+        int         queue_capacity = 8;               // bounded hand-over to the writer thread
+        int         max_frames_per_session = 600;
+        uint64_t    max_bytes = 256ull * 1024 * 1024; // quota for history JPEGs (separate from evidence_max_bytes and from the camera store)
+        int         jpeg_retention_days = 7;          // JPEG removed after this long (vector and metadata stay)
+        int         metadata_retention_days = 30;     // row + vector removed after this long
+        uint64_t    min_free_bytes = 256ull * 1024 * 1024;   // recording pauses below this much free space on the pop storage filesystem
+        uint64_t    max_rows = 50000;                  // bound on stored history rows: the exact search scans every row (about 5 us/row on the host)
+        uint64_t    max_pending_embeddings = 300;     // un-embedded rows allowed before new samples are refused
+        int         embed_batch = 2;                  // vectors computed per NPU turn
+    } history;
 };
 
 // Runs `fn` with an embedding provider (single-flight with the other NPU users). false + why when unavailable.
@@ -77,6 +98,12 @@ public:
     // Visual Search source "BrightSign Display": searches only the persisted display-capture evidence with a reference JPEG embedded by the
     // same provider as D5. `q` carries top_k, min_similarity (default: thresholds.match_sim), start, end, media_id, method, require_image.
     bool search_display(const std::vector<uint8_t>& jpeg, const std::map<std::string, std::string>& q, nlohmann::json& out, int& http, std::string& err);
+
+    // Phase 2 display history (all no-ops unless cfg().history.enabled)
+    nlohmann::json history_status();
+    nlohmann::json history_frames(const std::string& session_id, int limit, int offset);
+    bool history_enabled() const { return cfg_.history.enabled && display_ != nullptr; }
+    void history_flush_for_test();                      // drain the writer queue and embed everything pending (tests / shutdown)
 
     nlohmann::json session_detail(const std::string& id, bool* found);
     nlohmann::json session_json(const visualmemory::PopSession& s);
@@ -119,6 +146,37 @@ private:
         int64_t slot_ms = 0, play_start_utc = 0, created_ms = 0;
         bool started = false, break_capture = false, ready_at_start = false, prewarm_released = false;
     };
+    // ---- display history (Phase 2) ----
+    struct HistStaged { int k = 0; int target_off = 0; std::shared_ptr<const std::string> jpeg; int64_t capture_utc = 0, capture_mono = 0, uncertainty = 0; uint64_t seq = 0; int provider = 0; };
+    struct HistSession {
+        std::string expected;
+        int64_t start_utc = 0, start_mono = 0, slot_ms = 0;
+        int next_k = 0, enqueued = 0, missed = 0, duplicates = 0, dropped_after_end = 0;
+        uint64_t last_seq = 0;
+        bool ready_at_start = false;
+        std::deque<HistStaged> staged;
+    };
+    struct HistJob { bool finalize = false; visualmemory::HistoryFrameIn in; std::string sid, played; int64_t end_utc = 0; };
+    void history_begin(const std::string& sid, int64_t start_utc, int64_t slot_ms, bool ready_at_start);
+    void history_tick();                                // grpc thread: samples due targets, commits staged frames
+    void history_end(const std::string& sid, int64_t end_utc);   // session_end: final pass, drops frames from after the end, queues the finalize
+    void history_abort(const std::string& sid);
+    void history_sample(HistSession& hs, const std::string& sid, int64_t now_mono, bool final_pass, int64_t end_utc);
+    bool history_offer(HistJob j);
+    void history_loop();                                // writer + embedder thread
+    std::mutex hist_mu_;                                // guards hist_sessions_
+    std::map<std::string, HistSession> hist_sessions_;
+    std::mutex hq_mu_;
+    std::condition_variable hq_cv_;
+    std::deque<HistJob> hq_;
+    std::thread hist_th_;
+    struct HistCounters {
+        std::atomic<uint64_t> targets{0}, staged{0}, queued{0}, written{0}, reused_checkpoint{0}, embedded{0}, missed_no_frame{0}, duplicate_frames{0},
+            dropped_queue_full{0}, dropped_after_end{0}, rejected_invalid{0}, rejected_duplicate{0}, session_limit{0}, backlog_refused{0},
+            write_failed{0}, sqlite_failed{0}, embed_failed{0}, paused_low_space{0}, embed_busy{0};
+        std::atomic<int64_t> last_write_ms_x100{0}, max_write_ms_x100{0}, last_embed_ms_x100{0}, last_commit_utc_ms{0};
+    } hc_;
+    std::string hist_last_error_;
     argus_display::DisplayFrameSource* display_ = nullptr;
     std::mutex plan_mu_;
     std::map<std::string, GrpcPlan> plans_;

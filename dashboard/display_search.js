@@ -10,7 +10,7 @@
   const POP = "/api/pop";
   const MAX_UPLOAD = 8 * 1024 * 1024;
   const NOTE = "BrightSign Display search looks only at frames that Proof of Play stored as evidence of what the player's screen showed " +
-    "(Weston/VOP2 output frames captured around registered advertisement plays). It uses the same MobileNetV2 image embedding as Proof of Play. " +
+    "(Weston/VOP2 output frames captured during registered advertisement plays: the three verification checkpoints of each play and, when display-history recording is on, about one more frame per second). It uses the same MobileNetV2 image embedding as Proof of Play. " +
     "Similarity scores are not probabilities, and a match is an observation that captured display content resembled the reference, not independent proof that the complete advertisement played. Content that was shown outside a registered advertisement session was not stored and cannot be found here.";
   const METHODS = [["resilience_grpc", "Weston/VOP2 output frames (OS service)"], ["brightscript_screenshot", "BrightScript screenshots"], ["any", "All stored display captures"]];
   const GEOMS = [["as_uploaded", "As uploaded (for 640×360 frames from the display path)"], ["display", "Apply display geometry (for a full-frame 16:9 picture or video frame)"]];
@@ -104,6 +104,40 @@
     renderCoverage(); updateRun();
   }
 
+  // ---- display history panel (recording state, per-session capture, storage, embedding) ---------------------------------------------------------------
+  const fmtMB = (b) => (isNum(b) ? (b / 1048576).toFixed(b < 10485760 ? 2 : 1) + " MB" : DASH);
+  function renderHistory() {
+    const box = clearChildren(E.hist), d = SD.history;
+    if (!d) { box.append(h("p", { class: "muted", text: "Loading display-history status…" })); return; }
+    if (d.unavailable) { box.append(h("p", { class: "muted", text: "Display-history status is not available on this player (older package)." })); return; }
+    const c = d.counters || {}, s = d.store || {}, l = d.limits || {}, act = (d.active_sessions || [])[0];
+    const failed = (c.write_failed || 0) + (c.sqlite_failed || 0) + (c.embed_failed || 0) + (c.rejected_invalid || 0);
+    const dropped = (c.dropped_queue_full || 0) + (c.backlog_refused || 0) + (c.paused_low_space || 0) + (c.session_limit || 0);
+    const cov = SD.coverage || {};
+    const row = (k, v) => [h("dt", { text: k }), h("dd", null, v)];
+    box.append(h("div", { class: "panel", "data-role": "history-panel" },
+      h("div", { class: "panel-head" }, h("h2", { text: "Display history" }),
+        h("span", { class: "pop-chip " + (d.enabled ? "ok" : ""), text: d.enabled ? "Recording enabled" : "Recording off" })),
+      h("p", { class: "muted", text: d.enabled
+        ? `About ${d.frames_per_second_target} frame per second is stored while a registered Proof-of-Play session plays (never during the idle presentation). The three verification checkpoints per session are separate and unchanged.`
+        : "Recording is off, so only the three verification checkpoints of each session are searchable. History frames recorded earlier (if any) remain searchable." }),
+      h("dl", { class: "dh-panel" },
+        ...row("Capture frequency", d.enabled ? `${(1000 / d.interval_ms).toFixed(2)} FPS target` : DASH),
+        ...row("Frames captured in the current session", act ? `${fmtInt(act.queued_for_storage + act.staged)} of about ${fmtInt(act.expected_total)} (session ${act.session_id})` : "no session recording now"),
+        ...row("Searchable display frames", cov.searchable_rows != null ? `${fmtInt(cov.searchable_rows)} (${fmtInt(cov.checkpoint_rows)} checkpoints · ${fmtInt(cov.history_rows)} history)` : DASH),
+        ...row("Latest captured display frame", d.last_commit_utc_ms ? when(d.last_commit_utc_ms) : (s.newest_utc_ms ? when(s.newest_utc_ms) : DASH)),
+        ...row("Dropped / failed", `${fmtInt(dropped)} dropped · ${fmtInt(failed)} failed · ${fmtInt((c.missed_no_frame || 0) + (c.duplicate_frames || 0))} seconds without a usable frame`),
+        ...row("Storage", `${fmtMB(s.image_bytes)} of ${fmtMB(l.max_bytes)} quota · JPEGs kept ${l.jpeg_retention_days || "∞"} d, metadata ${l.metadata_retention_days || "∞"} d`),
+        ...row("Embedding", `${fmtInt(s.embedded)} embedded · ${fmtInt(s.pending_embed)} pending · ${fmtInt(s.embed_failed_rows)} failed`),
+        ...row("Stored history", `${fmtInt(s.rows)} frames from ${fmtInt(s.sessions)} sessions · ${fmtInt(s.images_retained)} JPEGs retained`)),
+      d.last_error ? h("p", { class: "muted", text: "Last history error: " + d.last_error }) : null));
+  }
+  async function loadHistory() {
+    const r = await papi("/history/status");
+    SD.history = r.status === 200 && r.data ? r.data : { unavailable: true };
+    if (E.hist) renderHistory();
+  }
+
   async function loadAds() {
     const r = await papi("/media");
     const sel = E.media; if (!sel) return;
@@ -115,7 +149,7 @@
 
   function build(slot) {
     SD.built = true;
-    E.coverage = h("div"); E.refMsg = h("div"); E.refPreview = h("div"); E.results = h("div", { "aria-live": "polite" });
+    E.coverage = h("div"); E.hist = h("div"); E.refMsg = h("div"); E.refPreview = h("div"); E.results = h("div", { "aria-live": "polite" });
     const fileIn = h("input", { type: "file", accept: "image/jpeg", style: "display:none", "aria-label": "Choose a JPEG reference image for display search" });
     fileIn.addEventListener("change", () => { if (fileIn.files[0]) setUpload(fileIn.files[0]); fileIn.value = ""; });
     const drop = h("div", { class: "vm-drop", tabindex: "0", role: "button", "aria-label": "Upload reference JPEG: click or drop a file" },
@@ -136,6 +170,9 @@
     E.minOn = h("input", { type: "checkbox" }); E.minOn.addEventListener("change", updateRun);
     E.minSim = h("input", { type: "number", min: "0", max: "1", step: "0.01", value: "0.80", disabled: true, "aria-label": "Minimum similarity" });
     E.reqImg = h("input", { type: "checkbox" });
+    E.role = h("select", { "aria-label": "Frame role" }, h("option", { value: "any", text: "All frames (checkpoints + history)" }),
+      h("option", { value: "history_sample", text: "Display-history samples only" }), h("option", { value: "verification_checkpoint", text: "Verification checkpoints only" }));
+    E.sessId = h("input", { type: "text", maxlength: "64", placeholder: "any session", "aria-label": "Playback session id", style: "min-width:14em" });
     E.run = h("button", { class: "vm-btn primary", type: "button", text: "Search display evidence", onclick: runSearch, disabled: true });
     E.cancel = h("button", { class: "vm-btn", type: "button", text: "Cancel", hidden: true, onclick: () => { if (SD.ctrl) SD.ctrl.abort(); } });
     E.spin = h("span", { class: "vm-spin", hidden: true });
@@ -148,12 +185,13 @@
           h("div", { class: "vm-row" }, h("label", null, "Top K (1–50)", E.topK), h("label", null, "Advertisement", E.media), h("label", null, "Capture method", E.method)),
           h("div", { class: "vm-row" }, h("label", null, "Reference geometry", E.geom)),
           h("p", { class: "muted", "data-role": "geom-hint" }),
+          h("div", { class: "vm-row" }, h("label", null, "Frame role", E.role), h("label", null, "Playback session", E.sessId)),
           h("div", { class: "vm-row" }, h("label", { class: "inline" }, E.reqImg, "Require JPEG still available")),
           E.tf.el,
           h("div", { class: "vm-row" }, h("label", { class: "inline" }, E.minOn, "Override minimum similarity (default: the Proof-of-Play match threshold)"), E.minSim),
           h("div", { class: "vm-row" }, E.run, E.cancel, E.spin, E.runMsg)))));
-    slot.append(h("div", { class: "vm-stack" }, h("div", { class: "vm-note", text: NOTE }), E.coverage, E.fs, E.results));
-    renderRef(); renderCoverage();
+    slot.append(h("div", { class: "vm-stack" }, h("div", { class: "vm-note", text: NOTE }), E.hist, E.coverage, E.fs, E.results));
+    renderRef(); renderCoverage(); renderHistory();
   }
 
   async function runSearch() {
@@ -172,6 +210,8 @@
       q.set("min_similarity", ms);
     }
     if (E.reqImg.checked) q.set("require_image", "1");
+    if (E.role.value !== "any") q.set("role", E.role.value);
+    if (E.sessId.value.trim()) q.set("session_id", E.sessId.value.trim());
     const ref = SD.ref;
     SD.ctrl = new AbortController();
     E.cancel.hidden = false; E.spin.hidden = false; E.runMsg.textContent = "Searching…";
@@ -197,10 +237,12 @@
     const s = isNum(x.similarity) ? x.similarity : null;
     const chipCls = STATUS_CLASS[x.session_status] || "";
     const link = h("a", { class: "vm-btn small", href: x.session_link, text: "Open playback session " + x.session_id, "data-session-link": x.session_id });
-    return h("div", { class: "panel ds-hit" + (closest ? " ds-closest" : ""), "data-evidence": String(x.evidence_id) },
+    return h("div", { class: "panel ds-hit" + (closest ? " ds-closest" : ""), "data-evidence": String(x.role === "history_sample" ? "h" + x.history_id : x.evidence_id), "data-role-kind": x.role || "" },
       h("div", { class: "vm-cmp" },
         h("div", null, h("h3", { text: "Reference" }), h("div", { class: "vm-thumb ds-img" }, h("img", { src: ref.blobUrl, alt: "Reference" }))),
-        h("div", null, h("h3", { text: closest ? "Closest stored frame" : "Match #" + x.rank }), h("div", { class: "vm-thumb ds-img" }, evImg(x, "Stored display frame")))),
+        h("div", null, h("h3", null, closest ? "Closest stored frame" : "Match #" + x.rank,
+          h("span", { class: "dh-role " + (x.role === "history_sample" ? "hist" : "ck"), "data-role": "frame-role", text: x.role === "history_sample" ? "History sample" : "Verification checkpoint" })),
+          h("div", { class: "vm-thumb ds-img" }, evImg(x, "Stored display frame")))),
       h("div", { class: "ds-meta" },
         h("span", { class: "vm-score", text: s != null ? "similarity " + s.toFixed(4) : DASH }),
         h("div", { class: "vm-bar", "aria-hidden": "true" }, s != null ? h("i", { style: `width:${Math.max(0, Math.min(1, s)) * 100}%` }) : null),
@@ -211,7 +253,7 @@
           x.expected_media_id && x.played_media_id && x.expected_media_id !== x.played_media_id ? [h("dt", { text: "Expected" }), h("dd", { text: x.expected_media_id })] : null,
           h("dt", { text: "Session" }), h("dd", null, h("span", { class: "pop-chip " + chipCls, text: x.session_status_label || DASH }), " ", h("span", { class: "muted", text: x.session_id })),
           h("dt", { text: "Source" }), h("dd", { text: (x.capture_method === "resilience_grpc" ? "Weston/VOP2 frame" : x.capture_method === "brightscript_screenshot" ? "BrightScript screenshot" : x.capture_method) + (isNum(x.time_uncertainty_ms) ? " · time ±" + x.time_uncertainty_ms + " ms" : "") }),
-          h("dt", { text: "Frame" }), h("dd", { text: `#${x.evidence_id} · ${fmtInt(x.width)} × ${fmtInt(x.height)}` })),
+          h("dt", { text: "Frame" }), h("dd", { text: (x.role === "history_sample" ? `history frame #${x.history_id} (sample ${x.sec_idx})` : `checkpoint evidence #${x.evidence_id}`) + ` · ${fmtInt(x.width)} × ${fmtInt(x.height)}` })),
         link));
   }
   function renderResults(d, ref) {
@@ -222,7 +264,7 @@
       box.append(h("p", { class: "muted", "data-role": "geom-note", text: `Reference shown as embedded (${d.query.uploaded_size} upload → ${d.query.embedded_size} display geometry). ${d.query.geometry_note}` }));
     } else if (d.query && d.query.geometry_note) box.append(h("p", { class: "muted", "data-role": "geom-note", text: d.query.geometry_note }));
     box.append(h("p", { class: "muted", style: "margin-top:10px", text:
-      `${res.length} result${res.length === 1 ? "" : "s"} · ${isNum(st.elapsed_ms) ? st.elapsed_ms.toFixed(1) + " ms" : DASH} · ${fmtInt(st.candidates_scanned)} stored evidence frames scanned · ` +
+      `${res.length} result${res.length === 1 ? "" : "s"} · ${isNum(st.elapsed_ms) ? st.elapsed_ms.toFixed(1) + " ms" : DASH} · ${fmtInt(st.candidates_scanned)} stored frames scanned (${fmtInt(cov.checkpoint_rows)} checkpoints, ${fmtInt(cov.history_rows)} history) · ` +
       `minimum similarity ${isNum(d.options && d.options.min_similarity) ? d.options.min_similarity.toFixed(2) : DASH}${d.options && d.options.min_similarity_default ? " (Proof-of-Play match threshold)" : ""} · ` +
       `model ${m.name || DASH} ${m.preprocessing || ""} dim ${fmtInt(m.dimension)}` }));
     if (cov.other_model_rows) box.append(h("div", { class: "vm-banner warn", text: `${fmtInt(cov.other_model_rows)} stored evidence frame(s) were produced by a different embedding model and cannot be compared.` }));
@@ -239,7 +281,8 @@
 
   function mount(slot) {
     if (!SD.built) build(slot);
-    loadCoverage(); loadAds();
+    loadCoverage(); loadAds(); loadHistory();
+    if (!SD.timer) SD.timer = setInterval(() => { if (document.getElementById('view-search') && !document.getElementById('view-search').hidden && E.hist && E.hist.offsetParent !== null) loadHistory(); }, 5000);
   }
   if (U.registerDisplaySearch) U.registerDisplaySearch({ mount });
 })();

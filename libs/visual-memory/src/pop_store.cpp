@@ -120,6 +120,47 @@ Evidence row_evidence(sqlite3_stmt* s) {
     e.capture_method = col_text(s, 18); e.provenance = col_text(s, 19); e.uncertainty_ms = sqlite3_column_int(s, 20);
     return e;
 }
+const char* kHistCols = "frame_id,session_id,sec_idx,evidence_id,source,expected_media_id,played_media_id,utc_ms,mono_ms,target_offset_ms,actual_offset_ms,"
+                        "uncertainty_ms,capture_method,provenance,path,sha256,width,height,bytes,embedded,image_available,embed_attempts,status";
+HistoryFrame row_hist(sqlite3_stmt* s) {
+    HistoryFrame h;
+    h.frame_id = sqlite3_column_int64(s, 0); h.session_id = col_text(s, 1); h.sec_idx = sqlite3_column_int(s, 2); h.evidence_id = sqlite3_column_int64(s, 3);
+    h.source = col_text(s, 4); h.expected_media_id = col_text(s, 5); h.played_media_id = col_text(s, 6); h.utc_ms = sqlite3_column_int64(s, 7);
+    h.mono_ms = sqlite3_column_int64(s, 8); h.target_offset_ms = sqlite3_column_int(s, 9); h.actual_offset_ms = sqlite3_column_int(s, 10);
+    h.uncertainty_ms = sqlite3_column_int(s, 11); h.capture_method = col_text(s, 12); h.provenance = col_text(s, 13); h.path = col_text(s, 14);
+    h.sha256 = col_text(s, 15); h.width = sqlite3_column_int(s, 16); h.height = sqlite3_column_int(s, 17); h.bytes = static_cast<uint64_t>(sqlite3_column_int64(s, 18));
+    h.embedded = sqlite3_column_int(s, 19) != 0; h.image_available = sqlite3_column_int(s, 20) != 0; h.embed_attempts = sqlite3_column_int(s, 21);
+    h.status = col_text(s, 22); h.role = h.evidence_id ? "history_and_checkpoint" : "history_sample";
+    return h;
+}
+// Dimensions from the SOF marker without decoding; false unless the buffer is a complete JPEG (SOI ... EOI) with a frame header.
+bool jpeg_dims(const std::vector<uint8_t>& b, int& w, int& h) {
+    if (b.size() < 128 || b[0] != 0xFF || b[1] != 0xD8 || b[b.size() - 2] != 0xFF || b[b.size() - 1] != 0xD9) return false;
+    size_t i = 2;
+    while (i + 9 < b.size()) {
+        if (b[i] != 0xFF) { ++i; continue; }
+        const uint8_t m = b[i + 1];
+        if (m == 0xFF) { ++i; continue; }
+        if (m == 0x00 || (m >= 0xD0 && m <= 0xD7) || m == 0x01) { i += 2; continue; }
+        const size_t len = (static_cast<size_t>(b[i + 2]) << 8) | b[i + 3];
+        if ((m >= 0xC0 && m <= 0xCF) && m != 0xC4 && m != 0xC8 && m != 0xCC) {
+            h = (b[i + 5] << 8) | b[i + 6]; w = (b[i + 7] << 8) | b[i + 8];
+            return w > 0 && h > 0 && w <= 8192 && h <= 8192;
+        }
+        if (len < 2) return false;
+        i += 2 + len;
+    }
+    return false;
+}
+std::string history_path(const std::string& source, int64_t utc_ms, const std::string& file_name) {
+    std::time_t t = static_cast<std::time_t>(utc_ms / 1000);
+    std::tm tmv{};
+    gmtime_r(&t, &tmv);
+    char buf[512];
+    std::snprintf(buf, sizeof(buf), "pop/history/%04d/%s/%s/%s/%s/%s", tmv.tm_year + 1900, two(tmv.tm_mon + 1).c_str(), two(tmv.tm_mday).c_str(),
+                  two(tmv.tm_hour).c_str(), safe_segment(source).c_str(), safe_segment(file_name).c_str());
+    return buf;
+}
 } // namespace
 
 struct PopStore::Impl {
@@ -127,6 +168,7 @@ struct PopStore::Impl {
     std::mutex mu;
     sqlite3* db = nullptr;
     bool v2 = true;                                   // false: legacy schema-1 file kept as is (no capture-method columns)
+    bool hist = false;                                // display_history_frames exists (Phase 2); created only by history_open()
     explicit Impl(PopConfig c) : cfg(std::move(c)) {}
 
     bool exec(const char* sql, std::string& err) {
@@ -248,6 +290,10 @@ bool PopStore::open(std::string& err) {
     std::string e;
     impl_->exec(impl_->cfg.sync_full ? "PRAGMA foreign_keys=ON; PRAGMA synchronous=FULL;" : "PRAGMA foreign_keys=ON; PRAGMA synchronous=NORMAL;", e);
     if (!impl_->migrate(err)) { sqlite3_close(impl_->db); impl_->db = nullptr; return false; }
+    {   // history recorded earlier stays searchable even while recording is switched off; nothing is created here
+        Stmt q(impl_->db, "SELECT 1 FROM sqlite_master WHERE type='table' AND name='display_history_frames';");
+        impl_->hist = impl_->v2 && q && sqlite3_step(q.s) == SQLITE_ROW;
+    }
     return true;
 }
 bool PopStore::schema_v2() const { std::lock_guard<std::mutex> lk(impl_->mu); return impl_->v2; }
@@ -764,7 +810,273 @@ EvidenceCoverage PopStore::evidence_coverage(const EmbeddingSpec* model, const s
         c.rows_searchable = static_cast<uint64_t>(sqlite3_column_int64(q.s, 0)); c.images_retained = static_cast<uint64_t>(sqlite3_column_int64(q.s, 1));
         c.oldest_utc_ms = sqlite3_column_int64(q.s, 2); c.newest_utc_ms = sqlite3_column_int64(q.s, 3); c.sessions = static_cast<uint64_t>(sqlite3_column_int64(q.s, 4));
     }
+    c.checkpoint_rows = c.rows_searchable;
+    if (impl_->hist) {
+        c.rows_total += impl_->count("SELECT COUNT(*) FROM display_history_frames;");
+        const bool hist_applies = !method_filter || capture_method == "resilience_grpc";
+        const std::string hw = " FROM display_history_frames h WHERE h.status='ok' AND h.embedded=1 AND h.evidence_id IS NULL"
+                               " AND NOT EXISTS (SELECT 1 FROM display_capture_evidence e WHERE e.session_id=h.session_id AND e.utc_ms=h.utc_ms AND e.status='ok' AND e.embedded=1 AND e.capture_method='resilience_grpc')";
+        if (hist_applies && (!model || mid != 0)) {
+            const std::string mclause = model ? " AND h.model_id=?" : "";
+            Stmt hq(impl_->db, "SELECT COUNT(*),COALESCE(SUM(h.image_available),0),COALESCE(MIN(h.utc_ms),0),COALESCE(MAX(h.utc_ms),0)" + hw + mclause + ";");
+            if (hq) {
+                if (model) sqlite3_bind_int64(hq.s, 1, mid);
+                if (sqlite3_step(hq.s) == SQLITE_ROW) {
+                    const uint64_t n = static_cast<uint64_t>(sqlite3_column_int64(hq.s, 0));
+                    c.history_rows = n; c.rows_searchable += n; c.images_retained += static_cast<uint64_t>(sqlite3_column_int64(hq.s, 1));
+                    if (n) {
+                        const int64_t lo = sqlite3_column_int64(hq.s, 2), hi = sqlite3_column_int64(hq.s, 3);
+                        c.oldest_utc_ms = c.oldest_utc_ms ? std::min(c.oldest_utc_ms, lo) : lo; c.newest_utc_ms = std::max(c.newest_utc_ms, hi);
+                    }
+                }
+            }
+            Stmt sq(impl_->db, "SELECT COUNT(*) FROM (SELECT session_id FROM display_capture_evidence WHERE " + where + (model ? " AND model_id=?" : "") + " UNION SELECT h.session_id" + hw + mclause + ");");
+            if (sq) {
+                int i = 1; if (method_filter && impl_->v2) sq.text(i++, capture_method);
+                if (model) { sqlite3_bind_int64(sq.s, i++, mid); sqlite3_bind_int64(sq.s, i, mid); }
+                if (sqlite3_step(sq.s) == SQLITE_ROW) c.sessions = static_cast<uint64_t>(sqlite3_column_int64(sq.s, 0));
+            }
+        }
+    }
     return c;
+}
+
+// ---- display history (Phase 2) ----------------------------------------------------------------------------------
+bool PopStore::history_open(std::string& err) {
+    std::lock_guard<std::mutex> lk(impl_->mu);
+    if (!impl_->db) { err = "store not open"; return false; }
+    if (!impl_->v2) { err = "pop.db is schema 1: display history needs visual_memory.pop.allow_schema_upgrade"; return false; }
+    if (impl_->hist) return true;
+    const char* ddl =
+        "CREATE TABLE IF NOT EXISTS display_history_frames(frame_id INTEGER PRIMARY KEY AUTOINCREMENT,session_id TEXT NOT NULL,sec_idx INTEGER NOT NULL,"
+        " evidence_id INTEGER,source TEXT NOT NULL,expected_media_id TEXT NOT NULL DEFAULT '',played_media_id TEXT NOT NULL DEFAULT '',"
+        " utc_ms INTEGER NOT NULL,mono_ms INTEGER NOT NULL DEFAULT 0,target_offset_ms INTEGER NOT NULL DEFAULT 0,actual_offset_ms INTEGER NOT NULL DEFAULT 0,"
+        " uncertainty_ms INTEGER NOT NULL DEFAULT -1,capture_method TEXT NOT NULL DEFAULT 'resilience_grpc',provenance TEXT NOT NULL DEFAULT '',"
+        " path TEXT NOT NULL DEFAULT '',sha256 TEXT NOT NULL DEFAULT '',width INTEGER NOT NULL DEFAULT 0,height INTEGER NOT NULL DEFAULT 0,"
+        " bytes INTEGER NOT NULL DEFAULT 0,model_id INTEGER NOT NULL DEFAULT 0,embedding BLOB,embedded INTEGER NOT NULL DEFAULT 0,"
+        " embed_attempts INTEGER NOT NULL DEFAULT 0,image_available INTEGER NOT NULL DEFAULT 0,status TEXT NOT NULL DEFAULT 'ok',created_at INTEGER NOT NULL,"
+        " UNIQUE(session_id,sec_idx));"
+        "CREATE INDEX IF NOT EXISTS ix_pop_hist_time ON display_history_frames(utc_ms);"
+        "CREATE INDEX IF NOT EXISTS ix_pop_hist_pending ON display_history_frames(embedded,embed_attempts);";
+    if (!impl_->exec("BEGIN IMMEDIATE;", err)) return false;
+    if (!impl_->exec(ddl, err)) { std::string e2; impl_->exec("ROLLBACK;", e2); return false; }
+    if (!impl_->exec("COMMIT;", err)) return false;
+    impl_->hist = true;
+    return true;
+}
+bool PopStore::history_ready() const { std::lock_guard<std::mutex> lk(impl_->mu); return impl_->db && impl_->hist; }
+
+bool PopStore::add_history_frame(const HistoryFrameIn& in, const HistoryLimits& lim, HistoryFrame& out, std::string& err) {
+    out = HistoryFrame{};
+    if (!valid_id(in.session_id)) { err = "invalid session_id"; return false; }
+    if (in.sec_idx < 0 || in.sec_idx > 1000000) { err = "sec_idx out of range"; return false; }
+    int w = 0, h = 0;
+    if (in.jpeg.size() > kMaxJpegBytes || !jpeg_dims(in.jpeg, w, h)) { err = "not a complete JPEG (SOI..EOI with a frame header) within 8 MiB"; return false; }
+    out.session_id = in.session_id; out.sec_idx = in.sec_idx; out.source = in.source.empty() ? "main_display" : in.source;
+    out.expected_media_id = in.expected_media_id.substr(0, 64); out.utc_ms = in.utc_ms ? in.utc_ms : now_ms(); out.mono_ms = in.mono_ms;
+    out.target_offset_ms = in.target_offset_ms; out.actual_offset_ms = in.actual_offset_ms; out.uncertainty_ms = in.uncertainty_ms;
+    out.capture_method = in.capture_method.substr(0, 40); out.provenance = in.provenance.substr(0, 120);
+    out.width = w; out.height = h; out.bytes = in.jpeg.size();
+    int64_t link = 0, link_model = 0; Evidence ck;
+    {   // admission checks and the checkpoint-reuse decision
+        std::lock_guard<std::mutex> lk(impl_->mu);
+        if (!impl_->db || !impl_->hist) { err = "display history is not enabled"; return false; }
+        if (!impl_->session_exists(in.session_id)) { err = "unknown session"; return false; }
+        {
+            Stmt q(impl_->db, "SELECT 1 FROM display_history_frames WHERE session_id=? AND sec_idx=?;");
+            if (!q) { err = sqlite3_errmsg(impl_->db); return false; }
+            q.text(1, in.session_id); sqlite3_bind_int(q.s, 2, in.sec_idx);
+            if (sqlite3_step(q.s) == SQLITE_ROW) { err = "duplicate"; return false; }
+        }
+        {
+            Stmt q(impl_->db, "SELECT COUNT(*) FROM display_history_frames WHERE session_id=?;");
+            if (q) { q.text(1, in.session_id); if (sqlite3_step(q.s) == SQLITE_ROW && sqlite3_column_int(q.s, 0) >= lim.max_frames_per_session) { err = "session limit"; return false; } }
+        }
+        if (impl_->count("SELECT COUNT(*) FROM display_history_frames WHERE embedded=0 AND status='ok' AND evidence_id IS NULL AND embed_attempts<3;") >= lim.max_pending_embeddings) {
+            err = "embedding backlog"; return false;
+        }
+        Stmt q(impl_->db, "SELECT evidence_id,model_id,sha256 FROM display_capture_evidence WHERE session_id=? AND utc_ms=? AND status='ok' AND embedded=1 AND capture_method='resilience_grpc' LIMIT 1;");
+        if (q) {
+            q.text(1, in.session_id); sqlite3_bind_int64(q.s, 2, out.utc_ms);
+            if (sqlite3_step(q.s) == SQLITE_ROW) { link = sqlite3_column_int64(q.s, 0); link_model = sqlite3_column_int64(q.s, 1); out.sha256 = col_text(q.s, 2); }
+        }
+    }
+    if (!link) {
+        out.sha256 = detail::sha256_hex(in.jpeg.data(), in.jpeg.size());
+        out.path = history_path(out.source, out.utc_ms, in.session_id + "_h" + std::to_string(in.sec_idx) + ".jpg");
+        if (!write_atomic(fs::path(impl_->cfg.root_directory) / out.path, in.jpeg, err)) return false;
+        out.image_available = true;
+    } else { out.evidence_id = link; out.embedded = true; out.role = "history_and_checkpoint"; }
+    std::lock_guard<std::mutex> lk(impl_->mu);
+    if (!impl_->db) { err = "store not open"; return false; }
+    Stmt q(impl_->db, "INSERT INTO display_history_frames(session_id,sec_idx,evidence_id,source,expected_media_id,utc_ms,mono_ms,target_offset_ms,actual_offset_ms,"
+                      "uncertainty_ms,capture_method,provenance,path,sha256,width,height,bytes,model_id,embedded,image_available,created_at) "
+                      "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?);");
+    if (!q) { err = sqlite3_errmsg(impl_->db); return false; }
+    q.text(1, out.session_id); sqlite3_bind_int(q.s, 2, out.sec_idx);
+    if (link) sqlite3_bind_int64(q.s, 3, link); else sqlite3_bind_null(q.s, 3);
+    q.text(4, out.source); q.text(5, out.expected_media_id); sqlite3_bind_int64(q.s, 6, out.utc_ms); sqlite3_bind_int64(q.s, 7, out.mono_ms);
+    sqlite3_bind_int(q.s, 8, out.target_offset_ms); sqlite3_bind_int(q.s, 9, out.actual_offset_ms); sqlite3_bind_int(q.s, 10, out.uncertainty_ms);
+    q.text(11, out.capture_method); q.text(12, out.provenance); q.text(13, out.path); q.text(14, out.sha256); sqlite3_bind_int(q.s, 15, out.width);
+    sqlite3_bind_int(q.s, 16, out.height); sqlite3_bind_int64(q.s, 17, static_cast<int64_t>(out.bytes)); sqlite3_bind_int64(q.s, 18, link_model);
+    sqlite3_bind_int(q.s, 19, out.embedded ? 1 : 0); sqlite3_bind_int(q.s, 20, out.image_available ? 1 : 0); sqlite3_bind_int64(q.s, 21, now_ms());
+    if (sqlite3_step(q.s) != SQLITE_DONE) {
+        err = sqlite3_extended_errcode(impl_->db) == SQLITE_CONSTRAINT_UNIQUE || sqlite3_errcode(impl_->db) == SQLITE_CONSTRAINT ? "duplicate" : sqlite3_errmsg(impl_->db);
+        std::error_code ec; if (!out.path.empty()) fs::remove(fs::path(impl_->cfg.root_directory) / out.path, ec);
+        return false;
+    }
+    out.frame_id = sqlite3_last_insert_rowid(impl_->db);
+    return true;
+}
+
+int PopStore::embed_pending_history(EmbeddingProvider& provider, int max_rows, std::string& err) {
+    struct Job { int64_t id; std::string path; };
+    std::vector<Job> jobs;
+    {
+        std::lock_guard<std::mutex> lk(impl_->mu);
+        if (!impl_->db || !impl_->hist) return 0;
+        Stmt q(impl_->db, "SELECT frame_id,path FROM display_history_frames WHERE embedded=0 AND status='ok' AND evidence_id IS NULL AND embed_attempts<3 "
+                          "ORDER BY frame_id LIMIT ?;");
+        if (!q) { err = sqlite3_errmsg(impl_->db); return -1; }
+        sqlite3_bind_int(q.s, 1, std::max(1, max_rows));
+        while (sqlite3_step(q.s) == SQLITE_ROW) jobs.push_back({sqlite3_column_int64(q.s, 0), col_text(q.s, 1)});
+    }
+    int done = 0;
+    for (const auto& j : jobs) {
+        std::vector<uint8_t> jpeg; std::vector<float> emb; int w = 0, h = 0; std::string e;
+        bool ok = detail::read_file_bounded((fs::path(impl_->cfg.root_directory) / j.path).string(), kMaxJpegBytes, jpeg, e) && decode_embed(provider, jpeg, emb, w, h, e);
+        const bool missing = !ok && !fs::exists(fs::path(impl_->cfg.root_directory) / j.path);
+        std::lock_guard<std::mutex> lk(impl_->mu);
+        if (!impl_->db) return done;
+        if (ok) {
+            const int64_t mid = impl_->model_id(provider.spec(), true);
+            if (mid == 0) { err = "cannot register model"; return -1; }
+            Stmt u(impl_->db, "UPDATE display_history_frames SET model_id=?,embedding=?,embedded=1 WHERE frame_id=?;");
+            if (!u) { err = sqlite3_errmsg(impl_->db); return -1; }
+            sqlite3_bind_int64(u.s, 1, mid); bind_vec(u.s, 2, emb); sqlite3_bind_int64(u.s, 3, j.id);
+            if (sqlite3_step(u.s) != SQLITE_DONE) { err = sqlite3_errmsg(impl_->db); return -1; }
+            ++done;
+        } else {
+            Stmt u(impl_->db, missing ? "UPDATE display_history_frames SET embed_attempts=3 WHERE frame_id=?;" : "UPDATE display_history_frames SET embed_attempts=embed_attempts+1 WHERE frame_id=?;");
+            if (u) { sqlite3_bind_int64(u.s, 1, j.id); sqlite3_step(u.s); }
+            err = e;
+        }
+    }
+    return done;
+}
+uint64_t PopStore::history_pending_embeddings() {
+    std::lock_guard<std::mutex> lk(impl_->mu);
+    return (impl_->db && impl_->hist) ? impl_->count("SELECT COUNT(*) FROM display_history_frames WHERE embedded=0 AND status='ok' AND evidence_id IS NULL AND embed_attempts<3;") : 0;
+}
+bool PopStore::get_history(int64_t frame_id, HistoryFrame& out) {
+    std::lock_guard<std::mutex> lk(impl_->mu);
+    if (!impl_->db || !impl_->hist) return false;
+    Stmt q(impl_->db, std::string("SELECT ") + kHistCols + " FROM display_history_frames WHERE frame_id=?;");
+    if (!q) return false;
+    sqlite3_bind_int64(q.s, 1, frame_id);
+    if (sqlite3_step(q.s) != SQLITE_ROW) return false;
+    out = row_hist(q.s);
+    return true;
+}
+std::vector<HistoryFrame> PopStore::list_history(const std::string& session_id, int limit, int offset, uint64_t* total) {
+    std::vector<HistoryFrame> v;
+    std::lock_guard<std::mutex> lk(impl_->mu);
+    if (!impl_->db || !impl_->hist) { if (total) *total = 0; return v; }
+    const std::string where = session_id.empty() ? "" : " WHERE session_id=?";
+    if (total) {
+        Stmt c(impl_->db, "SELECT COUNT(*) FROM display_history_frames" + where + ";");
+        if (c) { if (!session_id.empty()) c.text(1, session_id); *total = sqlite3_step(c.s) == SQLITE_ROW ? static_cast<uint64_t>(sqlite3_column_int64(c.s, 0)) : 0; }
+    }
+    Stmt q(impl_->db, std::string("SELECT ") + kHistCols + " FROM display_history_frames" + where + " ORDER BY session_id,sec_idx LIMIT ? OFFSET ?;");
+    if (!q) return v;
+    int i = 1; if (!session_id.empty()) q.text(i++, session_id);
+    sqlite3_bind_int(q.s, i++, std::max(1, std::min(1000, limit))); sqlite3_bind_int(q.s, i, std::max(0, offset));
+    while (sqlite3_step(q.s) == SQLITE_ROW) v.push_back(row_hist(q.s));
+    return v;
+}
+bool PopStore::history_jpeg(int64_t frame_id, std::vector<uint8_t>& out) {
+    HistoryFrame h;
+    if (!get_history(frame_id, h)) return false;
+    if (h.evidence_id) return evidence_jpeg(h.evidence_id, out);
+    if (!h.image_available || h.path.empty()) return false;
+    std::string err;
+    return detail::read_file_bounded((fs::path(impl_->cfg.root_directory) / h.path).string(), kMaxJpegBytes, out, err);
+}
+HistoryStats PopStore::history_stats() {
+    HistoryStats s;
+    std::lock_guard<std::mutex> lk(impl_->mu);
+    if (!impl_->db || !impl_->hist) return s;
+    s.ready = true;
+    s.rows = impl_->count("SELECT COUNT(*) FROM display_history_frames;");
+    s.embedded = impl_->count("SELECT COUNT(*) FROM display_history_frames WHERE embedded=1;");
+    s.pending_embed = impl_->count("SELECT COUNT(*) FROM display_history_frames WHERE embedded=0 AND status='ok' AND evidence_id IS NULL AND embed_attempts<3;");
+    s.embed_failed = impl_->count("SELECT COUNT(*) FROM display_history_frames WHERE embedded=0 AND embed_attempts>=3;");
+    s.linked_to_checkpoint = impl_->count("SELECT COUNT(*) FROM display_history_frames WHERE evidence_id IS NOT NULL;");
+    s.images_retained = impl_->count("SELECT COUNT(*) FROM display_history_frames WHERE image_available=1;");
+    s.image_bytes = impl_->count("SELECT COALESCE(SUM(bytes),0) FROM display_history_frames WHERE image_available=1;");
+    s.sessions = impl_->count("SELECT COUNT(DISTINCT session_id) FROM display_history_frames;");
+    Stmt q(impl_->db, "SELECT COALESCE(MIN(utc_ms),0),COALESCE(MAX(utc_ms),0) FROM display_history_frames;");
+    if (q && sqlite3_step(q.s) == SQLITE_ROW) { s.oldest_utc_ms = sqlite3_column_int64(q.s, 0); s.newest_utc_ms = sqlite3_column_int64(q.s, 1); }
+    return s;
+}
+uint64_t PopStore::history_finalize_session(const std::string& session_id, int64_t end_utc_ms, int guard_ms, const std::string& played_media_id) {
+    std::lock_guard<std::mutex> lk(impl_->mu);
+    if (!impl_->db || !impl_->hist) return 0;
+    std::vector<std::string> files;
+    uint64_t removed = 0;
+    if (end_utc_ms > 0) {
+        Stmt q(impl_->db, "SELECT path FROM display_history_frames WHERE session_id=? AND utc_ms>?;");
+        if (q) { q.text(1, session_id); sqlite3_bind_int64(q.s, 2, end_utc_ms - guard_ms); while (sqlite3_step(q.s) == SQLITE_ROW) { const std::string pth = col_text(q.s, 0); if (!pth.empty()) files.push_back(pth); } }
+        Stmt d(impl_->db, "DELETE FROM display_history_frames WHERE session_id=? AND utc_ms>?;");
+        if (d) { d.text(1, session_id); sqlite3_bind_int64(d.s, 2, end_utc_ms - guard_ms); if (sqlite3_step(d.s) == SQLITE_DONE) removed = static_cast<uint64_t>(sqlite3_changes(impl_->db)); }
+        for (const auto& f : files) { std::error_code ec; fs::remove(fs::path(impl_->cfg.root_directory) / f, ec); }
+    }
+    if (!played_media_id.empty()) {
+        Stmt u(impl_->db, "UPDATE display_history_frames SET played_media_id=? WHERE session_id=?;");
+        if (u) { u.text(1, played_media_id); u.text(2, session_id); sqlite3_step(u.s); }
+    }
+    return removed;
+}
+HistoryPruneResult PopStore::prune_history(int64_t jpeg_older_than_ms, uint64_t max_bytes, int64_t meta_older_than_ms, uint64_t max_rows) {
+    HistoryPruneResult r;
+    std::lock_guard<std::mutex> lk(impl_->mu);
+    if (!impl_->db || !impl_->hist) return r;
+    struct Row { int64_t id; std::string path; uint64_t bytes; int64_t utc; };
+    std::vector<Row> rows; uint64_t total = 0;
+    {
+        Stmt q(impl_->db, "SELECT frame_id,path,bytes,utc_ms FROM display_history_frames WHERE image_available=1 ORDER BY utc_ms,frame_id;");
+        while (q && sqlite3_step(q.s) == SQLITE_ROW) { rows.push_back({sqlite3_column_int64(q.s, 0), col_text(q.s, 1), static_cast<uint64_t>(sqlite3_column_int64(q.s, 2)), sqlite3_column_int64(q.s, 3)}); total += rows.back().bytes; }
+    }
+    for (const auto& w : rows) {
+        const bool old = jpeg_older_than_ms > 0 && w.utc < jpeg_older_than_ms;
+        const bool over = max_bytes > 0 && total > max_bytes;
+        if (!old && !over) break;
+        std::error_code ec; fs::remove(fs::path(impl_->cfg.root_directory) / w.path, ec);
+        Stmt u(impl_->db, "UPDATE display_history_frames SET image_available=0 WHERE frame_id=?;");
+        if (u) { sqlite3_bind_int64(u.s, 1, w.id); sqlite3_step(u.s); }
+        total -= w.bytes; r.bytes_freed += w.bytes; ++r.images_removed;
+    }
+    if (meta_older_than_ms > 0) {
+        std::vector<std::string> files;
+        Stmt q(impl_->db, "SELECT path FROM display_history_frames WHERE utc_ms<? AND image_available=1;");
+        if (q) { sqlite3_bind_int64(q.s, 1, meta_older_than_ms); while (sqlite3_step(q.s) == SQLITE_ROW) files.push_back(col_text(q.s, 0)); }
+        for (const auto& f : files) { std::error_code ec; if (!f.empty()) fs::remove(fs::path(impl_->cfg.root_directory) / f, ec); }
+        Stmt d(impl_->db, "DELETE FROM display_history_frames WHERE utc_ms<?;");
+        if (d) { sqlite3_bind_int64(d.s, 1, meta_older_than_ms); if (sqlite3_step(d.s) == SQLITE_DONE) r.rows_removed = static_cast<uint64_t>(sqlite3_changes(impl_->db)); }
+    }
+    if (max_rows > 0) {                                                          // bound the exact-scan size: the oldest rows (and their files) go first
+        const uint64_t n = impl_->count("SELECT COUNT(*) FROM display_history_frames;");
+        if (n > max_rows) {
+            const uint64_t drop = n - max_rows;
+            std::vector<std::string> files;
+            Stmt q(impl_->db, "SELECT path FROM display_history_frames WHERE image_available=1 AND frame_id IN (SELECT frame_id FROM display_history_frames ORDER BY utc_ms,frame_id LIMIT ?);");
+            if (q) { sqlite3_bind_int64(q.s, 1, static_cast<int64_t>(drop)); while (sqlite3_step(q.s) == SQLITE_ROW) files.push_back(col_text(q.s, 0)); }
+            for (const auto& f : files) { std::error_code ec; if (!f.empty()) fs::remove(fs::path(impl_->cfg.root_directory) / f, ec); }
+            Stmt d(impl_->db, "DELETE FROM display_history_frames WHERE frame_id IN (SELECT frame_id FROM display_history_frames ORDER BY utc_ms,frame_id LIMIT ?);");
+            if (d) { sqlite3_bind_int64(d.s, 1, static_cast<int64_t>(drop)); if (sqlite3_step(d.s) == SQLITE_DONE) r.rows_removed += static_cast<uint64_t>(sqlite3_changes(impl_->db)); }
+        }
+    }
+    return r;
 }
 
 // Fractional-box area resample of the source rectangle [sx0,sx1)x[sy0,sy1) onto dw x dh (a box smaller than a pixel is widened to one pixel).
@@ -819,15 +1131,34 @@ bool PopStore::search_evidence(EmbeddingProvider& provider, const std::vector<ui
     out.embed_ms = std::chrono::duration<double, std::milli>(t_embedded - t0).count();
     const EmbeddingSpec spec = provider.spec();
     out.coverage = evidence_coverage(&spec, o.capture_method);
-    struct Cand { int64_t id; float sim; int64_t utc; };
+    struct Cand { int64_t id; float sim; int64_t utc; bool hist; };
     std::vector<Cand> top;                                                         // hits at or above the minimum, bounded to top_k
-    Cand best{0, -2.f, 0};
+    Cand best{0, -2.f, 0, false};
     {
         std::lock_guard<std::mutex> lk(impl_->mu);
         if (!impl_->db) { err = "store not open"; return false; }
         const int64_t mid = impl_->model_id(spec, false);
         const bool method_filter = !o.capture_method.empty();
-        if (mid != 0 && !(method_filter && !impl_->v2 && o.capture_method != "brightscript_screenshot")) {
+        const size_t dim = q.size();
+        auto worse = [](const Cand& a, const Cand& b) { return a.sim > b.sim || (a.sim == b.sim && a.utc > b.utc); };   // "a ranks before b"
+        auto scan = [&](Stmt& st, bool hist) {
+            while (!out.cancelled && sqlite3_step(st.s) == SQLITE_ROW) {
+                if ((out.scanned & 255) == 0 && o.cancel && o.cancel()) { out.cancelled = true; break; }
+                ++out.scanned;
+                if (static_cast<size_t>(sqlite3_column_bytes(st.s, 1)) != dim * sizeof(float)) { ++out.skipped_invalid; continue; }
+                const float* v = static_cast<const float*>(sqlite3_column_blob(st.s, 1));
+                double dot = 0; for (size_t k = 0; k < dim; ++k) dot += static_cast<double>(v[k]) * q[k];
+                if (!std::isfinite(dot)) { ++out.skipped_invalid; continue; }
+                const Cand c{sqlite3_column_int64(st.s, 0), static_cast<float>(std::max(-1.0, std::min(1.0, dot))), sqlite3_column_int64(st.s, 2), hist};
+                if (best.id == 0 || worse(c, best)) best = c;
+                if (o.has_min_similarity && c.sim < o.min_similarity) continue;
+                top.push_back(c);
+                if (top.size() > static_cast<size_t>(o.top_k) * 4 + 64) { std::partial_sort(top.begin(), top.begin() + o.top_k, top.end(), worse); top.resize(o.top_k); }
+            }
+        };
+        const bool want_checkpoints = o.role.empty() || o.role == "verification_checkpoint";
+        const bool want_history = (o.role.empty() || o.role == "history_sample") && impl_->hist && (!method_filter || o.capture_method == "resilience_grpc");
+        if (mid != 0 && want_checkpoints && !(method_filter && !impl_->v2 && o.capture_method != "brightscript_screenshot")) {
             std::string sql = "SELECT e.evidence_id,e.embedding,e.utc_ms FROM display_capture_evidence e";
             if (!o.media_id.empty()) sql += " JOIN playback_sessions s ON s.session_id=e.session_id";
             sql += " WHERE e.status='ok' AND e.embedded=1 AND e.model_id=?";
@@ -835,6 +1166,7 @@ bool PopStore::search_evidence(EmbeddingProvider& provider, const std::vector<ui
             if (o.start_utc_ms > 0) sql += " AND e.utc_ms>=?";
             if (o.end_utc_ms > 0) sql += " AND e.utc_ms<?";
             if (o.require_image) sql += " AND e.image_available=1";
+            if (!o.session_id.empty()) sql += " AND e.session_id=?";
             if (!o.media_id.empty()) sql += " AND (s.expected_media_id=? OR s.played_media_id=?)";
             Stmt st(impl_->db, sql + ";");
             if (!st) { err = sqlite3_errmsg(impl_->db); return false; }
@@ -843,28 +1175,51 @@ bool PopStore::search_evidence(EmbeddingProvider& provider, const std::vector<ui
             if (method_filter && impl_->v2) st.text(i++, o.capture_method);
             if (o.start_utc_ms > 0) sqlite3_bind_int64(st.s, i++, o.start_utc_ms);
             if (o.end_utc_ms > 0) sqlite3_bind_int64(st.s, i++, o.end_utc_ms);
+            if (!o.session_id.empty()) st.text(i++, o.session_id);
             if (!o.media_id.empty()) { st.text(i++, o.media_id); st.text(i++, o.media_id); }
-            const size_t dim = q.size();
-            auto worse = [](const Cand& a, const Cand& b) { return a.sim > b.sim || (a.sim == b.sim && a.utc > b.utc); };   // "a ranks before b"
-            while (sqlite3_step(st.s) == SQLITE_ROW) {
-                if ((out.scanned & 255) == 0 && o.cancel && o.cancel()) { out.cancelled = true; break; }
-                ++out.scanned;
-                if (static_cast<size_t>(sqlite3_column_bytes(st.s, 1)) != dim * sizeof(float)) { ++out.skipped_invalid; continue; }
-                const float* v = static_cast<const float*>(sqlite3_column_blob(st.s, 1));
-                double dot = 0; for (size_t k = 0; k < dim; ++k) dot += static_cast<double>(v[k]) * q[k];
-                if (!std::isfinite(dot)) { ++out.skipped_invalid; continue; }
-                const Cand c{sqlite3_column_int64(st.s, 0), static_cast<float>(std::max(-1.0, std::min(1.0, dot))), sqlite3_column_int64(st.s, 2)};
-                if (best.id == 0 || worse(c, best)) best = c;
-                if (o.has_min_similarity && c.sim < o.min_similarity) continue;
-                top.push_back(c);
-                if (top.size() > static_cast<size_t>(o.top_k) * 4 + 64) { std::partial_sort(top.begin(), top.begin() + o.top_k, top.end(), worse); top.resize(o.top_k); }
-            }
-            std::sort(top.begin(), top.end(), worse);
-            if (top.size() > static_cast<size_t>(o.top_k)) top.resize(o.top_k);
+            scan(st, false);
         }
+        if (mid != 0 && want_history && !out.cancelled) {
+            // A history row that reuses a verification checkpoint (evidence_id set, or a checkpoint of the same session with the same capture time)
+            // is not scanned again: the checkpoint row represents that frame, so nothing is counted twice.
+            std::string sql = "SELECT h.frame_id,h.embedding,h.utc_ms FROM display_history_frames h";
+            if (!o.media_id.empty()) sql += " JOIN playback_sessions s ON s.session_id=h.session_id";
+            sql += " WHERE h.status='ok' AND h.embedded=1 AND h.evidence_id IS NULL AND h.model_id=?"
+                   " AND NOT EXISTS (SELECT 1 FROM display_capture_evidence e WHERE e.session_id=h.session_id AND e.utc_ms=h.utc_ms AND e.status='ok' AND e.embedded=1 AND e.capture_method='resilience_grpc')";
+            if (o.start_utc_ms > 0) sql += " AND h.utc_ms>=?";
+            if (o.end_utc_ms > 0) sql += " AND h.utc_ms<?";
+            if (o.require_image) sql += " AND h.image_available=1";
+            if (!o.session_id.empty()) sql += " AND h.session_id=?";
+            if (!o.media_id.empty()) sql += " AND (s.expected_media_id=? OR s.played_media_id=?)";
+            Stmt st(impl_->db, sql + ";");
+            if (!st) { err = sqlite3_errmsg(impl_->db); return false; }
+            int i = 1;
+            sqlite3_bind_int64(st.s, i++, mid);
+            if (o.start_utc_ms > 0) sqlite3_bind_int64(st.s, i++, o.start_utc_ms);
+            if (o.end_utc_ms > 0) sqlite3_bind_int64(st.s, i++, o.end_utc_ms);
+            if (!o.session_id.empty()) st.text(i++, o.session_id);
+            if (!o.media_id.empty()) { st.text(i++, o.media_id); st.text(i++, o.media_id); }
+            scan(st, true);
+        }
+        auto worse2 = worse;
+        std::sort(top.begin(), top.end(), worse2);
+        if (top.size() > static_cast<size_t>(o.top_k)) top.resize(o.top_k);
     }
-    for (const auto& c : top) { EvidenceHit hit; if (get_evidence(c.id, hit.evidence)) { hit.similarity = c.sim; out.hits.push_back(std::move(hit)); } }
-    if (best.id != 0) { EvidenceHit hit; if (get_evidence(best.id, hit.evidence)) { hit.similarity = best.sim; out.closest = std::move(hit); out.has_closest = true; } }
+    auto make_hit = [&](const Cand& c, EvidenceHit& hit) {
+        hit.similarity = c.sim;
+        if (!c.hist) return get_evidence(c.id, hit.evidence);
+        HistoryFrame hf;
+        if (!get_history(c.id, hf)) return false;
+        Evidence& e = hit.evidence; e = Evidence{};
+        e.role = "history_sample"; e.history_id = hf.frame_id; e.sec_idx = hf.sec_idx; e.session_id = hf.session_id; e.idx = hf.sec_idx;
+        e.target_offset_ms = hf.target_offset_ms; e.actual_offset_ms = hf.actual_offset_ms; e.status = hf.status; e.source = hf.source; e.path = hf.path;
+        e.sha256 = hf.sha256; e.width = hf.width; e.height = hf.height; e.bytes = hf.bytes; e.utc_ms = hf.utc_ms; e.embedded = hf.embedded;
+        e.image_available = hf.image_available; e.capture_method = hf.capture_method; e.provenance = hf.provenance; e.uncertainty_ms = hf.uncertainty_ms;
+        e.expected_media_id = hf.expected_media_id;
+        return true;
+    };
+    for (const auto& c : top) { EvidenceHit hit; if (make_hit(c, hit)) out.hits.push_back(std::move(hit)); }
+    if (best.id != 0) { EvidenceHit hit; if (make_hit(best, hit)) { out.closest = std::move(hit); out.has_closest = true; } }
     out.elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     out.scan_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t_embedded).count();
     return true;

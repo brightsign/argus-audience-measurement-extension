@@ -134,6 +134,11 @@ struct Evidence {
     bool        image_available = false;   // file retained (retention may remove it; the scores are kept)
     std::string capture_method = "brightscript_screenshot", provenance;
     int         uncertainty_ms = -1;
+    // Phase 2: a search hit may be a display-history sample (table display_history_frames) instead of a verification checkpoint.
+    std::string role = "verification_checkpoint";     // verification_checkpoint | history_sample
+    int64_t     history_id = 0;                        // display_history_frames.frame_id when role == history_sample
+    int         sec_idx = 0;                           // history sample index inside the session
+    std::string expected_media_id;                     // history samples only (as scheduled)
 };
 
 // Reference frames can be built for a second capture geometry (the OS rendered frames are letterboxed 640x360, the BrightScript
@@ -227,6 +232,8 @@ struct EvidenceSearchOptions {
     std::string capture_method = "resilience_grpc";         // "" = any capture method
     std::string media_id;                                    // "" = any advertisement (matches the session's expected or played media)
     bool    require_image = false;                           // only evidence whose JPEG is still retained
+    std::string session_id;                                  // "" = any playback session
+    std::string role;                                        // "" = checkpoints + history, "verification_checkpoint", "history_sample"
     std::function<bool()> cancel;                            // polled during the scan
 };
 struct EvidenceHit {
@@ -240,6 +247,7 @@ struct EvidenceCoverage {
     uint64_t images_retained = 0;                            // searchable rows whose JPEG is still on disk
     uint64_t sessions = 0;                                   // distinct sessions among the searchable rows
     int64_t  oldest_utc_ms = 0, newest_utc_ms = 0;           // capture-time range of the searchable rows
+    uint64_t checkpoint_rows = 0, history_rows = 0;          // split of rows_searchable (history rows reusing a checkpoint are counted once)
 };
 struct EvidenceSearchResult {
     std::vector<EvidenceHit> hits;                           // similarity >= min (or all, when no minimum), best first, at most top_k
@@ -252,6 +260,43 @@ struct EvidenceSearchResult {
     bool     cancelled = false;
     EvidenceCoverage coverage;
 };
+
+// ---- display history (Phase 2): about one rendered display frame per second during registered playback ----------------------------------------
+// Separate, additive table display_history_frames inside the same pop.db. It is NOT read by the verification engine (which only looks at
+// display_capture_evidence), so history can never change a verdict. user_version stays 2: an older binary simply ignores the table.
+struct HistoryFrameIn {
+    std::string session_id;
+    int         sec_idx = 0;                  // 0.. sample number inside the session (unique per session)
+    int         target_offset_ms = 0, actual_offset_ms = 0;
+    int64_t     utc_ms = 0, mono_ms = 0;      // frame capture time (upper bound of the display moment) and the daemon monotonic clock
+    int         uncertainty_ms = -1;
+    std::string source = "main_display", expected_media_id;
+    std::string capture_method = "resilience_grpc", provenance;
+    std::vector<uint8_t> jpeg;                // the OS-compressed bytes, stored unchanged
+};
+struct HistoryFrame {
+    int64_t     frame_id = 0;
+    std::string session_id;
+    int         sec_idx = 0;
+    int64_t     evidence_id = 0;              // != 0: this instant is also a verification checkpoint; the checkpoint's JPEG and vector are reused
+    std::string role = "history_sample";      // history_sample | history_and_checkpoint
+    std::string source, expected_media_id, played_media_id, capture_method, provenance, path, sha256, status = "ok";
+    int64_t     utc_ms = 0, mono_ms = 0;
+    int         target_offset_ms = 0, actual_offset_ms = 0, uncertainty_ms = -1, width = 0, height = 0;
+    uint64_t    bytes = 0;
+    bool        embedded = false, image_available = false;
+    int         embed_attempts = 0;
+};
+struct HistoryLimits {
+    int      max_frames_per_session = 600;
+    uint64_t max_pending_embeddings = 300;    // un-embedded rows allowed before new samples are refused (backlog bound)
+};
+struct HistoryStats {
+    bool     ready = false;
+    uint64_t rows = 0, embedded = 0, pending_embed = 0, embed_failed = 0, linked_to_checkpoint = 0, images_retained = 0, image_bytes = 0, sessions = 0;
+    int64_t  oldest_utc_ms = 0, newest_utc_ms = 0;
+};
+struct HistoryPruneResult { uint64_t images_removed = 0, rows_removed = 0, bytes_freed = 0; };
 
 class PopStore {
 public:
@@ -310,6 +355,26 @@ public:
     // independent retention of evidence images: removes files older than `older_than_ms` (0 = skip) and, when
     // max_bytes > 0, the oldest ones beyond that total. Rows and scores stay (image_available becomes false).
     uint64_t prune_evidence(int64_t older_than_ms, uint64_t max_bytes);
+
+    // ---- display history (additive table, created on demand; never created in a legacy schema-1 file) ----
+    bool history_open(std::string& err);                    // CREATE TABLE IF NOT EXISTS ... (no PRAGMA user_version change)
+    bool history_ready() const;
+    // Validates the JPEG (complete, bounded, decodable header), writes it unchanged under pop/history/YYYY/MM/DD/HH/<source>/ (atomic) and inserts the
+    // row. If a verification checkpoint of the same session already holds the very same frame (same capture time) no second copy is stored.
+    // err == "duplicate" for an existing (session, sec_idx); "session limit" / "embedding backlog" when a bound is hit.
+    bool add_history_frame(const HistoryFrameIn& in, const HistoryLimits& lim, HistoryFrame& out, std::string& err);
+    // Embeds up to `max_rows` pending rows with `provider`. Returns the number embedded, or -1 with err.
+    int  embed_pending_history(EmbeddingProvider& provider, int max_rows, std::string& err);
+    uint64_t history_pending_embeddings();
+    bool get_history(int64_t frame_id, HistoryFrame& out);
+    std::vector<HistoryFrame> list_history(const std::string& session_id, int limit, int offset, uint64_t* total = nullptr);
+    bool history_jpeg(int64_t frame_id, std::vector<uint8_t>& out);
+    HistoryStats history_stats();
+    // End of a session: records the played media on its rows and removes any frame captured after (end_utc_ms - guard_ms).
+    uint64_t history_finalize_session(const std::string& session_id, int64_t end_utc_ms, int guard_ms, const std::string& played_media_id);
+    // JPEGs older than jpeg_older_than_ms, and the oldest ones beyond max_bytes, are removed (row and vector stay); rows older than
+    // meta_older_than_ms (and the oldest ones beyond max_rows) are deleted completely. 0 disables the respective limit.
+    HistoryPruneResult prune_history(int64_t jpeg_older_than_ms, uint64_t max_bytes, int64_t meta_older_than_ms, uint64_t max_rows = 0);   // max_rows bounds the exact-scan size (oldest rows go first)
 
     std::string root() const;
 

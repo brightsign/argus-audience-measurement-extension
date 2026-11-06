@@ -265,3 +265,13 @@ table.vm-table { border-collapse: collapse; width: 100%; font-size: 12px; }
 .ds-img img { width: 100%; height: 100%; object-fit: contain; }
 .ds-meta { margin-top: 10px; }
 .ds-nomatch { text-align: left; padding: 14px; }
+
+/* Phase 2: display history */
+.pop-hist{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin:8px 0}
+.pop-hist figure{margin:0;background:var(--panel2,#0e1624);border:1px solid var(--line,#26324a);border-radius:6px;padding:4px}
+.pop-hist img{width:100%;height:auto;display:block;border-radius:4px;aspect-ratio:16/9;object-fit:contain;background:#000}
+.pop-hist figcaption{font-size:12px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;padding-top:3px}
+.dh-panel{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:8px 16px}
+.dh-panel dt{font-size:12px;opacity:.7}.dh-panel dd{margin:0 0 6px 0;font-weight:600}
+.dh-role{display:inline-block;font-size:12px;padding:1px 8px;border-radius:10px;border:1px solid var(--line,#26324a);margin-left:6px}
+.dh-role.hist{border-color:#3b82f6;color:#7fb2ff}.dh-role.ck{border-color:#10b981;color:#6fe3b4}

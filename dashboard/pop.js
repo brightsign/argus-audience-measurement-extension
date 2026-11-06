@@ -352,8 +352,28 @@
       const blob = new Blob([JSON.stringify(d, null, 2)], { type: "application/json" });
       const a = h("a", { href: URL.createObjectURL(blob), download: `proof_of_play_${d.session_id}.json` }); document.body.append(a); a.click(); a.remove();
     } });
+    // Display history (Phase 2): the additional, searchable frames of this session. They are NOT used by the verification engine.
+    let histNode = null;
+    if (d.history) {
+      const hr = await papi("/history/frames?session_id=" + encodeURIComponent(id) + "&limit=1000");
+      const fr = hr.status === 200 ? hr.data.frames : [];
+      const iv = d.history.interval_ms || 1000;
+      const expected = d.actual_play_ms > 0 ? Math.floor((d.actual_play_ms - 500) / iv) + 1 : 0;
+      const partial = expected > 0 && fr.length < 0.9 * expected;
+      const nEmb = fr.filter((f) => f.embedded).length;
+      histNode = h("div", { "data-role": "history-section" },
+        h("h3", { text: "Display history: additional searchable frames (not used for the verdict)" }),
+        h("p", { class: "muted", text: `${fr.length} Weston/VOP2 frame${fr.length === 1 ? "" : "s"} stored at about one per second${expected ? ` (about ${expected} possible for the time played)` : ""}; ${nEmb} embedded for Visual Search. ` +
+          "The verification checkpoints above are separate; a history frame never changes the result." }),
+        partial ? h("div", { class: "vm-banner warn", text: `Partial history: ${fr.length} of about ${expected} frames. Seconds without a stored frame were not captured (display source unavailable, stale or ambiguous), so this history does not show every moment of the play.` }) : null,
+        fr.length ? h("div", { class: "pop-hist" }, ...fr.map((f) => h("figure", { "data-hist": String(f.frame_id) },
+          f.image_available ? h("img", { src: f.image_url, alt: `Display history frame at ${fmtMs(f.actual_offset_ms)}`, loading: "lazy" }) : h("div", { class: "pop-noimg", text: "JPEG expired" }),
+          h("figcaption", null, `+${(f.actual_offset_ms / 1000).toFixed(1)} s`, f.role === "history_and_checkpoint" ? h("span", { class: "pop-chip info", text: "also a checkpoint" }) : null,
+            f.embedded ? null : h("span", { class: "pop-chip warn", text: "not embedded yet" }))))) : h("div", { class: "vm-empty", text: "No display-history frames were stored for this session." }));
+    }
     const body = h("div", null, head, h("div", { class: "vm-row", style: "gap:8px;margin:10px 0" }, reverify, exp), facts,
-      h("h3", { text: "Why this result" }), h("ul", { class: "pop-why" }, ...why), h("h3", { text: "Evidence: display frames vs reference frames" }), cards.length ? h("div", { class: "pop-evs" }, ...cards) : h("div", { class: "vm-empty", text: "No evidence frames were captured for this session." }),
+      h("h3", { text: "Why this result" }), h("ul", { class: "pop-why" }, ...why), h("h3", { text: "Verification checkpoints: display frames vs reference frames (used for the verdict)" }), cards.length ? h("div", { class: "pop-evs" }, ...cards) : h("div", { class: "vm-empty", text: "No evidence frames were captured for this session." }),
+      histNode,
       h("h3", { text: "Playback events (player clock)" }), timeline.children.length ? timeline : h("div", { class: "vm-empty", text: "No playback events received." }),
       h("p", { class: "muted", text: "Event times use the player's monotonic clock; wall-clock time is assigned when the event is read (accuracy about a quarter of a second)." }));
     S.modal = U.openModal("Proof of Play — " + d.session_id, body, { wide: true, onClose: () => { S.modal = null; } });

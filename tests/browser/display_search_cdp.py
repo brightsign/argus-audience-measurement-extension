@@ -138,7 +138,7 @@ async def main():
     check("coverage before any session: zero searchable rows, schema 2, default minimum = the PoP match threshold", st == 200 and cov["searchable_rows"] == 0 and cov["schema_v2"] is True and abs(cov["min_similarity_default"] - 0.8) < 1e-6, cov)
     st, r = http("POST", "/api/pop/search/display", jpeg_bytes(display_picture("A")), "image/jpeg")
     check("search with no stored evidence: 200, 'No matching stored evidence', no closest frame, and no claim that nothing was played",
-          st == 200 and r["no_match"] and r["message"] == "No matching stored evidence" and "closest_below_minimum" not in r and "does not show that the content was never played" in r["message_detail"], (st, r))
+          st == 200 and r["no_match"] and r["message"] == "No matching stored evidence" and "closest_below_minimum" not in r and "does not establish that the content was never displayed" in r["message_detail"], (st, r))
 
     for mid, name in (("ad-a", "Meet BrightSign"), ("ad-b", "Snowy River")):
         st, r = http("POST", "/api/pop/media", {"media_id": mid, "display_name": name, "uri": mid + ".mp4", "duration_s": 60, "slot_s": SLOT, "width": 1920, "height": 1080, "sha256": "0" * 64})
@@ -176,7 +176,7 @@ async def main():
     st, r = http("POST", "/api/pop/search/display?media_id=ad-b", refA, "image/jpeg")
     check("API: advertisement filter ad-b with ad A's picture finds nothing and says 'No matching stored evidence' (closest below minimum shown)",
           st == 200 and r["results"] == [] and r["message"] == "No matching stored evidence" and r["closest_below_minimum"]["session_id"] == sid_b and r["closest_below_minimum"]["similarity"] < 0.8, r)
-    check("API: the no-match message does not claim the content was never played", "does not show that the content was never played" in r["message_detail"], r["message_detail"])
+    check("API: the no-match message does not claim the content was never played", "does not establish that the content was never displayed" in r["message_detail"], r["message_detail"])
     st, r = http("POST", "/api/pop/search/display", jpeg_bytes(display_picture("C")), "image/jpeg")
     check("API: a picture that was never on the display gives no match", st == 200 and r["results"] == [] and r["no_match"] and r["status"]["candidates_scanned"] == 6, r)
     t_lo, t_hi = min(ts), max(ts)
@@ -295,7 +295,7 @@ async def main():
         check("no match: the page says 'No matching stored evidence' and shows the closest frame as below the minimum",
               await wait_for("/No matching stored evidence/.test(document.querySelector('#view-search .ds-nomatch')?.innerText||'') && document.querySelectorAll('#view-search .ds-closest').length===1", 15))
         nm = await ev("document.querySelector('#view-search .ds-nomatch').innerText + ' ' + document.querySelector('#view-search .ds-closest').innerText")
-        check("the no-match text does not claim the content was never played", "does not show that the content was never played" in nm and "closest stored frame" in nm.lower(), nm)
+        check("the no-match text does not claim the content was never played", "does not establish that the content was never displayed" in nm and "closest stored frame" in nm.lower(), nm)
         await shot("4_no_match")
         await cmd("Page.navigate", url=BASE + "?t=%d#search" % int(time.time() * 1000))
         await wait_for("true", 1)

@@ -545,3 +545,266 @@ TEST(PopSearch, DisplayGeometryRejectsNonJpegAndHandlesTinyImages) {
     detail::DecodedImage d; ASSERT_TRUE(detail::decode_jpeg_rgb(out.data(), out.size(), d, e)) << e;
     EXPECT_EQ(d.width, 640); EXPECT_EQ(d.height, 360);
 }
+
+// ---- Phase 2: display history (about one display frame per second, separate from the three verification checkpoints) ---------------------------
+namespace {
+HistoryFrameIn hist_in(const std::string& sid, int k, int kind, int phase = 0, int64_t utc = 0) {
+    HistoryFrameIn h; h.session_id = sid; h.sec_idx = k; h.target_offset_ms = 500 + k * 1000; h.actual_offset_ms = 520 + k * 1000;
+    h.utc_ms = utc ? utc : kT0 + 500 + k * 1000; h.mono_ms = 1000 + k * 1000; h.uncertainty_ms = 252; h.expected_media_id = "ad-a";
+    h.provenance = "weston_vop2_writeback p7"; h.jpeg = make_jpeg(kind, phase); return h;
+}
+int64_t user_version_of(const std::string& path) {
+    sqlite3* db = nullptr; int64_t v = -1;
+    if (sqlite3_open_v2(path.c_str(), &db, SQLITE_OPEN_READONLY, nullptr) == SQLITE_OK) {
+        sqlite3_stmt* s = nullptr;
+        if (sqlite3_prepare_v2(db, "PRAGMA user_version;", -1, &s, nullptr) == SQLITE_OK && sqlite3_step(s) == SQLITE_ROW) v = sqlite3_column_int(s, 0);
+        sqlite3_finalize(s);
+    }
+    sqlite3_close(db); return v;
+}
+bool has_table(const std::string& path, const char* name) {
+    sqlite3* db = nullptr; bool r = false;
+    if (sqlite3_open_v2(path.c_str(), &db, SQLITE_OPEN_READONLY, nullptr) == SQLITE_OK) {
+        sqlite3_stmt* s = nullptr;
+        if (sqlite3_prepare_v2(db, "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?;", -1, &s, nullptr) == SQLITE_OK) { sqlite3_bind_text(s, 1, name, -1, SQLITE_STATIC); r = sqlite3_step(s) == SQLITE_ROW; }
+        sqlite3_finalize(s);
+    }
+    sqlite3_close(db); return r;
+}
+void history_fixture(Fx& f) {            // two ad-A sessions with 20 samples each (different phases), one ad-B session with 10
+    f.media("ad-a", 0); f.media("ad-b", 1);
+    std::string e; ASSERT_TRUE(f.store.history_open(e)) << e;
+    HistoryLimits lim;
+    for (const char* sid : {"h1", "h2"}) {
+        f.schedule(sid, "ad-a"); f.full_play(sid);
+        for (int k = 0; k < 20; ++k) { HistoryFrame o; ASSERT_TRUE(f.store.add_history_frame(hist_in(sid, k, 0, k * 4, std::string(sid) == "h1" ? 0 : kT0 + 600000 + 500 + k * 1000), lim, o, e)) << e; }
+    }
+    f.schedule("h3", "ad-b"); f.full_play("h3");
+    for (int k = 0; k < 10; ++k) { HistoryFrame o; ASSERT_TRUE(f.store.add_history_frame(hist_in("h3", k, 1, k * 4, kT0 + 1200000 + 500 + k * 1000), lim, o, e)) << e; }
+    while (true) { const int n = f.store.embed_pending_history(f.prov, 100, e); ASSERT_GE(n, 0) << e; if (n == 0) break; }
+}
+}  // namespace
+
+TEST(PopHistory, TheTableIsAdditiveCreatedOnDemandAndSchemaVersionIsUnchanged) {
+    Fx f;
+    const std::string db = (fs::path(f.dir.str()) / "pop.db").string();
+    EXPECT_FALSE(f.store.history_ready());
+    EXPECT_FALSE(has_table(db, "display_history_frames")) << "opening a store creates nothing";
+    HistoryFrame o; HistoryLimits lim; std::string e;
+    EXPECT_FALSE(f.store.add_history_frame(hist_in("x", 0, 0), lim, o, e)) << "refused while history is not enabled";
+    ASSERT_TRUE(f.store.history_open(e)) << e;
+    EXPECT_TRUE(f.store.history_ready());
+    EXPECT_TRUE(has_table(db, "display_history_frames"));
+    EXPECT_EQ(user_version_of(db), 2) << "user_version stays 2: an older binary keeps opening the file";
+    EXPECT_TRUE(f.store.history_open(e)) << "idempotent";
+}
+
+TEST(PopHistory, ALegacySchema1FileIsNeverTouchedByHistory) {
+    vmtest::TempDir dir; const std::string path = (fs::path(dir.str()) / "pop.db").string();
+    {   // a real schema-1 file (as written by the first D5 release)
+        sqlite3* db = nullptr; ASSERT_EQ(sqlite3_open(path.c_str(), &db), SQLITE_OK);
+        const char* ddl = "CREATE TABLE playback_sessions(session_id TEXT PRIMARY KEY,job_id TEXT NOT NULL DEFAULT '',expected_media_id TEXT NOT NULL,played_media_id TEXT NOT NULL DEFAULT '',"
+            "source TEXT NOT NULL DEFAULT 'main_display',state TEXT NOT NULL DEFAULT 'scheduled',end_reason TEXT NOT NULL DEFAULT '',scheduled_utc_ms INTEGER NOT NULL DEFAULT 0,"
+            "start_utc_ms INTEGER NOT NULL DEFAULT 0,end_utc_ms INTEGER NOT NULL DEFAULT 0,actual_play_ms INTEGER NOT NULL DEFAULT -1,slot_ms INTEGER NOT NULL DEFAULT 30000,"
+            "captures_requested INTEGER NOT NULL DEFAULT 0,created_at INTEGER NOT NULL);"
+            "CREATE TABLE display_capture_evidence(evidence_id INTEGER PRIMARY KEY AUTOINCREMENT,session_id TEXT NOT NULL,idx INTEGER NOT NULL,target_offset_ms INTEGER NOT NULL,"
+            "actual_offset_ms INTEGER NOT NULL,status TEXT NOT NULL,failure_reason TEXT NOT NULL DEFAULT '',source TEXT NOT NULL,path TEXT NOT NULL DEFAULT '',phash INTEGER NOT NULL DEFAULT 0,"
+            "sha256 TEXT NOT NULL DEFAULT '',width INTEGER NOT NULL DEFAULT 0,height INTEGER NOT NULL DEFAULT 0,bytes INTEGER NOT NULL DEFAULT 0,took_ms INTEGER NOT NULL DEFAULT 0,"
+            "utc_ms INTEGER NOT NULL,model_id INTEGER NOT NULL DEFAULT 0,embedding BLOB,embedded INTEGER NOT NULL DEFAULT 0,image_available INTEGER NOT NULL DEFAULT 0,created_at INTEGER NOT NULL,"
+            "UNIQUE(session_id,idx)); PRAGMA user_version=1;";
+        ASSERT_EQ(sqlite3_exec(db, ddl, nullptr, nullptr, nullptr), SQLITE_OK); sqlite3_close(db);
+    }
+    std::ifstream a(path, std::ios::binary); std::string before((std::istreambuf_iterator<char>(a)), std::istreambuf_iterator<char>()); a.close();
+    PopConfig c; c.root_directory = dir.str(); PopStore s(c); std::string e; ASSERT_TRUE(s.open(e)) << e;
+    EXPECT_FALSE(s.history_open(e)) << "history needs a schema-2 file; the legacy file is not upgraded";
+    EXPECT_FALSE(s.history_ready()); s.close();
+    std::ifstream b(path, std::ios::binary); std::string after((std::istreambuf_iterator<char>(b)), std::istreambuf_iterator<char>());
+    EXPECT_EQ(before, after) << "byte-identical";
+}
+
+TEST(PopHistory, StoresTheOriginalJpegBytesAndEmbedsThemAsynchronously) {
+    Fx f; f.schedule("s", "ad-a"); f.full_play("s");
+    std::string e; ASSERT_TRUE(f.store.history_open(e)) << e;
+    HistoryLimits lim; HistoryFrame o; const auto in = hist_in("s", 0, 0);
+    ASSERT_TRUE(f.store.add_history_frame(in, lim, o, e)) << e;
+    EXPECT_EQ(o.role, "history_sample"); EXPECT_TRUE(o.image_available); EXPECT_FALSE(o.embedded) << "the vector comes later";
+    EXPECT_EQ(o.width, 160); EXPECT_EQ(o.height, 100); EXPECT_NE(o.path.find("pop/history/2026/01/01/10/"), std::string::npos) << o.path;
+    std::ifstream fin(fs::path(f.dir.str()) / o.path, std::ios::binary); std::vector<uint8_t> disk((std::istreambuf_iterator<char>(fin)), std::istreambuf_iterator<char>());
+    EXPECT_EQ(disk, in.jpeg) << "the compressed bytes are stored unchanged (no decode/re-encode)";
+    EXPECT_EQ(f.store.history_stats().pending_embed, 1u);
+    EvidenceSearchResult r; EvidenceSearchOptions so; so.has_min_similarity = false;
+    ASSERT_TRUE(f.store.search_evidence(f.prov, make_jpeg(0), so, r, e)) << e;
+    EXPECT_EQ(r.scanned, 0u) << "an un-embedded sample is not searchable yet";
+    EXPECT_EQ(f.store.embed_pending_history(f.prov, 10, e), 1) << e;
+    EXPECT_EQ(f.store.history_stats().pending_embed, 0u);
+    ASSERT_TRUE(f.store.search_evidence(f.prov, make_jpeg(0), so, r, e)) << e;
+    ASSERT_EQ(r.hits.size(), 1u);
+    EXPECT_EQ(r.hits[0].evidence.role, "history_sample"); EXPECT_GT(r.hits[0].similarity, 0.99f);
+    EXPECT_EQ(r.hits[0].evidence.session_id, "s"); EXPECT_EQ(r.hits[0].evidence.actual_offset_ms, 520); EXPECT_EQ(r.hits[0].evidence.uncertainty_ms, 252);
+}
+
+TEST(PopHistory, RejectsTruncatedJpegsDuplicatesAndEnforcesTheBounds) {
+    Fx f; f.schedule("s", "ad-a"); std::string e; ASSERT_TRUE(f.store.history_open(e)) << e;
+    HistoryLimits lim; lim.max_frames_per_session = 3; lim.max_pending_embeddings = 100; HistoryFrame o;
+    auto bad = hist_in("s", 0, 0); bad.jpeg.resize(bad.jpeg.size() / 2);
+    EXPECT_FALSE(f.store.add_history_frame(bad, lim, o, e)); EXPECT_NE(e.find("complete JPEG"), std::string::npos) << e;
+    auto junk = hist_in("s", 0, 0); junk.jpeg.assign(300, 7); EXPECT_FALSE(f.store.add_history_frame(junk, lim, o, e));
+    EXPECT_FALSE(f.store.add_history_frame(hist_in("nosuch", 0, 0), lim, o, e)); EXPECT_EQ(e, "unknown session");
+    EXPECT_TRUE(f.store.add_history_frame(hist_in("s", 0, 0), lim, o, e)) << e;
+    EXPECT_FALSE(f.store.add_history_frame(hist_in("s", 0, 0, 5), lim, o, e)); EXPECT_EQ(e, "duplicate");
+    EXPECT_TRUE(f.store.add_history_frame(hist_in("s", 1, 0), lim, o, e)) << e;
+    EXPECT_TRUE(f.store.add_history_frame(hist_in("s", 2, 0), lim, o, e)) << e;
+    EXPECT_FALSE(f.store.add_history_frame(hist_in("s", 3, 0), lim, o, e)); EXPECT_EQ(e, "session limit");
+    f.schedule("t", "ad-a"); lim.max_frames_per_session = 100; lim.max_pending_embeddings = 3;
+    EXPECT_FALSE(f.store.add_history_frame(hist_in("t", 0, 0), lim, o, e)) << "3 un-embedded rows already pending"; EXPECT_EQ(e, "embedding backlog");
+    EXPECT_EQ(f.store.history_stats().rows, 3u);
+    int files = 0; for (auto& p : fs::recursive_directory_iterator(fs::path(f.dir.str()) / "pop")) if (p.path().extension() == ".tmp") ++files;
+    EXPECT_EQ(files, 0) << "no temporary files left behind";
+}
+
+TEST(PopHistory, ACheckpointFrameIsReusedNotStoredOrCountedTwice) {
+    Fx f; f.media("ad-a", 0); f.schedule("c", "ad-a"); f.full_play("c");
+    std::string e; ASSERT_TRUE(f.store.history_open(e)) << e;
+    shot_via(f, "c", 1, 0, 3000, "resilience_grpc", 0);                          // checkpoint at utc kT0+1000+3000
+    HistoryLimits lim; HistoryFrame same, other;
+    ASSERT_TRUE(f.store.add_history_frame(hist_in("c", 3, 0, 0, kT0 + 1000 + 3000), lim, same, e)) << e;       // the very same instant
+    ASSERT_TRUE(f.store.add_history_frame(hist_in("c", 4, 0, 6, kT0 + 1000 + 4000), lim, other, e)) << e;      // a different instant
+    EXPECT_NE(same.evidence_id, 0); EXPECT_EQ(same.role, "history_and_checkpoint"); EXPECT_FALSE(same.image_available); EXPECT_TRUE(same.path.empty()) << "no second JPEG";
+    EXPECT_EQ(other.evidence_id, 0); EXPECT_TRUE(other.image_available);
+    EXPECT_EQ(f.store.history_stats().linked_to_checkpoint, 1u);
+    int n; while ((n = f.store.embed_pending_history(f.prov, 10, e)) > 0) {}
+    std::vector<uint8_t> j; EXPECT_TRUE(f.store.history_jpeg(same.frame_id, j)) << "served from the checkpoint's file"; EXPECT_FALSE(j.empty());
+    EvidenceSearchOptions so; so.has_min_similarity = false; so.top_k = 10; EvidenceSearchResult r;
+    ASSERT_TRUE(f.store.search_evidence(f.prov, make_jpeg(0), so, r, e)) << e;
+    EXPECT_EQ(r.scanned, 2u) << "checkpoint + one extra history frame; the reused one is not scanned again";
+    EXPECT_EQ(r.coverage.checkpoint_rows, 1u); EXPECT_EQ(r.coverage.history_rows, 1u); EXPECT_EQ(r.coverage.rows_searchable, 2u);
+    // a checkpoint stored AFTER the history frame of the same instant also wins at search time
+    Fx g; g.media("ad-a", 0); g.schedule("d", "ad-a"); g.full_play("d"); ASSERT_TRUE(g.store.history_open(e)) << e;
+    ASSERT_TRUE(g.store.add_history_frame(hist_in("d", 3, 0, 0, kT0 + 1000 + 3000), lim, same, e)) << e;
+    EXPECT_EQ(same.evidence_id, 0); while (g.store.embed_pending_history(g.prov, 10, e) > 0) {}
+    shot_via(g, "d", 1, 0, 3000, "resilience_grpc", 0);
+    ASSERT_TRUE(g.store.search_evidence(g.prov, make_jpeg(0), so, r, e)) << e;
+    EXPECT_EQ(r.scanned, 1u) << "only the checkpoint is scanned";
+}
+
+TEST(PopHistory, HistoryNeverChangesAVerificationVerdict) {
+    Fx f; f.media("ad-a", 0); f.media("ad-b", 1); f.schedule("v", "ad-a"); f.full_play("v");
+    for (int i = 0; i < 3; ++i) f.shot("v", i + 1, 0, 3000 + i * 12000, i * 3);
+    const Verification before = f.verify("v");
+    ASSERT_EQ(before.status, PopStatus::PlaybackCorroborated) << before.reason;
+    std::string e; ASSERT_TRUE(f.store.history_open(e)) << e;
+    HistoryLimits lim; HistoryFrame o;
+    for (int k = 0; k < 30; ++k) ASSERT_TRUE(f.store.add_history_frame(hist_in("v", k, k % 2 ? 1 : 2, k), lim, o, e)) << e;   // wildly different content: ad B and kind 2
+    while (f.store.embed_pending_history(f.prov, 50, e) > 0) {}
+    const Verification after = f.verify("v");
+    EXPECT_EQ(after.status, before.status); EXPECT_EQ(after.reason, before.reason);
+    EXPECT_EQ(after.frames_total, before.frames_total); EXPECT_EQ(after.frames_ok, before.frames_ok); EXPECT_EQ(after.frames_matched, before.frames_matched);
+    EXPECT_DOUBLE_EQ(after.mean_sim_expected, before.mean_sim_expected);
+    EXPECT_EQ(f.store.list_evidence("v").size(), 3u) << "the checkpoints are still exactly three";
+}
+
+TEST(PopHistory, SearchFindsAnyMomentAndFiltersBySessionTimeAdvertisementAndRole) {
+    Fx f; history_fixture(f); std::string e; EvidenceSearchResult r; EvidenceSearchOptions o; o.top_k = 50; o.has_min_similarity = false;
+    ASSERT_TRUE(f.store.search_evidence(f.prov, make_jpeg(0, 4 * 11), o, r, e)) << e;          // ad A as it looks at second 11
+    ASSERT_FALSE(r.hits.empty());
+    EXPECT_EQ(r.scanned, 50u);
+    EXPECT_EQ(r.hits[0].evidence.role, "history_sample"); EXPECT_EQ(r.hits[0].evidence.sec_idx, 11);
+    EXPECT_GT(r.hits[0].similarity, 0.99f) << "an exact moment is found even though no verification checkpoint exists there";
+    EXPECT_EQ(r.coverage.history_rows, 50u); EXPECT_EQ(r.coverage.checkpoint_rows, 0u); EXPECT_EQ(r.coverage.sessions, 3u);
+    o.session_id = "h2"; ASSERT_TRUE(f.store.search_evidence(f.prov, make_jpeg(0, 4 * 11), o, r, e)) << e;
+    EXPECT_EQ(r.scanned, 20u); for (auto& h : r.hits) EXPECT_EQ(h.evidence.session_id, "h2");
+    o.session_id = ""; o.start_utc_ms = kT0 + 600000; o.end_utc_ms = kT0 + 700000; ASSERT_TRUE(f.store.search_evidence(f.prov, make_jpeg(0), o, r, e)) << e;
+    EXPECT_EQ(r.scanned, 20u) << "time window selects the second session only";
+    o.start_utc_ms = o.end_utc_ms = 0; o.media_id = "ad-b"; ASSERT_TRUE(f.store.search_evidence(f.prov, make_jpeg(1), o, r, e)) << e;
+    EXPECT_EQ(r.scanned, 10u);
+    o.media_id = ""; o.role = "verification_checkpoint"; ASSERT_TRUE(f.store.search_evidence(f.prov, make_jpeg(0), o, r, e)) << e;
+    EXPECT_EQ(r.scanned, 0u); o.role = "history_sample"; ASSERT_TRUE(f.store.search_evidence(f.prov, make_jpeg(0), o, r, e)) << e; EXPECT_EQ(r.scanned, 50u);
+    o.role = ""; o.capture_method = "brightscript_screenshot"; ASSERT_TRUE(f.store.search_evidence(f.prov, make_jpeg(0), o, r, e)) << e;
+    EXPECT_EQ(r.scanned, 0u) << "history is Weston/VOP2 only and never appears in screenshot results";
+}
+
+TEST(PopHistory, FinalizeDropsFramesAfterTheEndAndRecordsThePlayedMedia) {
+    Fx f; history_fixture(f);
+    // h1 ended at second 10: samples 10..19 (utc >= end - 400 ms) must go
+    const int64_t end = kT0 + 10 * 1000;
+    EXPECT_EQ(f.store.history_finalize_session("h1", end, 400, "ad-b"), 10u);
+    auto rows = f.store.list_history("h1", 100, 0);
+    ASSERT_EQ(rows.size(), 10u); for (auto& r : rows) { EXPECT_LE(r.utc_ms, end - 400); EXPECT_EQ(r.played_media_id, "ad-b"); }
+    int jpgs = 0; for (auto& p : fs::recursive_directory_iterator(fs::path(f.dir.str()) / "pop" / "history")) if (p.path().extension() == ".jpg") ++jpgs;
+    EXPECT_EQ(jpgs, 10 + 20 + 10) << "the removed frames' files are gone too";
+}
+
+TEST(PopHistory, QuotaAndRetentionRemoveImagesFirstAndKeepTheSearchableVectors) {
+    Fx f; history_fixture(f);
+    const HistoryStats s0 = f.store.history_stats(); ASSERT_EQ(s0.rows, 50u); ASSERT_EQ(s0.images_retained, 50u);
+    const uint64_t quota = s0.image_bytes / 2;
+    HistoryPruneResult p = f.store.prune_history(0, quota, 0);
+    const HistoryStats s1 = f.store.history_stats();
+    EXPECT_GT(p.images_removed, 0u); EXPECT_LE(s1.image_bytes, quota); EXPECT_EQ(s1.rows, 50u) << "rows and vectors stay";
+    EvidenceSearchResult r; EvidenceSearchOptions o; o.has_min_similarity = false; o.top_k = 50; std::string e;
+    ASSERT_TRUE(f.store.search_evidence(f.prov, make_jpeg(0), o, r, e)) << e;
+    EXPECT_EQ(r.scanned, 50u); EXPECT_LT(r.coverage.images_retained, 50u);
+    bool saw_expired = false; for (auto& h : r.hits) if (!h.evidence.image_available) saw_expired = true;
+    EXPECT_TRUE(saw_expired) << "expired JPEGs are still hits, flagged as not retained";
+    o.require_image = true; ASSERT_TRUE(f.store.search_evidence(f.prov, make_jpeg(0), o, r, e)) << e; EXPECT_EQ(r.scanned, s1.images_retained);
+    // oldest first: the first session lost its images before the last one
+    auto h1 = f.store.list_history("h1", 100, 0); EXPECT_FALSE(h1.front().image_available);
+    // metadata retention deletes the rows themselves
+    p = f.store.prune_history(0, 0, kT0 + 600000);
+    EXPECT_EQ(p.rows_removed, 20u); EXPECT_EQ(f.store.history_stats().rows, 30u);
+    p = f.store.prune_history(kT0 + 2'000'000, 0, 0);
+    EXPECT_EQ(f.store.history_stats().images_retained, 0u);
+}
+
+TEST(PopHistory, TheRowBoundKeepsTheExactScanSmallByDroppingTheOldestRows) {
+    Fx f; history_fixture(f);
+    const HistoryPruneResult p = f.store.prune_history(0, 0, 0, 35);
+    EXPECT_EQ(p.rows_removed, 15u); EXPECT_EQ(f.store.history_stats().rows, 35u);
+    const auto left = f.store.list_history("h1", 100, 0);
+    ASSERT_EQ(left.size(), 5u) << "the 15 oldest rows all came from the first session";
+    EXPECT_EQ(left.front().sec_idx, 15) << "the oldest samples went first";
+    int jpgs = 0; for (auto& q : fs::recursive_directory_iterator(fs::path(f.dir.str()) / "pop" / "history")) if (q.path().extension() == ".jpg") ++jpgs;
+    EXPECT_EQ(jpgs, 35) << "and so did their files";
+}
+
+// ---- scaling benchmark (not part of the normal run): ./visualmemory_tests --gtest_also_run_disabled_tests --gtest_filter='PopHistoryBench.*' ----------
+#include <chrono>
+#include <random>
+TEST(PopHistoryBench, DISABLED_ExactSearchLatencyVersusHistorySize) {
+    constexpr int kDim = 1280;
+    vmtest::TempDir dir; MockEmbeddingProvider prov(kDim);
+    PopConfig c; c.root_directory = dir.str(); c.sync_full = false;
+    std::string e; int64_t model = 0;
+    {
+        PopStore s(c); ASSERT_TRUE(s.open(e)) << e; ASSERT_TRUE(s.history_open(e)) << e;
+        PopSession ps; ps.session_id = "bench"; ps.expected_media_id = "ad-a"; ASSERT_TRUE(s.schedule_session(ps, e)) << e;
+        HistoryFrame o; HistoryLimits lim; ASSERT_TRUE(s.add_history_frame(hist_in("bench", 0, 0), lim, o, e)) << e;
+        ASSERT_EQ(s.embed_pending_history(prov, 4, e), 1) << e;                          // registers the model row
+    }
+    const std::string path = (fs::path(dir.str()) / "pop.db").string();
+    std::mt19937 rng(7); std::normal_distribution<float> nd(0.f, 1.f);
+    auto q = make_jpeg(0, 0);
+    int64_t have = 1;
+    for (int64_t target : {30, 300, 3000, 30000, 100000}) {
+        {   // top the table up with random unit vectors straight into SQLite (a real store would hold JPEG-less rows for these as well)
+            sqlite3* db = nullptr; ASSERT_EQ(sqlite3_open(path.c_str(), &db), SQLITE_OK);
+            sqlite3_exec(db, "PRAGMA synchronous=OFF; BEGIN;", nullptr, nullptr, nullptr);
+            sqlite3_stmt* mid = nullptr; sqlite3_prepare_v2(db, "SELECT model_id FROM pop_models LIMIT 1;", -1, &mid, nullptr); ASSERT_EQ(sqlite3_step(mid), SQLITE_ROW); model = sqlite3_column_int64(mid, 0); sqlite3_finalize(mid);
+            sqlite3_stmt* ins = nullptr;
+            ASSERT_EQ(sqlite3_prepare_v2(db, "INSERT INTO display_history_frames(session_id,sec_idx,source,utc_ms,model_id,embedding,embedded,created_at) VALUES('bench',?,'main_display',?,?,?,1,0);", -1, &ins, nullptr), SQLITE_OK);
+            std::vector<float> v(kDim);
+            for (; have < target; ++have) {
+                double n2 = 0; for (auto& x : v) { x = nd(rng); n2 += x * x; } const float inv = static_cast<float>(1.0 / std::sqrt(n2)); for (auto& x : v) x *= inv;
+                sqlite3_bind_int64(ins, 1, have); sqlite3_bind_int64(ins, 2, kT0 + have * 1000); sqlite3_bind_int64(ins, 3, model);
+                sqlite3_bind_blob(ins, 4, v.data(), kDim * 4, SQLITE_TRANSIENT); sqlite3_step(ins); sqlite3_reset(ins);
+            }
+            sqlite3_finalize(ins); sqlite3_exec(db, "COMMIT;", nullptr, nullptr, nullptr); sqlite3_close(db);
+        }
+        PopStore s(c); ASSERT_TRUE(s.open(e)) << e;
+        EvidenceSearchOptions o; o.top_k = 10; o.has_min_similarity = false;
+        double best_scan = 1e9, sum = 0; int reps = 5; uint64_t scanned = 0;
+        for (int i = 0; i < reps; ++i) { EvidenceSearchResult r; ASSERT_TRUE(s.search_evidence(prov, q, o, r, e)) << e; best_scan = std::min(best_scan, r.scan_ms); sum += r.scan_ms; scanned = r.scanned; }
+        std::printf("BENCH rows=%-7lld scanned=%-7llu scan_ms best=%8.2f mean=%8.2f  db=%.1f MB\n", static_cast<long long>(target), static_cast<unsigned long long>(scanned), best_scan, sum / reps,
+                    static_cast<double>(fs::file_size(path)) / 1048576.0);
+    }
+}

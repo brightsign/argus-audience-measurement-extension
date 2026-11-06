@@ -3,6 +3,7 @@
 #include "display/display_frame_source.h"
 
 #include <sys/stat.h>
+#include <sys/statvfs.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -82,15 +83,25 @@ bool PopService::start(std::string& err) {
     load_state();
     if (cfg_.enabled && !running_.load()) {
         stop_ = false; running_ = true;
+        if (cfg_.history.enabled) {
+            std::string he;
+            if (!display_) hist_last_error_ = "display history needs visual_memory.display.enabled (OS rendered frames)";
+            else if (cfg_.capture_backend != "resilience_grpc") hist_last_error_ = "display history needs visual_memory.pop.capture_backend = resilience_grpc";
+            else if (!store_->history_open(he)) hist_last_error_ = "history_open: " + he;
+            if (!hist_last_error_.empty()) cfg_.history.enabled = false;               // recording stays off; any history recorded earlier remains searchable
+        }
         th_ = std::thread([this] { loop(); });
         if (display_) grpc_th_ = std::thread([this] { grpc_loop(); });
+        if (cfg_.history.enabled) hist_th_ = std::thread([this] { history_loop(); });
     }
     return true;
 }
 void PopService::stop() {
     stop_ = true;
+    hq_cv_.notify_all();
     if (th_.joinable()) th_.join();
     if (grpc_th_.joinable()) grpc_th_.join();
+    if (hist_th_.joinable()) hist_th_.join();
     running_ = false;
 }
 
@@ -196,6 +207,7 @@ void PopService::process_line(const std::string& line, int64_t read_utc_ms) {
         if (it != plans_.end() && !it->second.started) {
             it->second.started = true; it->second.play_start_utc = utc; it->second.ready_at_start = display_->ready(); it->second.prewarm_released = false;
             display_->hold(sid);
+            if (cfg_.history.enabled) history_begin(sid, utc, it->second.slot_ms, it->second.ready_at_start);
         }
     }
     e.detail_json = line.size() <= 4000 ? line : std::string("{}");
@@ -205,6 +217,7 @@ void PopService::process_line(const std::string& line, int64_t read_utc_ms) {
     if (ev == "session_end") {
         if (grpc_session) {                                          // resolve every capture offset that was reached, then stop holding the OS producer
             grpc_collect(sid, true, utc);
+            if (cfg_.history.enabled) history_end(sid, utc);
             if (display_) display_->release(sid);
             std::lock_guard<std::mutex> pl(plan_mu_);
             plans_.erase(sid);
@@ -263,6 +276,7 @@ void PopService::grpc_loop() {
         std::vector<std::string> ids;
         { std::lock_guard<std::mutex> pl(plan_mu_); for (const auto& kv : plans_) ids.push_back(kv.first); }
         for (const auto& id : ids) grpc_collect(id, false, 0);
+        if (cfg_.history.enabled) history_tick();
         const int64_t t = now_ms();
         {   // plans that never started (the play never happened) or ran far past their slot are dropped, and the source released
             std::lock_guard<std::mutex> pl(plan_mu_);
@@ -273,7 +287,7 @@ void PopService::grpc_loop() {
                 }
                 const bool never = !it->second.started && t - it->second.created_ms > 600000;
                 const bool over = it->second.started && t - it->second.play_start_utc > it->second.slot_ms + 60000;
-                if (never || over) { if (display_) display_->release(it->first); it = plans_.erase(it); } else ++it;
+                if (never || over) { if (cfg_.history.enabled) history_abort(it->first); if (display_) display_->release(it->first); it = plans_.erase(it); } else ++it;
             }
         }
         for (int i = 0; i < 5 && !stop_; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -345,6 +359,216 @@ bool PopService::grpc_record(const std::string& sid, int idx, int64_t target_ms,
     if (!have || !done) return false;                                                        // embedding provider busy: the frame may still be in the ring next cycle
     if (!stored) { std::lock_guard<std::mutex> lk(mu_); ++errors_; last_error_ = "evidence: " + err; }
     return true;
+}
+
+// ---- display history (Phase 2): about one display frame per second while a registered session plays ------------------------------------------
+// Separate from the verification checkpoints above: nothing here touches display_capture_evidence or the verifier. The sampler runs on the grpc
+// thread (pure ring lookups, no I/O); frames are staged in memory until commit_delay_ms after their capture so that the session_end event can still
+// cancel frames that belong to the time after the play; a bounded queue hands the committed frames to a writer thread that stores the original JPEG
+// bytes and, when the NPU is free, computes the vectors. Targets are session-relative, scheduled on the monotonic clock.
+void PopService::history_begin(const std::string& sid, int64_t start_utc, int64_t slot_ms, bool ready_at_start) {
+    PopSession ps; const bool have = store_->get_session(sid, ps);
+    HistSession hs; hs.expected = have ? ps.expected_media_id : std::string(); hs.start_utc = start_utc; hs.slot_ms = slot_ms; hs.ready_at_start = ready_at_start;
+    hs.start_mono = argus_display::mono_ms() - (now_ms() - start_utc);        // the play start on the monotonic clock
+    // A target whose whole window lies before the earliest usable display moment (start guard + the producer latency budget) can never be served:
+    // skip it instead of counting a miss in every session.
+    const int64_t first_usable = cfg_.grpc_start_guard_ms + (display_ ? display_->cfg().producer_latency_ms : 250) + 5;
+    while (static_cast<int64_t>(cfg_.history.phase_ms) + static_cast<int64_t>(hs.next_k) * cfg_.history.interval_ms + cfg_.history.window_ms < first_usable) ++hs.next_k;
+    std::lock_guard<std::mutex> lk(hist_mu_);
+    hist_sessions_[sid] = std::move(hs);
+}
+
+bool PopService::history_offer(HistJob j) {
+    {
+        std::lock_guard<std::mutex> lk(hq_mu_);
+        if (!j.finalize && static_cast<int>(hq_.size()) >= cfg_.history.queue_capacity) { ++hc_.dropped_queue_full; return false; }
+        hq_.push_back(std::move(j));
+    }
+    hq_cv_.notify_one();
+    return true;
+}
+
+// Takes the samples whose target is due. final_pass: the session has ended at end_utc, so only frames that were captured at least end_guard before the
+// end may be used (a later frame can show what comes after the advertisement); otherwise the end is still unknown.
+void PopService::history_sample(HistSession& hs, const std::string& sid, int64_t now_mono, bool final_pass, int64_t end_utc) {
+    const auto& h = cfg_.history;
+    const int64_t elapsed = now_mono - hs.start_mono;
+    const int64_t earliest = hs.start_utc + cfg_.grpc_start_guard_ms;
+    const int64_t latest = final_pass && end_utc > 0 ? end_utc - cfg_.grpc_end_guard_ms : INT64_MAX;
+    auto usable = [&](const argus_display::DisplayFrame& f) {
+        return f.capture_utc_ms - f.uncertainty_ms >= earliest && f.capture_utc_ms <= latest && f.uncertainty_ms <= cfg_.grpc_max_uncertainty_ms;
+    };
+    while (hs.next_k < h.max_frames_per_session) {
+        const int64_t off = static_cast<int64_t>(h.phase_ms) + static_cast<int64_t>(hs.next_k) * h.interval_ms;
+        if (final_pass) { if (end_utc > 0 && hs.start_utc + off > end_utc) break; }                       // the target lies after the end of the play
+        else {
+            if (off + h.window_ms + cfg_.grpc_end_guard_ms > hs.slot_ms) break;                          // near the nominal end: decided by the final pass
+            if (elapsed < off + h.window_ms + 50) break;                                                  // wait until frames just after the target exist
+        }
+        ++hc_.targets;
+        auto fr = display_->nearest_if(hs.start_utc + off, h.window_ms, h.window_ms, usable);
+        if (!fr) { ++hs.missed; ++hc_.missed_no_frame; ++hs.next_k; continue; }
+        if (fr->seq <= hs.last_seq) { ++hs.duplicates; ++hc_.duplicate_frames; ++hs.next_k; continue; }    // the source delivered no new frame for this second
+        HistStaged st; st.k = hs.next_k; st.target_off = static_cast<int>(off); st.jpeg = fr->jpeg; st.capture_utc = fr->capture_utc_ms;
+        st.capture_mono = fr->capture_mono_ms; st.uncertainty = fr->uncertainty_ms; st.seq = fr->seq; st.provider = fr->provider;
+        hs.last_seq = fr->seq; hs.staged.push_back(std::move(st)); ++hc_.staged; ++hs.next_k;
+    }
+}
+
+void PopService::history_tick() {
+    const int64_t now_mono = argus_display::mono_ms();
+    std::vector<HistJob> out;
+    {
+        std::lock_guard<std::mutex> lk(hist_mu_);
+        for (auto& kv : hist_sessions_) {
+            HistSession& hs = kv.second;
+            history_sample(hs, kv.first, now_mono, false, 0);
+            while (!hs.staged.empty() && now_mono - hs.staged.front().capture_mono >= cfg_.history.commit_delay_ms) {
+                const HistStaged& st = hs.staged.front();
+                HistJob j; j.sid = kv.first; j.in.session_id = kv.first; j.in.sec_idx = st.k; j.in.target_offset_ms = st.target_off;
+                j.in.actual_offset_ms = static_cast<int>(st.capture_utc - hs.start_utc); j.in.utc_ms = st.capture_utc; j.in.mono_ms = st.capture_mono;
+                j.in.uncertainty_ms = static_cast<int>(st.uncertainty); j.in.source = cfg_.source_id; j.in.expected_media_id = hs.expected;
+                j.in.provenance = "weston_vop2_writeback p" + std::to_string(st.provider) + "; history " + std::to_string(1000 / std::max(1, cfg_.history.interval_ms)) + "fps; ready_at_start=" +
+                                  (hs.ready_at_start ? "1" : "0") + "; time bound=rpc+configured budget";
+                j.in.jpeg.assign(st.jpeg->begin(), st.jpeg->end());
+                out.push_back(std::move(j)); hs.staged.pop_front(); ++hs.enqueued;
+            }
+        }
+    }
+    for (auto& j : out) if (history_offer(std::move(j))) ++hc_.queued;
+}
+
+void PopService::history_end(const std::string& sid, int64_t end_utc) {
+    HistSession hs;
+    {
+        std::lock_guard<std::mutex> lk(hist_mu_);
+        auto it = hist_sessions_.find(sid);
+        if (it == hist_sessions_.end()) return;
+        hs = std::move(it->second); hist_sessions_.erase(it);
+    }
+    history_sample(hs, sid, argus_display::mono_ms(), true, end_utc);          // targets that were still open when the play ended
+    PopSession ps; store_->get_session(sid, ps);
+    const int64_t latest = end_utc - cfg_.grpc_end_guard_ms;
+    std::vector<HistStaged> keep;
+    for (auto& st : hs.staged) { if (st.capture_utc <= latest) keep.push_back(std::move(st)); else { ++hs.dropped_after_end; ++hc_.dropped_after_end; } }
+    for (auto& st : keep) {
+        HistJob j; j.sid = sid; j.in.session_id = sid; j.in.sec_idx = st.k; j.in.target_offset_ms = st.target_off;
+        j.in.actual_offset_ms = static_cast<int>(st.capture_utc - hs.start_utc); j.in.utc_ms = st.capture_utc; j.in.mono_ms = st.capture_mono;
+        j.in.uncertainty_ms = static_cast<int>(st.uncertainty); j.in.source = cfg_.source_id; j.in.expected_media_id = hs.expected;
+        j.in.provenance = "weston_vop2_writeback p" + std::to_string(st.provider) + "; history " + std::to_string(1000 / std::max(1, cfg_.history.interval_ms)) + "fps; ready_at_start=" +
+                          (hs.ready_at_start ? "1" : "0") + "; time bound=rpc+configured budget";
+        j.in.jpeg.assign(st.jpeg->begin(), st.jpeg->end());
+        if (history_offer(std::move(j))) ++hc_.queued;
+    }
+    HistJob f; f.finalize = true; f.sid = sid; f.end_utc = end_utc; f.played = ps.played_media_id;
+    history_offer(std::move(f));
+}
+
+void PopService::history_abort(const std::string& sid) {
+    std::lock_guard<std::mutex> lk(hist_mu_);
+    hist_sessions_.erase(sid);                                                   // the session never ended cleanly: staged frames are discarded
+}
+
+void PopService::history_loop() {
+    const auto& h = cfg_.history;
+    auto set_err = [&](const std::string& m) { std::lock_guard<std::mutex> lk(mu_); hist_last_error_ = m; };
+    int64_t last_embed = 0;
+    HistoryLimits lim; lim.max_frames_per_session = h.max_frames_per_session; lim.max_pending_embeddings = h.max_pending_embeddings;
+    while (true) {
+        HistJob j; bool have = false;
+        {
+            std::unique_lock<std::mutex> lk(hq_mu_);
+            if (hq_.empty() && !stop_) hq_cv_.wait_for(lk, std::chrono::milliseconds(100));
+            if (!hq_.empty()) { j = std::move(hq_.front()); hq_.pop_front(); have = true; }
+            else if (stop_) break;
+        }
+        if (have) {
+            if (j.finalize) { store_->history_finalize_session(j.sid, j.end_utc, cfg_.grpc_end_guard_ms, j.played); continue; }
+            struct statvfs vs{};
+            if (statvfs(root_.c_str(), &vs) == 0 && static_cast<uint64_t>(vs.f_bavail) * vs.f_frsize < h.min_free_bytes) { ++hc_.paused_low_space; set_err("paused: free space below min_free_bytes"); continue; }
+            const auto t0 = std::chrono::steady_clock::now();
+            HistoryFrame out; std::string err;
+            const bool ok = store_->add_history_frame(j.in, lim, out, err);
+            const double ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+            if (ok) {
+                ++hc_.written; if (out.evidence_id) ++hc_.reused_checkpoint; hc_.last_commit_utc_ms = out.utc_ms;
+                hc_.last_write_ms_x100 = static_cast<int64_t>(ms * 100);
+                if (static_cast<int64_t>(ms * 100) > hc_.max_write_ms_x100) hc_.max_write_ms_x100 = static_cast<int64_t>(ms * 100);
+            }
+            else if (err == "duplicate") ++hc_.rejected_duplicate;
+            else if (err == "session limit") ++hc_.session_limit;
+            else if (err == "embedding backlog") ++hc_.backlog_refused;
+            else if (err.rfind("not a complete JPEG", 0) == 0 || err == "unknown session") ++hc_.rejected_invalid;
+            else if (err.find("write") != std::string::npos || err.find("cannot create") != std::string::npos || err.find("rename") != std::string::npos) { ++hc_.write_failed; set_err(err); }
+            else { ++hc_.sqlite_failed; set_err(err); }
+            continue;                                                                // keep draining before the NPU work
+        }
+        const int64_t t = now_ms();
+        if (t - last_embed >= 50 && store_->history_pending_embeddings() > 0) {
+            last_embed = t;
+            int n = 0; std::string err, why;
+            const auto t0 = std::chrono::steady_clock::now();
+            const bool got = run_ && run_([&](EmbeddingProvider& p) { n = store_->embed_pending_history(p, h.embed_batch, err); }, why);
+            if (!got) { ++hc_.embed_busy; continue; }
+            if (n > 0) { hc_.embedded += n; hc_.last_embed_ms_x100 = static_cast<int64_t>(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count() * 100 / n); }
+            else if (n < 0) { ++hc_.embed_failed; set_err("embed: " + err); }
+        }
+    }
+}
+
+void PopService::history_flush_for_test() {
+    for (int i = 0; i < 400; ++i) {
+        { std::lock_guard<std::mutex> lk(hq_mu_); if (hq_.empty() && store_->history_pending_embeddings() == 0) return; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(25));
+    }
+}
+
+json PopService::history_frames(const std::string& session_id, int limit, int offset) {
+    uint64_t total = 0;
+    const auto rows = store_->list_history(session_id, limit, offset, &total);
+    json arr = json::array();
+    for (const auto& r : rows) {
+        arr.push_back({{"frame_id", r.frame_id}, {"session_id", r.session_id}, {"sec_idx", r.sec_idx}, {"role", r.role}, {"verification_checkpoint_evidence_id", r.evidence_id ? json(r.evidence_id) : json(nullptr)},
+                       {"source", r.source}, {"expected_media_id", r.expected_media_id}, {"played_media_id", r.played_media_id}, {"capture_method", r.capture_method},
+                       {"provenance", r.provenance}, {"utc_ms", r.utc_ms}, {"mono_ms", r.mono_ms}, {"target_offset_ms", r.target_offset_ms}, {"actual_offset_ms", r.actual_offset_ms},
+                       {"time_uncertainty_ms", r.uncertainty_ms < 0 ? json(nullptr) : json(r.uncertainty_ms)}, {"width", r.width}, {"height", r.height}, {"bytes", r.bytes}, {"sha256", r.sha256},
+                       {"embedded", r.embedded}, {"image_available", r.image_available || r.evidence_id != 0},
+                       {"image_url", (r.image_available || r.evidence_id != 0) ? "/api/pop/history/" + std::to_string(r.frame_id) + "/image" : ""}});
+    }
+    return {{"frames", arr}, {"total", total}, {"limit", limit}, {"offset", offset}};
+}
+
+json PopService::history_status() {
+    const auto& h = cfg_.history;
+    const HistoryStats st = store_->history_stats();
+    json active = json::array();
+    {
+        std::lock_guard<std::mutex> lk(hist_mu_);
+        for (const auto& kv : hist_sessions_)
+            active.push_back({{"session_id", kv.first}, {"targets_taken", kv.second.next_k}, {"staged", kv.second.staged.size()}, {"queued_for_storage", kv.second.enqueued},
+                              {"missed", kv.second.missed}, {"duplicates", kv.second.duplicates}, {"expected_total", kv.second.slot_ms > 0 ? kv.second.slot_ms / std::max(1, h.interval_ms) : 0}});
+    }
+    size_t qd; { std::lock_guard<std::mutex> lk(hq_mu_); qd = hq_.size(); }
+    struct statvfs vs{}; uint64_t freeb = 0, totalb = 0;
+    if (statvfs(root_.c_str(), &vs) == 0) { freeb = static_cast<uint64_t>(vs.f_bavail) * vs.f_frsize; totalb = static_cast<uint64_t>(vs.f_blocks) * vs.f_frsize; }
+    std::lock_guard<std::mutex> lk(mu_);
+    return {{"enabled", h.enabled}, {"ready", st.ready}, {"recording_scope", "registered Proof-of-Play sessions only (never the idle presentation)"},
+            {"interval_ms", h.interval_ms}, {"frames_per_second_target", 1000.0 / std::max(1, h.interval_ms)}, {"phase_ms", h.phase_ms}, {"window_ms", h.window_ms},
+            {"commit_delay_ms", h.commit_delay_ms}, {"active_sessions", active}, {"queue", {{"depth", qd}, {"capacity", h.queue_capacity}}},
+            {"counters", {{"targets", hc_.targets.load()}, {"staged", hc_.staged.load()}, {"queued", hc_.queued.load()}, {"written", hc_.written.load()},
+                          {"reused_checkpoint", hc_.reused_checkpoint.load()}, {"embedded", hc_.embedded.load()}, {"missed_no_frame", hc_.missed_no_frame.load()},
+                          {"duplicate_frames", hc_.duplicate_frames.load()}, {"dropped_queue_full", hc_.dropped_queue_full.load()}, {"dropped_after_end", hc_.dropped_after_end.load()},
+                          {"rejected_invalid", hc_.rejected_invalid.load()}, {"rejected_duplicate", hc_.rejected_duplicate.load()}, {"session_limit", hc_.session_limit.load()},
+                          {"backlog_refused", hc_.backlog_refused.load()}, {"write_failed", hc_.write_failed.load()}, {"sqlite_failed", hc_.sqlite_failed.load()},
+                          {"embed_failed", hc_.embed_failed.load()}, {"embed_busy", hc_.embed_busy.load()}, {"paused_low_space", hc_.paused_low_space.load()}}},
+            {"latency_ms", {{"last_store", hc_.last_write_ms_x100.load() / 100.0}, {"max_store", hc_.max_write_ms_x100.load() / 100.0}, {"last_embed", hc_.last_embed_ms_x100.load() / 100.0}}},
+            {"store", {{"rows", st.rows}, {"embedded", st.embedded}, {"pending_embed", st.pending_embed}, {"embed_failed_rows", st.embed_failed}, {"reused_checkpoint_rows", st.linked_to_checkpoint},
+                       {"images_retained", st.images_retained}, {"image_bytes", st.image_bytes}, {"sessions", st.sessions},
+                       {"oldest_utc_ms", st.oldest_utc_ms ? json(st.oldest_utc_ms) : json(nullptr)}, {"newest_utc_ms", st.newest_utc_ms ? json(st.newest_utc_ms) : json(nullptr)}}},
+            {"limits", {{"max_bytes", h.max_bytes}, {"jpeg_retention_days", h.jpeg_retention_days}, {"metadata_retention_days", h.metadata_retention_days}, {"max_rows", h.max_rows},
+                        {"max_frames_per_session", h.max_frames_per_session}, {"min_free_bytes", h.min_free_bytes}, {"max_pending_embeddings", h.max_pending_embeddings}}},
+            {"filesystem", {{"free_bytes", freeb}, {"total_bytes", totalb}}}, {"last_commit_utc_ms", hc_.last_commit_utc_ms.load() ? json(hc_.last_commit_utc_ms.load()) : json(nullptr)},
+            {"last_error", hist_last_error_}};
 }
 
 // ---- operations -------------------------------------------------------------------------------------------------
@@ -509,6 +733,14 @@ bool PopService::search_display(const std::vector<uint8_t>& jpeg, const std::map
         else { http = 400; err = "method must be resilience_grpc, brightscript_screenshot or any"; return false; }
     }
     o.require_image = q.count("require_image") && q.at("require_image") == "1";
+    if (q.count("session_id") && !q.at("session_id").empty()) {
+        o.session_id = q.at("session_id");
+        if (o.session_id.size() > 64 || o.session_id.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-") != std::string::npos) { http = 400; err = "bad session_id"; return false; }
+    }
+    if (q.count("role") && !q.at("role").empty() && q.at("role") != "any") {
+        o.role = q.at("role");
+        if (o.role != "verification_checkpoint" && o.role != "history_sample") { http = 400; err = "role must be any, verification_checkpoint or history_sample"; return false; }
+    }
     if (jpeg.size() < 4 || jpeg[0] != 0xFF || jpeg[1] != 0xD8) { http = 400; err = "body must be a JPEG image"; return false; }
     // Reference geometry: "as_uploaded" (default, the image is embedded exactly as sent) or "display" (the validated display_letterbox transform).
     std::string geometry = "as_uploaded";
@@ -539,6 +771,12 @@ bool PopService::search_display(const std::vector<uint8_t>& jpeg, const std::map
         const bool hv = store_->get_verification(e.session_id, ver);
         json j = evidence_json(e);
         j.erase("sha256"); j.erase("phash"); j.erase("bytes"); j.erase("took_ms");
+        j["role"] = e.role;
+        j["role_label"] = e.role == "history_sample" ? "Display-history sample (searchable, not a verification checkpoint)" : "Verification checkpoint";
+        if (e.role == "history_sample") {
+            j["history_id"] = e.history_id; j["sec_idx"] = e.sec_idx; j["evidence_id"] = nullptr; j["idx"] = nullptr;
+            j["image_url"] = e.image_available ? "/api/pop/history/" + std::to_string(e.history_id) + "/image" : "";
+        }
         j["rank"] = rank; j["similarity"] = h.similarity; j["session_id"] = e.session_id; j["capture_utc_ms"] = e.utc_ms;
         j["offset_in_play_ms"] = e.actual_offset_ms;
         j["session_link"] = "#pop?session=" + e.session_id;
@@ -574,17 +812,18 @@ bool PopService::search_display(const std::vector<uint8_t>& jpeg, const std::map
         out["query"]["embedded_jpeg_b64"] = b64;
     }
     out["options"] = {{"top_k", o.top_k}, {"min_similarity", o.min_similarity}, {"min_similarity_default", o.min_similarity == cfg_.thresholds.match_sim},
-                      {"start", o.start_utc_ms}, {"end", o.end_utc_ms}, {"media_id", o.media_id}, {"require_image", o.require_image}};
+                      {"start", o.start_utc_ms}, {"end", o.end_utc_ms}, {"media_id", o.media_id}, {"require_image", o.require_image}, {"session_id", o.session_id}, {"role", o.role.empty() ? "any" : o.role}};
     out["status"] = {{"code", "ok"}, {"message", ""}, {"elapsed_ms", res.elapsed_ms}, {"embed_ms", res.embed_ms}, {"scan_ms", res.scan_ms}, {"candidates_scanned", res.scanned}, {"skipped_invalid", res.skipped_invalid}};
     out["results"] = hits;
     out["coverage"] = {{"evidence_rows", res.coverage.rows_total}, {"searchable_rows", res.coverage.rows_searchable}, {"other_model_rows", res.coverage.rows_other_model},
                        {"images_retained", res.coverage.images_retained}, {"sessions", res.coverage.sessions},
+                       {"checkpoint_rows", res.coverage.checkpoint_rows}, {"history_rows", res.coverage.history_rows},
                        {"oldest_utc_ms", res.coverage.oldest_utc_ms ? json(res.coverage.oldest_utc_ms) : json(nullptr)},
                        {"newest_utc_ms", res.coverage.newest_utc_ms ? json(res.coverage.newest_utc_ms) : json(nullptr)}};
     if (hits.empty()) {
         out["no_match"] = true;
         out["message"] = "No matching stored evidence";
-        out["message_detail"] = "No stored display evidence reached the minimum similarity. This does not show that the content was never played: it only means "
+        out["message_detail"] = "This does not establish that the content was never displayed. No stored display evidence reached the minimum similarity: it only means "
                                 "that none of the " + std::to_string(res.coverage.rows_searchable) + " stored evidence frames matches. Playback outside a registered "
                                 "advertisement session is not stored.";
         if (res.has_closest) out["closest_below_minimum"] = hit_json(res.closest, 0);
@@ -624,6 +863,13 @@ json PopService::session_detail(const std::string& id, bool* found) {
         ev.push_back({{"event_id", e.event_id}, {"type", e.type}, {"mono_ms", e.mono_ms}, {"utc_ms", e.utc_ms}, {"detail", d.is_discarded() ? json::object() : d}});
     }
     j["events"] = ev;
+    if (store_->history_ready()) {
+        uint64_t total = 0; const auto hs = store_->list_history(id, 1000, 0, &total);
+        uint64_t emb = 0, imgs = 0, linked = 0; for (const auto& r : hs) { emb += r.embedded; imgs += r.image_available || r.evidence_id; linked += r.evidence_id != 0; }
+        j["history"] = {{"frames", total}, {"embedded", emb}, {"images_available", imgs}, {"reused_checkpoint", linked}, {"interval_ms", cfg_.history.interval_ms},
+                        {"first_offset_ms", hs.empty() ? json(nullptr) : json(hs.front().actual_offset_ms)}, {"last_offset_ms", hs.empty() ? json(nullptr) : json(hs.back().actual_offset_ms)},
+                        {"frames_url", "/api/pop/history/frames?session_id=" + id}};
+    }
     json evd = json::array();
     for (const auto& e : store_->list_evidence(id)) evd.push_back(evidence_json(e));
     j["evidence"] = evd;
@@ -660,6 +906,10 @@ std::string PopService::export_csv(const SessionFilter& f) {
 void PopService::prune() {
     const int64_t cutoff = cfg_.evidence_retention_days > 0 ? now_ms() - static_cast<int64_t>(cfg_.evidence_retention_days) * 86400000LL : 0;
     store_->prune_evidence(cutoff, cfg_.evidence_max_bytes);
+    const auto& h = cfg_.history;
+    if (store_->history_ready())                       // history quota and retention are independent of the checkpoint evidence limits
+        store_->prune_history(h.jpeg_retention_days > 0 ? now_ms() - static_cast<int64_t>(h.jpeg_retention_days) * 86400000LL : 0, h.max_bytes,
+                              h.metadata_retention_days > 0 ? now_ms() - static_cast<int64_t>(h.metadata_retention_days) * 86400000LL : 0, h.max_rows);
 }
 
 json PopService::status() {
@@ -675,7 +925,8 @@ json PopService::status() {
             {"capture_backend", cfg_.capture_backend}, {"schema_legacy_v1", !store_->schema_v2()}, {"display_source_available", display_ != nullptr && display_->cfg().enabled},
             {"allow_test_jobs", cfg_.allow_test_jobs}, {"thresholds", th}, {"evidence_max_bytes", cfg_.evidence_max_bytes},
             {"evidence_retention_days", cfg_.evidence_retention_days}, {"source", cfg_.source_id},
-            {"evidence_source", "presentation output of the player (display capture); not the audience camera"}};
+            {"evidence_source", "presentation output of the player (display capture); not the audience camera"},
+            {"history", {{"enabled", cfg_.history.enabled}, {"ready", store_->history_ready()}}}};
 }
 
 
@@ -695,6 +946,16 @@ json PopService::system_json() {
         out["mem_kb"] = m;
     }
     out["loadavg"] = slurp("/proc/loadavg").substr(0, 24);
+    {   // block devices (SD card / USB): cumulative sectors (512 B) read and written, for SD write-rate measurements
+        json disks = json::object(); std::error_code ec;
+        for (auto it = fs::directory_iterator("/sys/block", ec); !ec && it != fs::directory_iterator(); it.increment(ec)) {
+            const std::string n = it->path().filename().string();
+            if (n.rfind("mmcblk", 0) != 0 && n.rfind("sd", 0) != 0) continue;
+            std::istringstream is(slurp("/sys/block/" + n + "/stat")); long long v[11] = {0}; for (int i = 0; i < 11 && (is >> v[i]); ++i) {}
+            disks[n] = {{"sectors_read", v[2]}, {"sectors_written", v[6]}};
+        }
+        out["disks"] = disks;
+    }
     {   // per-process counters for the processes that matter to the audience pipeline and to D5
         static const char* names[] = {"attention_demo", "image-stream-se", "dashboard-serve", "vm_api_server", "argus-exporter", "mosquitto", "bs-resilience-ap", "BrightSign", "argus_display_b", "bs-rendered-fra", "weston"};
         json procs = json::array();
@@ -714,7 +975,10 @@ json PopService::system_json() {
             const long long ut = std::atoll(v[11].c_str()), stt = std::atoll(v[12].c_str()), rss_pages = std::atoll(v[21].c_str());
             long long hwm = 0;
             { std::istringstream sis(slurp("/proc/" + pid + "/status")); std::string k, rest2; while (std::getline(sis, k)) if (k.rfind("VmHWM:", 0) == 0) hwm = std::atoll(k.c_str() + 6); }
-            procs.push_back({{"pid", std::atoi(pid.c_str())}, {"comm", comm}, {"cpu_jiffies", ut + stt}, {"rss_kb", rss_pages * (sysconf(_SC_PAGESIZE) / 1024)}, {"hwm_kb", hwm}});
+            long long wbytes = -1, rbytes = -1;                                  // cumulative storage I/O of the process (needs the same uid; -1 when unreadable)
+            { std::istringstream iis(slurp("/proc/" + pid + "/io")); std::string k; while (std::getline(iis, k)) { if (k.rfind("write_bytes:", 0) == 0) wbytes = std::atoll(k.c_str() + 12); else if (k.rfind("read_bytes:", 0) == 0) rbytes = std::atoll(k.c_str() + 11); } }
+            procs.push_back({{"pid", std::atoi(pid.c_str())}, {"comm", comm}, {"cpu_jiffies", ut + stt}, {"rss_kb", rss_pages * (sysconf(_SC_PAGESIZE) / 1024)}, {"hwm_kb", hwm},
+                             {"io_write_bytes", wbytes}, {"io_read_bytes", rbytes}});
         }
         out["processes"] = procs;
     }
