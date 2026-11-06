@@ -69,11 +69,14 @@ No cross-compile SDK found in the shared cache, and no toolchain installer on ha
 
 The SDK is provisioned once per build box by the brightsign-sdk-builder repo,
 which downloads the BrightSign OS source, builds the custom SDK, and installs it
-into the shared cache this repo reads. From a checkout parallel to this one:
+into a shared cache. Do this once per build box:
 
-    cd ../brightsign-sdk-builder && make build
+    git clone https://github.com/brightsign/brightsign-sdk-builder.git
+    cd brightsign-sdk-builder && make build
 
-That populates ${SDK_DIR}. Then re-run this build.
+That populates ${SDK_DIR}. The cache lives outside any single repo, so after that
+one (multi-hour) build this and our other example extensions all cross-compile
+against the same cached SDK -- no per-repo SDK rebuild. Then re-run this build.
 
 Alternatively, if you already have a brightsign-x86_64-cobra-toolchain-*.sh
 installer, install from it directly:
