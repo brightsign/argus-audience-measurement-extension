@@ -112,7 +112,7 @@ Never open a root console while presenting: it stops the BrightScript presentati
 
 Credentials: the DWS password was pasted in an earlier chat; rotation is left to the user. No password or image of people is in Git.
 
-## 8. Revision: the presentation resumes after every test (prepared on the host, NOT yet installed)
+## 8. Revision: the presentation resumes after every test (installed and validated on the XT5, 2026-11-06)
 
 Why: the first demo autorun stopped the video at the end of a slot (static last frame, flagged "frozen") and, in job mode, showed nothing before the first test. The original autorun (SHA-256 `83076b0b…609ab`) is a single loop: `roVideoPlayer` full-screen rectangle 1920x1080, `SetLoopMode(true)`, `PlayFile({Filename:"meet-brightsign.mp4"})`, then it only prints video events. There is no other playback logic, so the idle state reuses exactly that.
 
@@ -133,3 +133,25 @@ Deployment (needs approval): (1) scp the zip to `/storage/sd`, verify the hash; 
 Rollback: copy `autorun.brs.pre-demo` over `autorun.brs`, delete `/storage/sd/pop/enabled`, reinstall `argus-ext-1793919980.zip` (or `-1793905820`), DWS reboot.
 
 XT5 validation after approval: A. normal presentation plays and the strip says Ready; B. Verify Correct Ad: Ad A on HDMI (confirm by eye and with a DWS snapshot), same picture in the preview, strip PLAYING with a falling countdown, three evidence frames, Playback corroborated, presentation resumes (no "frozen" flag more than a few seconds after the end); C. Wrong and Interrupted the same way; D. a capture failure (`break_capture`) also resumes; E. five consecutive tests, checking that every session has exactly its own events and the session count equals the clicks; F. Argus FPS about 29 during all of it.
+
+### 8.1 Hardware validation of the revision (installed: `argus-ext-1793953264.zip`, 1 DWS reboot, new autorun `394d7be1…6915`)
+
+Smoke test before any scenario: the looping presentation started by itself; DWS snapshots (independent of the preview) differ strongly from each other (mean absolute difference 53 and 61 on a 0 to 255 scale, i.e. moving video); the preview shows moving frames; the strip said **Ready**; the session count stayed 10 (idle playback created nothing); `adapter.errors` 0; Argus and Visual Memory kept running.
+
+Five tests, consecutive, sessions 10 -> 15 (exactly +5), every session has exactly its own five events (`session_scheduled_run`, `play_requested`, `play_started`, `play_stopped`, `session_end`):
+
+| # | Scenario | Verdict | Playback | Similarity to expected ad (frames at 3 / 15 / 27 s) |
+|---|---|---|---|---|
+| 1 | Correct (smoke test) | Playback corroborated | 30 046 / 30 000 ms | 0.927 / 0.990 / 0.960 (other ad 0.49 to 0.55) |
+| 2 | Wrong (plays Ad B) | Mismatch, closest ad-b | 30 044 ms, media ad-b | to Ad A 0.593 / 0.602 / 0.607; to Ad B 0.993 / 0.993 / 0.994 |
+| 3 | Interrupted | Incomplete | 10 026 / 30 000 ms | 0.889 (one early frame) |
+| 4 | Capture unavailable (`break_capture`) | Capture unsupported | 30 044 ms | none (3 failed rows) |
+| 5 | Correct again | Playback corroborated | 30 053 / 30 000 ms | 0.875 / 0.990 / 0.960 |
+
+After every session the frame difference stayed above zero and `frozen_frame` stayed false: the presentation resumed (including after the interruption and after the capture failure). The dashboard strip was read from the live page during a session: `PLAYING Meet BrightSign (ad-a)`, `20.1 s left of the 30.0 s slot`, `Capturing evidence: 1 of 3`. Evidence provenance on all frames: `weston_vop2_writeback p7`, uncertainty 251 to 254 ms.
+
+Geometry: with the 1920x1080 rectangle the same-ad similarities rose from 0.855 to 0.895 (first autorun) to 0.875 to 0.990, and the Ad B frames match Ad B at 0.993. **Caution:** Ad B frames now score 0.593 to 0.607 against Ad A references, i.e. at the 0.60 reject threshold. The Mismatch verdict comes from the second rule (another registered ad matches at least 0.80 and better by the margin), not from the reject threshold alone. A wrong ad that is NOT registered would be borderline. Thresholds were not changed.
+
+Performance, with one correct session running: Argus 29.05 FPS baseline vs 29.07 during (min 28, none below 25); `attention_demo` 52.0 % vs 52.1 % of one core, 95.3 MB; `vm_api_server` 1.3 % vs 2.9 %; bridge 0.0 % vs 0.4 %; producer 0 % vs 9.4 %; weston 5.6 % vs 18.5 %; NPU core 0 79.3 % vs 79.6 %.
+
+Raw files (not in Git): `scratchpad/hw/v2/` (logs, session JSON, DWS snapshots), `scratchpad/hw/v2/perf2.json`.
