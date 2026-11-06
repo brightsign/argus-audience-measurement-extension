@@ -43,12 +43,12 @@
     const root = document.getElementById("view-pop");
     S.view = {
       banner: h("div", { class: "vm-banner" }), reg: h("section", { class: "panel pop-panel" }), sched: h("section", { class: "panel pop-panel" }),
-      hist: h("section", { class: "panel pop-panel" }), demo: h("section", { class: "panel pop-panel" }), prog: h("section", { class: "panel pop-panel" }),
+      state: h("section", { class: "panel pop-panel pop-state" }), hist: h("section", { class: "panel pop-panel" }), demo: h("section", { class: "panel pop-panel" }), prog: h("section", { class: "panel pop-panel" }),
     };
     const disp = document.getElementById("dispPanel");              // Display output preview (display.js): lives in this view, under the banner
     root.replaceChildren(h("div", { class: "vm-page" },
       h("div", { class: "panel-head" }, h("h2", { text: "Proof of Play" }), h("span", { class: "muted", id: "popLive", text: "" })),
-      S.view.banner, S.view.reg, S.view.demo, ...(disp ? [disp] : []), S.view.prog, S.view.sched, S.view.hist));
+      S.view.banner, S.view.state, S.view.reg, S.view.demo, ...(disp ? [disp] : []), S.view.prog, S.view.sched, S.view.hist));
   }
 
   function renderBanner() {
@@ -206,6 +206,32 @@
       h("div", { class: "vm-row", style: "gap:8px;margin-top:8px" }, h("button", { class: "vm-btn small", type: "button", text: "Open evidence and scores", onclick: () => openDetail(a.session_id) })));
   }
 
+  // ---- player state strip: what the player is doing right now (derived from the real sessions, never set by the page) -------------
+  // Ready = no session is open and the last one ended more than 5 s ago: the autorun is back on the normal presentation.
+  function renderState() {
+    const sec = S.view.state, st = S.status;
+    if (!st || !st.enabled || !st.allow_test_jobs) { sec.replaceChildren(); sec.hidden = true; return; }
+    sec.hidden = false;
+    const now = Date.now() + S.nowSkew, a = S.active, last = S.sessions[0];
+    let cls = "ok", label = "Ready", sub = "Normal presentation is playing. Choose a demonstration above.", big = "";
+    if (a) {
+      const started = a.start_utc_ms > 0, ended = a.end_utc_ms > 0, slot = a.slot_ms || 0;
+      if (ended) { cls = "info"; label = "Verifying"; sub = "Playback has ended; the verification engine is comparing the evidence."; }
+      else if (!started) { cls = "info"; label = "Starting advertisement"; sub = "Expected " + mediaName(a.expected_media_id) + ". Waiting for the player to report the playback start."; }
+      else {
+        const elapsed = Math.max(0, now - a.start_utc_ms), rem = Math.max(0, slot - elapsed);
+        const need = a.captures_requested || 0, got = a.evidence_count || 0;
+        cls = "info"; label = "PLAYING " + mediaName(a.played_media_id || a.expected_media_id);
+        sub = (got < need ? "Capturing evidence: " : "Evidence captured: ") + got + " of " + need + ". Expected " + mediaName(a.expected_media_id) + ".";
+        big = fmtMs(rem) + " left of the " + fmtMs(slot) + " slot";
+      }
+    } else if (last && last.verification && last.end_utc_ms && now - last.end_utc_ms < 5000) {
+      cls = "ok"; label = "Verification completed"; sub = (last.status_label || "") + ". Resuming normal presentation.";
+    }
+    sec.replaceChildren(h("div", { class: "pop-state-row" }, h("span", { class: "pop-chip " + cls, text: label }), big ? h("span", { class: "pop-count", text: big }) : h("span", { class: "muted", text: sub })),
+      ...(big ? [h("div", { class: "muted", text: sub })] : []));
+  }
+
   // ---- history -------------------------------------------------------------------------------------------------
   function renderHistory() {
     const sec = S.view.hist;
@@ -346,7 +372,7 @@
       if (s.status === 200) { S.sessions = s.data.sessions; S.total = s.data.total; if (s.data.now_utc_ms) S.nowSkew = s.data.now_utc_ms - Date.now(); }
     } else { S.media = []; S.sessions = []; S.total = 0; }
     const wasBusy = !!S.active; S.active = activeSession();
-    renderBanner(); renderProgress();
+    renderBanner(); renderState(); renderProgress();
     const hsig = JSON.stringify([S.sessions.map((x) => [x.session_id, x.status, x.evidence_count, x.evidence_ok, x.end_utc_ms]), S.total, S.filter, S.media.length]);
     if (force === true || hsig !== S.hsig) { S.hsig = hsig; renderHistory(); }
     const sig = JSON.stringify([S.status && S.status.enabled, S.status && S.status.allow_test_jobs, S.status && S.status.capture_backend, !!S.active, S.media.map((m) => [m.media_id, m.reference_frames])]);
@@ -363,7 +389,7 @@
     S.timer = setInterval(() => {
       if (document.body.dataset.view !== "pop") { clearInterval(S.timer); return; }
       if (S.active || ++S.tick % 5 === 0) refresh(false);
-      else if (S.view) renderProgress();
+      else if (S.view) { renderState(); renderProgress(); }
     }, 1000);
   }
   U.registerPop(show);

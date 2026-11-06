@@ -86,6 +86,7 @@ class Player(threading.Thread):
         with open(events, "a") as f: f.write(json.dumps({"ev": ev, "seq": self.seq, "mono_ms": int((time.time() - self.t0) * 1000), **kw}) + "\n")
 
     def run(self):
+        self.emit("boot", mode="jobs"); self.emit("idle_started", ok=True)            # IDLE: the normal presentation; session-less events only
         while not self.stop_flag:
             names = sorted(n for n in os.listdir(jobs) if n.endswith(".json") and n not in self.seen) if os.path.isdir(jobs) else []
             if self.paused or not names: time.sleep(0.2); continue
@@ -101,7 +102,7 @@ class Player(threading.Thread):
             while (time.time() - t) * 1000 < stop_ms and not self.stop_flag: time.sleep(0.05)
             self.emit("play_stopped", session=sid, media_id=mid, reason=reason)
             self.emit("session_end", session=sid, media_id=mid, expected_media_id=exp, reason=reason, actual_play_ms=int((time.time() - t) * 1000))
-            ctl(frame="IDLE")
+            ctl(frame="IDLE"); self.emit("idle_started", ok=True)                    # RESUMING -> IDLE after every job
 
 
 async def main():
@@ -188,10 +189,14 @@ async def main():
         check("the live Weston/VOP2 preview is on this page and shows frames", await wait_for("(()=>{const i=document.getElementById('dispImg');return !document.getElementById('dispPanel').hidden&&!i.hidden&&i.complete&&i.naturalWidth===640})()", 15))
 
         # ---------------------------------------------------------------- 2. correct ad (the player is paused first: nothing may be reported as played)
+        check("idle: the state strip says Ready, normal presentation playing, and no session exists",
+              await wait_for("(()=>{const s=document.querySelector('#view-pop .pop-state');return s&&!s.hidden&&/Ready/.test(s.innerText)&&/Normal presentation is playing/.test(s.innerText)})()", 10) and api("GET", "/api/pop/sessions")[1]["total"] == 0)
         click = lambda label: ev("[...document.querySelectorAll('#view-pop button')].find(b=>b.textContent==%s).click(), true" % json.dumps(label))
         await click("Verify Correct Ad")
         check("a session is scheduled and the page says it is waiting for the player (no verdict without a playback event)",
               await wait_for("(()=>{const p=document.querySelectorAll('#view-pop section')[0]; return document.body.innerText.includes('Waiting for the player to start')})()", 15))
+        check("the state strip says Starting advertisement while the player has not reported a start",
+              await ev("/Starting advertisement/.test(document.querySelector('#view-pop .pop-state').innerText)") is True)
         t_txt = await ev("document.body.innerText")
         chips = await ev("[...document.querySelectorAll('#view-pop .pop-chip')].map(c=>c.textContent)")
         check("while waiting: no verification chip says corroborated; the session is only 'Waiting' / 'Scheduled'", "Playback corroborated" not in chips and any(c.startswith("Waiting") or c == "Scheduled" for c in chips), chips)
@@ -202,9 +207,17 @@ async def main():
               await wait_for("document.body.innerText.includes('Playing') && document.body.innerText.includes('Actual ad (player report)')", 15))
         pt = await ev("[...document.querySelectorAll('#view-pop .panel-head h3')].find(h=>/Current session/.test(h.textContent)).closest('section').innerText")
         check("progress panel names expected and actual ad, elapsed / slot and the evidence count", "Meet BrightSign (ad-a)" in pt and "Elapsed / slot" in pt and "captured" in pt and "resilience_grpc" in pt, pt)
+        check("state strip: PLAYING with the ad name and a countdown that falls",
+              await wait_for("/PLAYING Meet BrightSign/.test(document.querySelector('#view-pop .pop-state').innerText) && /left of the/.test(document.querySelector('#view-pop .pop-state').innerText)", 10))
+        c1 = await ev("document.querySelector('#view-pop .pop-count').innerText"); time.sleep(2.2); c2 = await ev("document.querySelector('#view-pop .pop-count').innerText")
+        check("the countdown decreases over time", float(c1.split(' s')[0]) > float(c2.split(' s')[0]), (c1, c2))
         await shot("1_playing")
         check("evidence frames are captured while it plays (count rises)", await wait_for("/[1-3] of 3 captured/.test(document.body.innerText)", 20))
         check("final status: Playback corroborated, computed by the engine", await wait_for("[...document.querySelectorAll('#view-pop tr.pop-row .pop-chip')].some(c=>c.textContent==='Playback corroborated')", 40))
+        check("after the verdict the strip reports completion and then returns to Ready (the player resumed the presentation)",
+              await wait_for("/Verification completed|Ready/.test(document.querySelector('#view-pop .pop-state').innerText)", 8) and
+              await wait_for("/Ready/.test(document.querySelector('#view-pop .pop-state').innerText)&&!/PLAYING/.test(document.querySelector('#view-pop .pop-state').innerText)", 15))
+        check("idle playback created no extra session: exactly 1 session after the first test", api("GET", "/api/pop/sessions")[1]["total"] == 1)
         await shot("2_correct")
         await ev("document.querySelector('#view-pop tr.pop-row').click()")
         check("detail opens with three evidence cards", await wait_for("document.querySelectorAll('.vm-modal .pop-ev').length === 3", 15))

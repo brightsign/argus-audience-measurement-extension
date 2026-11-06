@@ -22,7 +22,16 @@
 '                       Screenshot() call fail, which is how the "screenshot unavailable" case is exercised
 '   capture_width/height  default 640x400
 '
-' Rollback: copy SD:/autorun.brs.pre-d5 over SD:/autorun.brs (or delete SD:/pop/enabled), then reboot.
+' Player states (job mode): IDLE (the normal presentation loops, exactly what the original autorun does) -> PREPARING (idle video
+' stopped, event port replaced and drained) -> PLAYING (the job's media, events correlated to the job's session id) -> COMPLETED
+' (session_end written first, so verification starts at once) -> RESUMING (video stopped, port replaced and drained, normal
+' presentation restarted) -> IDLE. Every path out of a job (slot end, interruption, play failure, start timeout) resumes the
+' presentation. Idle playback never writes an event that carries a session id, so it can never create or alter a verification session;
+' its only events are the session-less "boot" and "idle_started" lines. Playback events that arrive before the job's own playback
+' started (leftovers of the idle video being stopped) are drained, and an "ended" event before play_started is ignored.
+'
+' The gate file must contain text (an empty SD:/pop/enabled is treated as absent).
+' Rollback: copy SD:/autorun.brs.pre-demo (the original) over SD:/autorun.brs (or delete SD:/pop/enabled), then reboot.
 ' ============================================================================
 Sub Main()
     ctx = {}
@@ -38,23 +47,26 @@ Sub Main()
     ctx.vm = CreateObject("roVideoMode")
     ctx.log = CreateObject("roAppendFile", "SD:/pop/events.jsonl")
     ctx.seq = 0
+    ctx.state = "IDLE"
     enabled = ReadAsciiFile("SD:/pop/enabled")
     if Len(enabled) = 0 then
         DefaultLoop(ctx)
         return
     end if
     Ev(ctx, { ev: "boot", mode: "jobs", output: ctx.vm.GetMode() })
+    StartIdle(ctx)
     while true
         job = NextJob(ctx)
         if job <> invalid then
             RunJob(ctx, job)
         else
-            msg = wait(300, ctx.port)
+            msg = wait(300, ctx.port)       ' idle video events are ignored; a job file is polled every 300 ms
         end if
     end while
 End Sub
 
 ' ---- original behaviour ----------------------------------------------------
+' Identical to the original presentation autorun: loop meet-brightsign.mp4 full screen.
 Sub DefaultLoop(ctx as Object)
     r = CreateObject("roRectangle", 0, 0, 1920, 1080)
     ctx.vid.SetRectangle(r)
@@ -67,6 +79,39 @@ Sub DefaultLoop(ctx as Object)
             print "roVideoEvent: "; msg.GetInt()
         end if
     end while
+End Sub
+
+' ---- IDLE: the normal presentation -------------------------------------------
+Sub StartIdle(ctx as Object)
+    r = CreateObject("roRectangle", 0, 0, 1920, 1080)
+    ctx.vid.SetRectangle(r)
+    ctx.vid.SetLoopMode(true)
+    ok = ctx.vid.PlayFile({ Filename: "meet-brightsign.mp4" })
+    ctx.state = "IDLE"
+    Ev(ctx, { ev: "idle_started", ok: ok })              ' no session id: not a verification event
+End Sub
+
+' Stop the current video and give the player a fresh, empty event port, so no event of the previous playback can reach the next one.
+Sub StopAndIsolate(ctx as Object)
+    ctx.vid.Stop()
+    quiet = 0
+    while quiet < 3                                      ' drain until 3 consecutive polls (about 300 ms) bring nothing
+        msg = wait(100, ctx.port)
+        if msg = invalid then
+            quiet = quiet + 1
+        else
+            quiet = 0
+        end if
+    end while
+    ctx.port = CreateObject("roMessagePort")
+    ctx.vid.SetPort(ctx.port)
+End Sub
+
+' RESUMING -> IDLE (always called when a job ends, whatever the reason)
+Sub ResumeIdle(ctx as Object)
+    ctx.state = "RESUMING"
+    StopAndIsolate(ctx)
+    StartIdle(ctx)
 End Sub
 
 ' ---- job discovery ---------------------------------------------------------
@@ -110,6 +155,8 @@ Sub RunJob(ctx as Object, job as Object)
     for i = 0 to offsets.Count() - 1
         done.Push(false)
     end for
+    ctx.state = "PREPARING"
+    StopAndIsolate(ctx)                                  ' the idle video is stopped and its events are dropped
     ctx.vid.SetLoopMode(JV(job, "loop", false))
     e = CopyAA(base)
     e.ev = "session_scheduled_run"
@@ -137,8 +184,10 @@ Sub RunJob(ctx as Object, job as Object)
         e.reason = "PlayFile returned false"
         Ev(ctx, e)
         EndSession(ctx, base, "play_failed", 0)
+        ResumeIdle(ctx)
         return
     end if
+    ctx.state = "PLAYING"
     startMs = -1
     endReason = ""
     while true
@@ -153,7 +202,7 @@ Sub RunJob(ctx as Object, job as Object)
                 startMs = now
                 e.ev = "play_started"
                 e.latency_ms = now - reqMs
-            else if code = 8 then
+            else if code = 8 and startMs >= 0 then
                 e.ev = "play_ended"
                 endReason = "ended"
             else
@@ -200,7 +249,9 @@ Sub RunJob(ctx as Object, job as Object)
     end while
     actual = 0
     if startMs >= 0 then actual = ctx.tsp.TotalMilliseconds() - startMs
-    EndSession(ctx, base, endReason, actual)
+    ctx.state = "COMPLETED"
+    EndSession(ctx, base, endReason, actual)             ' first: verification starts as soon as this line is read
+    ResumeIdle(ctx)
 End Sub
 
 Sub EndSession(ctx as Object, base as Object, reason as String, actualMs as Integer)

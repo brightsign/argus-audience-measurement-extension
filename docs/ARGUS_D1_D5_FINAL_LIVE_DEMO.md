@@ -98,7 +98,7 @@ Fallback comparison: set the backend selector to `brightscript_screenshot` (same
 | First frame "capture unsupported" or STALE | The producer wakes on the first request (the 503 / STALE at start is expected; the service retries). Persistent failure: check Display output panel, then `/api/display/status`. |
 | Mismatch expected but result is Incomplete / inconclusive | Do not force it. Report the scores; they are real. |
 | Camera FPS low | Low light lowers USB camera FPS (about 19 to 20 FPS); compare at equal light. |
-| Display output says "frozen for N s" after an ad | Expected. When a slot ends, the test autorun stops the video and the screen keeps the last frame, so the OS health check correctly reports a static picture (frame difference 0.0000). During play the flag is off (measured: frame difference 0.004 to 0.15, `frozen_frame` false). Run the next scenario, or say so when presenting. |
+| Display output says "frozen for N s" | In the revised autorun (below) this should only appear if the presentation did not resume. In the first demo autorun the ad was stopped on its last frame, which the OS health check correctly reported as static (frame difference 0.0000). If it appears now: check `idle_started` events in the session timeline and the autorun version (`autorun.brs` SHA-256 in section 8). |
 | Dashboard unreachable | Wait about 90 s after any reboot; check `/api/pop/status`. |
 
 Never open a root console while presenting: it stops the BrightScript presentation and the DWS. Do not enable Telnet. The gRPC socket is local (Unix) only.
@@ -111,3 +111,25 @@ Never open a root console while presenting: it stops the BrightScript presentati
 4. `/storage/sd/pop-grpc-demo` holds the demo database and evidence; keep it for inspection, delete only when told to.
 
 Credentials: the DWS password was pasted in an earlier chat; rotation is left to the user. No password or image of people is in Git.
+
+## 8. Revision: the presentation resumes after every test (prepared on the host, NOT yet installed)
+
+Why: the first demo autorun stopped the video at the end of a slot (static last frame, flagged "frozen") and, in job mode, showed nothing before the first test. The original autorun (SHA-256 `83076b0b…609ab`) is a single loop: `roVideoPlayer` full-screen rectangle 1920x1080, `SetLoopMode(true)`, `PlayFile({Filename:"meet-brightsign.mp4"})`, then it only prints video events. There is no other playback logic, so the idle state reuses exactly that.
+
+Autorun state machine (`scripts/pop/pop_autorun.brs`, job mode): `IDLE` (looping presentation) -> `PREPARING` (idle video stopped, event port drained and replaced) -> `PLAYING` (the job's media; events carry the job's session id) -> `COMPLETED` (`session_end` is written first, so verification starts at once) -> `RESUMING` (video stopped, port drained and replaced, presentation restarted) -> `IDLE`. Slot end, interruption, a failed `PlayFile` and a start timeout all go through RESUMING; a capture failure only fails evidence, never the playback loop, so the presentation returns in that case too. The next job is read only after RESUMING has finished.
+
+Event isolation: the idle video writes no event with a session id (only the session-less `boot` and `idle_started` lines), so it cannot create or change a verification session; leftovers of the stopped idle video are drained and the port is replaced before a job's `PlayFile`; an "ended" event before `play_started` is ignored; every test event carries the job's own session id. The verification engine, thresholds and the three-frame offsets are unchanged.
+
+Geometry note: the idle player sets the 1920x1080 rectangle, as the original does, and the job media plays in that same rectangle, which is the geometry the display-output references were validated against. The first hardware runs played jobs without a rectangle (default full screen); similarities may therefore change slightly (expected: up). Report the new numbers; do not adjust thresholds.
+
+Dashboard: a state strip at the top of `/#pop` shows Ready (normal presentation playing) / Starting advertisement / PLAYING <ad> with the seconds left of the slot and the evidence count / Verifying / Verification completed (resuming). It is derived from the real sessions; nothing is set by the page. The preview keeps updating, and the completed result stays in Latest session and Playback History.
+
+Host validation: `tests/browser/pop_demo_cdp.py` 43/43 (real vm_api_server, bridge, dashboard server, OS-service double, headless Chrome; the player emulator writes the same `boot`/`idle_started`/session events); the BrightScript parses without syntax errors (brighterscript; only the BrightSign-specific components are unknown to it). The BrightScript itself cannot run on the host: the state machine is exercised for the first time on the XT5.
+
+Revised package: `argus-ext-1793953264.zip`, SHA-256 `80c215cf915f1f1e95e975a7cac651158229d28ba4fe14954a8a90270b56852d` (same `vm_api_server` and bridge binaries as the installed package; only the dashboard files differ).
+
+Deployment (needs approval): (1) scp the zip to `/storage/sd`, verify the hash; (2) install as before (`bsext_init stop`, unzip, `ext_npu_argus_install-lvm.sh`); (3) scp the new `pop_autorun.brs` to `/storage/sd/autorun.brs` (the original stays in `autorun.brs.pre-demo`, unchanged; the first demo autorun is kept as `autorun.brs.demo-v1`); (4) one DWS reboot covers both. The config, gate file, references and the demo database stay as they are.
+
+Rollback: copy `autorun.brs.pre-demo` over `autorun.brs`, delete `/storage/sd/pop/enabled`, reinstall `argus-ext-1793919980.zip` (or `-1793905820`), DWS reboot.
+
+XT5 validation after approval: A. normal presentation plays and the strip says Ready; B. Verify Correct Ad: Ad A on HDMI (confirm by eye and with a DWS snapshot), same picture in the preview, strip PLAYING with a falling countdown, three evidence frames, Playback corroborated, presentation resumes (no "frozen" flag more than a few seconds after the end); C. Wrong and Interrupted the same way; D. a capture failure (`break_capture`) also resumes; E. five consecutive tests, checking that every session has exactly its own events and the session count equals the clicks; F. Argus FPS about 29 during all of it.
