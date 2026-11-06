@@ -55,6 +55,50 @@ bool load_from_file(const std::string& path, AppConfig& out, bool /*strict*/, ch
     if (j.contains("test_yolo_only") && j["test_yolo_only"].is_boolean()) {
       out.test_yolo_only = j["test_yolo_only"].get<bool>();
     }
+
+    // Parse optional Visual Memory frame-storage section (OFF by default).
+    if (j.contains("visual_memory") && j["visual_memory"].is_object()) {
+      const auto& vm = j["visual_memory"];
+      auto& o = out.visual_memory;
+      if (vm.contains("enabled") && vm["enabled"].is_boolean())
+        o.enabled = vm["enabled"].get<bool>();
+      if (vm.contains("storage_root") && vm["storage_root"].is_string())
+        o.storage_root = vm["storage_root"].get<std::string>();
+      if (vm.contains("sample_interval_ms") && vm["sample_interval_ms"].is_number())
+        o.sample_interval_ms = vm["sample_interval_ms"].get<int64_t>();
+      if (vm.contains("stored_width") && vm["stored_width"].is_number())
+        o.stored_width = vm["stored_width"].get<int>();
+      if (vm.contains("stored_height") && vm["stored_height"].is_number())
+        o.stored_height = vm["stored_height"].get<int>();
+      if (vm.contains("jpeg_quality") && vm["jpeg_quality"].is_number())
+        o.jpeg_quality = vm["jpeg_quality"].get<int>();
+      if (vm.contains("max_pending_frames") && vm["max_pending_frames"].is_number())
+        o.max_pending_frames = vm["max_pending_frames"].get<size_t>();
+      if (vm.contains("max_storage_bytes") && vm["max_storage_bytes"].is_number())
+        o.max_storage_bytes = vm["max_storage_bytes"].get<uint64_t>();
+      if (vm.contains("retention_hours") && vm["retention_hours"].is_number())
+        o.retention_hours = vm["retention_hours"].get<int>();
+      if (vm.contains("vector_search_enabled") && vm["vector_search_enabled"].is_boolean())
+        o.vector_search_enabled = vm["vector_search_enabled"].get<bool>();
+      if (vm.contains("embedding") && vm["embedding"].is_object()) {
+        const auto& em = vm["embedding"];
+        auto& e = o.embedding;
+        if (em.contains("enabled") && em["enabled"].is_boolean()) e.enabled = em["enabled"].get<bool>();
+        if (em.contains("backend") && em["backend"].is_string()) e.backend = em["backend"].get<std::string>();
+        if (em.contains("model_path") && em["model_path"].is_string()) e.model_path = em["model_path"].get<std::string>();
+        if (em.contains("max_pending") && em["max_pending"].is_number()) e.max_pending = em["max_pending"].get<size_t>();
+        if (em.contains("retention_days") && em["retention_days"].is_number()) e.retention_days = em["retention_days"].get<int>();
+        if (em.contains("backfill_on_startup") && em["backfill_on_startup"].is_boolean())
+          e.backfill_on_startup = em["backfill_on_startup"].get<bool>();
+        if (em.contains("backfill_max_frames") && em["backfill_max_frames"].is_number_unsigned())
+          e.backfill_max_frames = em["backfill_max_frames"].get<uint64_t>();
+        if (em.contains("backfill_max_age_hours") && em["backfill_max_age_hours"].is_number())
+          e.backfill_max_age_hours = em["backfill_max_age_hours"].get<int>();
+        if (em.contains("npu_core") && em["npu_core"].is_number()) e.npu_core = em["npu_core"].get<int>();
+        if (em.contains("prefer_sqlite_vec") && em["prefer_sqlite_vec"].is_boolean())
+          e.prefer_sqlite_vec = em["prefer_sqlite_vec"].get<bool>();
+      }
+    }
     
     // Parse other config sections as before (minimal for now)
     if (j.contains("primary_model")) {
@@ -121,6 +165,15 @@ bool load_from_file(const std::string& path, AppConfig& out, bool /*strict*/, ch
         if (usb.contains("width"))  out.input.usb.width  = usb["width"];
         if (usb.contains("height")) out.input.usb.height = usb["height"];
         if (usb.contains("fps"))    out.input.usb.fps    = usb["fps"];
+        // Optional V4L2 exposure_auto_priority (0 or 1). Absent/null => leave the camera untouched.
+        if (usb.contains("exposure_auto_priority") && !usb["exposure_auto_priority"].is_null()) {
+          const auto& v = usb["exposure_auto_priority"];
+          int val = -1;
+          if (v.is_boolean()) val = v.get<bool>() ? 1 : 0;
+          else if (v.is_number_integer()) val = v.get<int>();
+          if (val == 0 || val == 1) out.input.usb.exposure_auto_priority = val;
+          else std::fprintf(stderr, "config: input.usb.exposure_auto_priority must be 0 or 1; ignoring (camera left unchanged)\n");
+        }
       }
     }
     

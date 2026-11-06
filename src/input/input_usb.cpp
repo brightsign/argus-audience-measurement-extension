@@ -1,4 +1,5 @@
 #include "input/input_usb.h"
+#include "input/v4l2_controls.h"
 #include "metrics/log_global.h"
 #include <chrono>
 #include <thread>
@@ -77,9 +78,58 @@ UsbInputSource::UsbInputSource(const std::string& device, const UsbOptions& opts
   if (opts.width > 0) pref_w_ = opts.width;
   if (opts.height > 0) pref_h_ = opts.height;
   if (opts.fps > 0) pref_fps_ = opts.fps;
+  if (opts.exposure_auto_priority == 0 || opts.exposure_auto_priority == 1)
+    pref_exp_prio_ = opts.exposure_auto_priority;
 }
 
 UsbInputSource::~UsbInputSource() { close(); }
+
+// Apply the optional exposure_auto_priority control. 0 keeps the frame rate constant in dim light; 1 lets the
+// camera lower it to lengthen exposure. Unsupported controls or failures are logged and never fatal.
+void UsbInputSource::apply_exposure_auto_priority() noexcept {
+  if (pref_exp_prio_ < 0) return;   // unset: existing behaviour, do not touch the camera
+  int before = -1, actual = -1;
+  switch (v4l2ctl::set_exposure_auto_priority(fd_, pref_exp_prio_, &before, &actual)) {
+    case v4l2ctl::ApplyResult::Applied:
+      LG_INFO("usb: exposure_auto_priority requested=%d previous=%d actual=%d (negotiated %.1f fps)",
+              pref_exp_prio_, before, actual, neg_fps_);
+      break;
+    case v4l2ctl::ApplyResult::Mismatch:
+      LG_WARN("usb: exposure_auto_priority requested=%d previous=%d but camera reports actual=%d",
+              pref_exp_prio_, before, actual);
+      break;
+    case v4l2ctl::ApplyResult::Unsupported:
+      LG_WARN("usb: exposure_auto_priority requested=%d but this camera does not support the control; leaving unchanged",
+              pref_exp_prio_);
+      break;
+    case v4l2ctl::ApplyResult::Failed:
+      LG_WARN("usb: exposure_auto_priority requested=%d (was %d) but VIDIOC_S_CTRL failed: %s",
+              pref_exp_prio_, before, strerror(errno));
+      break;
+  }
+}
+
+// Measure the rate frames actually arrive from the camera (10 s windows) and log it next to the negotiated rate.
+// A camera that silently lowers its frame rate (e.g. exposure_auto_priority=1 in dim light) is reported here.
+void UsbInputSource::note_delivered_frame() noexcept {
+  const auto now = std::chrono::steady_clock::now();
+  if (win_frames_ == 0 && win_start_.time_since_epoch().count() == 0) win_start_ = now;
+  ++win_frames_;
+  const double secs = std::chrono::duration<double>(now - win_start_).count();
+  if (secs < 10.0) return;
+  const double fps = win_frames_ / secs;
+  const double want = neg_fps_ > 0 ? neg_fps_ : (pref_fps_ > 0 ? pref_fps_ : 30.0);
+  const bool low = fps < want * 0.8;
+  if (low && !win_low_)
+    LG_WARN("usb: camera delivering %.1f fps, below the negotiated %.1f fps (exposure_auto_priority=%d; "
+            "dim light can make a UVC camera lower its rate)", fps, want, pref_exp_prio_);
+  else if (!low && win_low_)
+    LG_INFO("usb: camera delivery recovered: %.1f fps (negotiated %.1f)", fps, want);
+  else if (win_count_ % 6 == 0)
+    LG_INFO("usb: camera delivering %.1f fps (negotiated %.1f)", fps, want);
+  win_low_ = low; ++win_count_;
+  win_start_ = now; win_frames_ = 0;
+}
 
 bool UsbInputSource::open() noexcept {
   close();
@@ -88,6 +138,7 @@ bool UsbInputSource::open() noexcept {
   frames_ok_.store(0);
   connected_.store(false);
   last_ok_ns_.store(to_ns(SteadyClock::now()));
+  win_start_ = {}; win_frames_ = 0; win_count_ = 0; win_low_ = false;
 
   // Accept "0" style tokens too
   std::string dev = device_;
@@ -198,8 +249,12 @@ bool UsbInputSource::open() noexcept {
   const unsigned num = parm_actual.parm.capture.timeperframe.numerator ?
                        parm_actual.parm.capture.timeperframe.numerator : 1;
   const double actual_fps = (double)den / (double)num;
+  neg_fps_ = actual_fps;
   LG_INFO("usb opened %s (w=%u h=%u fps=%.1f)  [requested %d fps]",
           dev.c_str(), fmt.fmt.pix.width, fmt.fmt.pix.height, actual_fps, want_fps);
+
+  // 2b. Optional V4L2 exposure_auto_priority (USB only; unset = leave the camera untouched).
+  apply_exposure_auto_priority();
 
   // 3. Request mmap buffers.
   v4l2_requestbuffers req;
@@ -392,6 +447,7 @@ FetchStatus UsbInputSource::tryFetch(FrameView& out) noexcept {
   out.plane1  = nullptr;
   out.pts_ns  = now_ns_val;
 
+  note_delivered_frame();
   frames_ok_.fetch_add(1, std::memory_order_relaxed);
   last_ok_ns_.store(now_ns_val, std::memory_order_relaxed);
   connected_.store(true, std::memory_order_relaxed);

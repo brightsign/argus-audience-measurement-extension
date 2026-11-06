@@ -10,8 +10,9 @@ const char* get_opt(const char* flag, int argc, char** argv) noexcept;
 // Choose a config file path using this order:
 //   1) --config <path> (CLI argument)
 //   2) $BSEXT_CONFIG (environment variable)
-//   3) /storage/sd/configs/config.json (writable user override - preferred)
-//   4) <binary_dir>/configs/config.json (read-only package default)
+//   3) /storage/sd/configs/argus-config.json (writable user override - preferred)
+//   4) /storage/sd/configs/config.json (writable user override - fallback)
+//   5) <binary_dir>/configs/argus-config.json then config.json (package default)
 // Returns a string (may point to a non-existent path; call file_exists to verify).
 std::string pick_config_path(int argc, char** argv) noexcept;
 

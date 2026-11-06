@@ -1,0 +1,230 @@
+{
+ "baseline": {
+  "samples": 51,
+  "system_cpu_busy_pct_of_all_cores": 8.23,
+  "duration_s": 50.0,
+  "processes": {
+   "mosquitto": {
+    "cpu_pct_of_one_core": 0.06,
+    "rss_mb_mean": 3.8,
+    "rss_mb_max": 3.8,
+    "hwm_mb": 3.8
+   },
+   "attention_demo_": {
+    "cpu_pct_of_one_core": 0.0,
+    "rss_mb_mean": 0.3,
+    "rss_mb_max": 0.3,
+    "hwm_mb": 0.3
+   },
+   "attention_demo": {
+    "cpu_pct_of_one_core": 52.01,
+    "rss_mb_mean": 96.7,
+    "rss_mb_max": 97.7,
+    "hwm_mb": 97.7
+   },
+   "image-stream-se": {
+    "cpu_pct_of_one_core": 0.96,
+    "rss_mb_mean": 10.7,
+    "rss_mb_max": 10.9,
+    "hwm_mb": 11.0
+   },
+   "dashboard-serve": {
+    "cpu_pct_of_one_core": 0.18,
+    "rss_mb_mean": 7.9,
+    "rss_mb_max": 8.9,
+    "hwm_mb": 8.9
+   },
+   "vm_api_server": {
+    "cpu_pct_of_one_core": 1.32,
+    "rss_mb_mean": 29.9,
+    "rss_mb_max": 29.9,
+    "hwm_mb": 29.9
+   },
+   "argus-exporter": {
+    "cpu_pct_of_one_core": 0.4,
+    "rss_mb_mean": 13.4,
+    "rss_mb_max": 13.9,
+    "hwm_mb": 14.1
+   }
+  },
+  "argus_fps": {
+   "mean": 29.06,
+   "min": 28.0,
+   "below_25": 0
+  },
+  "mem_available_mb": {
+   "min": 2931,
+   "mean": 2934
+  },
+  "npu_core_load_pct": {
+   "core0": {
+    "mean": 79.1,
+    "max": 85
+   },
+   "core1": {
+    "mean": 0,
+    "max": 0
+   },
+   "core2": {
+    "mean": 0,
+    "max": 0
+   }
+  },
+  "soc_temp_c": {
+   "mean": 35.8,
+   "max": 36.1
+  }
+ },
+ "active": {
+  "samples": 106,
+  "system_cpu_busy_pct_of_all_cores": 9.28,
+  "duration_s": 105.0,
+  "processes": {
+   "mosquitto": {
+    "cpu_pct_of_one_core": 0.04,
+    "rss_mb_mean": 3.8,
+    "rss_mb_max": 3.8,
+    "hwm_mb": 3.8
+   },
+   "attention_demo_": {
+    "cpu_pct_of_one_core": 0.0,
+    "rss_mb_mean": 0.3,
+    "rss_mb_max": 0.3,
+    "hwm_mb": 0.3
+   },
+   "attention_demo": {
+    "cpu_pct_of_one_core": 51.85,
+    "rss_mb_mean": 97.7,
+    "rss_mb_max": 97.7,
+    "hwm_mb": 97.7
+   },
+   "image-stream-se": {
+    "cpu_pct_of_one_core": 0.98,
+    "rss_mb_mean": 10.5,
+    "rss_mb_max": 10.9,
+    "hwm_mb": 11.0
+   },
+   "dashboard-serve": {
+    "cpu_pct_of_one_core": 0.5,
+    "rss_mb_mean": 10.5,
+    "rss_mb_max": 11.0,
+    "hwm_mb": 11.1
+   },
+   "vm_api_server": {
+    "cpu_pct_of_one_core": 3.67,
+    "rss_mb_mean": 30.8,
+    "rss_mb_max": 30.9,
+    "hwm_mb": 30.9
+   },
+   "argus-exporter": {
+    "cpu_pct_of_one_core": 0.41,
+    "rss_mb_mean": 13.9,
+    "rss_mb_max": 14.3,
+    "hwm_mb": 14.3
+   }
+  },
+  "argus_fps": {
+   "mean": 29.05,
+   "min": 28.0,
+   "below_25": 0
+  },
+  "mem_available_mb": {
+   "min": 2896,
+   "mean": 2901
+  },
+  "npu_core_load_pct": {
+   "core0": {
+    "mean": 79.2,
+    "max": 84
+   },
+   "core1": {
+    "mean": 0,
+    "max": 0
+   },
+   "core2": {
+    "mean": 0,
+    "max": 0
+   }
+  },
+  "soc_temp_c": {
+   "mean": 36.0,
+   "max": 36.1
+  }
+ },
+ "sessions": [
+  "perf-1793872611-1",
+  "perf-1793872612-2",
+  "perf-1793872614-3"
+ ],
+ "results": [
+  {
+   "session_id": "perf-1793872611-1",
+   "status": "playback_corroborated",
+   "reason": "playback events complete (30034 ms of 30000 ms) and 3 of 3 screenshots match 'ad-a' (mean similarity 0.952)",
+   "actual_play_ms": 30034,
+   "captures": [
+    [
+     1,
+     "ok",
+     322
+    ],
+    [
+     2,
+     "ok",
+     326
+    ],
+    [
+     3,
+     "ok",
+     321
+    ]
+   ]
+  },
+  {
+   "session_id": "perf-1793872612-2",
+   "status": "playback_corroborated",
+   "reason": "playback events complete (30510 ms of 30000 ms) and 3 of 3 screenshots match 'ad-a' (mean similarity 0.951)",
+   "actual_play_ms": 30510,
+   "captures": [
+    [
+     1,
+     "ok",
+     293
+    ],
+    [
+     2,
+     "ok",
+     291
+    ],
+    [
+     3,
+     "ok",
+     325
+    ]
+   ]
+  },
+  {
+   "session_id": "perf-1793872614-3",
+   "status": "playback_corroborated",
+   "reason": "playback events complete (30098 ms of 30000 ms) and 3 of 3 screenshots match 'ad-a' (mean similarity 0.951)",
+   "actual_play_ms": 30098,
+   "captures": [
+    [
+     1,
+     "ok",
+     293
+    ],
+    [
+     2,
+     "ok",
+     295
+    ],
+    [
+     3,
+     "ok",
+     328
+    ]
+   ]
+  }
+ ]
+}

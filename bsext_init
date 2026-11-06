@@ -24,6 +24,7 @@ STREAM_SERVER_PIDFILE="/var/run/bsext-image-stream-server.pid"
 MQTT_BROKER_PIDFILE="/var/run/bsext-mosquitto.pid"
 ARGUS_EXPORTER_PIDFILE="/var/run/bsext-argus-exporter.pid"
 DASHBOARD_SERVER_PIDFILE="/var/run/bsext-dashboard-server.pid"
+VM_API_SERVER_PIDFILE="/var/run/bsext-vm-api-server.pid"
 
 # defaults -- these can be overridden by environment variables
 DISABLE_AUTO_START=false
@@ -137,8 +138,8 @@ run_attention_demo() {
     # NOTE: DO NOT pass config.json as argument - let app use its own search logic:
     #   1. CLI: --config <path>
     #   2. ENV: $BSEXT_CONFIG  
-    #   3. SD:  /storage/sd/configs/config.json (writable override)
-    #   4. PKG: ${SOC_HOME}/configs/config.json (read-only default)
+    #   3. SD:  /storage/sd/configs/argus-config.json (preferred) or config.json (writable override)
+    #   4. PKG: ${SOC_HOME}/configs/argus-config.json (preferred) or config.json (read-only default)
     CMD_ARGS="${SOC_HOME}/model/RetinaFace.rknn"
     echo "Using Model: RetinaFace.rknn"
     echo "Config will be auto-detected (priority: SD card > package default)"
@@ -299,12 +300,12 @@ run_dashboard_server() {
     SOC_HOME=${SCRIPT_PATH}/${SOC_NAME}
 
     # Mirror attention_demo's config precedence (SD override > packaged) so the
-    # dashboard port can be set in config.json's "dashboard" section; it overrides
-    # the -port passed here (from the registry/default). config.json is the
-    # standard name; argus-config.json is accepted as a legacy fallback.
+    # dashboard port can be set in the config's "dashboard" section; it overrides
+    # the -port passed here (from the registry/default). argus-config.json is the
+    # preferred name; config.json is accepted as a fallback.
     local cfg=""
-    for c in /storage/sd/configs/config.json /storage/sd/configs/argus-config.json \
-             "${SOC_HOME}/configs/config.json" "${SOC_HOME}/configs/argus-config.json"; do
+    for c in /storage/sd/configs/argus-config.json /storage/sd/configs/config.json \
+             "${SOC_HOME}/configs/argus-config.json" "${SOC_HOME}/configs/config.json"; do
         [ -f "$c" ] && { cfg="$c"; break; }
     done
     local args="-port ${port} -dir ${SOC_HOME}/dashboard -upstream ${upstream} -ws-port ${ws_port}"
@@ -316,6 +317,55 @@ run_dashboard_server() {
     else
         ${SOC_HOME}/dashboard-server ${args}
     fi
+}
+
+# Visual Memory dashboard API (read-only, loopback :20310; dashboard-server proxies /api/vm/ to it).
+# Only started when the binary is packaged (ENABLE_VISUAL_MEMORY build). It reads the SAME active config
+# as Argus (SD argus-config.json > SD config.json > packaged) and stays idle -- no DB open, no model load --
+# unless visual_memory.enabled is true there.
+run_vm_api_server() {
+    SOC_NAME=$(get_soc_name)
+    SOC_HOME=${SCRIPT_PATH}/${SOC_NAME}
+    [ -x "${SOC_HOME}/vm_api_server" ] || return 0
+    local cfg=""
+    for c in /storage/sd/configs/argus-config.json /storage/sd/configs/config.json \
+             "${SOC_HOME}/configs/argus-config.json" "${SOC_HOME}/configs/config.json"; do
+        [ -f "$c" ] && { cfg="$c"; break; }
+    done
+    [ -n "$cfg" ] || return 0
+    echo "Starting vm_api_server (config ${cfg})"
+    start-stop-daemon --start --background --make-pidfile --pidfile ${VM_API_SERVER_PIDFILE} \
+                      --exec ${SOC_HOME}/vm_api_server -- --config "${cfg}" --base-dir "${SOC_HOME}" --port 20310
+}
+
+# One-shot, READ-ONLY probe of the OS rendered-frame service. Runs only when an operator created /storage/sd/display_probe.request (the marker is renamed
+# to .done afterwards, so it never repeats). It changes nothing on the player: it records who/what the OS services are (diag.txt), the libraries the
+# bridge resolves (ldd.txt), and 100 Health/Capture cycles (probe.jsonl + frames/). Results are on the SD card, readable through the DWS file API.
+run_display_probe_once() {
+    local marker=/storage/sd/display_probe.request
+    [ -f "$marker" ] || return 0
+    SOC_NAME=$(get_soc_name)
+    SOC_HOME=${SCRIPT_PATH}/${SOC_NAME}
+    local bridge="${SOC_HOME}/argus_display_bridge"
+    if [ ! -x "$bridge" ]; then echo "display probe requested but argus_display_bridge is not packaged"; mv "$marker" "$marker.done" 2>/dev/null; return 0; fi
+    local out=/storage/sd/display_probe
+    mkdir -p "$out/frames"
+    (
+        {
+            echo "== date"; date
+            echo "== id (this process)"; id
+            echo "== resilience group"; grep -E "resilience|weston|brightsign" /etc/group 2>&1
+            echo "== /run/brightsign/resilience"; ls -lan /run/brightsign/resilience 2>&1
+            echo "== /dev/shm"; ls -lan /dev/shm 2>&1
+            echo "== processes"; ps 2>&1 | grep -E "resilience|rendered|weston" | grep -v grep
+            echo "== OS libraries"; ls -l /usr/lib/libgrpc++.so.1 /usr/lib/libprotobuf.so.22 /usr/lib/libstdc++.so.6 2>&1
+        } > "$out/diag.txt" 2>&1
+        LD_TRACE_LOADED_OBJECTS=1 "$bridge" > "$out/ldd.txt" 2>&1
+        sleep 20                                  # let the presentation and the OS services settle after boot
+        "$bridge" --probe 100 --probe-interval-ms 200 --idle-check --out "$out/frames" > "$out/probe.jsonl" 2> "$out/probe.err"
+        echo "exit $?" > "$out/probe.exit"
+        mv "$marker" "$marker.done"
+    ) &
 }
 
 # Block until a local TCP port is listening (bounded). Used to avoid the
@@ -481,7 +531,7 @@ do_start() {
     fi
 
     # Clean up stale PID files
-    rm -f ${PIDFILE} ${STREAM_SERVER_PIDFILE} ${MQTT_BROKER_PIDFILE} ${ARGUS_EXPORTER_PIDFILE} ${DASHBOARD_SERVER_PIDFILE} 2>/dev/null || true
+    rm -f ${PIDFILE} ${STREAM_SERVER_PIDFILE} ${MQTT_BROKER_PIDFILE} ${ARGUS_EXPORTER_PIDFILE} ${DASHBOARD_SERVER_PIDFILE} ${VM_API_SERVER_PIDFILE} 2>/dev/null || true
 
     # Demo license: The C++ binary reads expires.json directly from the extension
     # directory (${SCRIPT_PATH}/expires.json) - no copy needed.
@@ -545,8 +595,11 @@ do_start() {
             echo "Dashboard server is disabled (port set to 0)"
         else
             run_dashboard_server true ${DASHBOARD_PORT} "127.0.0.1:${STREAM_SERVER_PORT}" ${MQTT_WS_PORT}
+            run_vm_api_server
         fi
     fi
+
+    run_display_probe_once
 
     # Start argus-exporter (Prometheus metrics exporter)
     # Check if disabled via registry (set port to 0 to disable)
@@ -630,6 +683,10 @@ do_stop() {
         if [ -n "$dpid" ]; then kill -9 $dpid 2>/dev/null || true; pkill -9 -P $dpid 2>/dev/null || true; fi
         rm -f ${DASHBOARD_SERVER_PIDFILE}
     fi
+
+    # Stop vm_api_server (Visual Memory dashboard API)
+    killall -TERM vm_api_server 2>/dev/null || true
+    rm -f ${VM_API_SERVER_PIDFILE}
 
     # Stop image-stream-server (ALWAYS kill by name to handle all instances)
     echo "Stopping image-stream-server..."

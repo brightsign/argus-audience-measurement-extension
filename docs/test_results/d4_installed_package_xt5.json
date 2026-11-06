@@ -1,0 +1,67 @@
+{
+ "regions_indexed": 100,
+ "index_call": {
+  "n": 100,
+  "p50_ms": 36.8,
+  "p95_ms": 46.0,
+  "max_ms": 52.4
+ },
+ "roi_search_total_server": {
+  "n": 40,
+  "p50_ms": 35.0,
+  "p95_ms": 46.0,
+  "max_ms": 52.0
+ },
+ "roi_search_scan_only": {
+  "n": 40,
+  "p50_ms": 1.6,
+  "p95_ms": 1.7,
+  "max_ms": 1.7
+ },
+ "region_search_scan_only": {
+  "n": 40,
+  "p50_ms": 5.2,
+  "p95_ms": 5.8,
+  "max_ms": 6.0
+ },
+ "d3_full_frame_search": {
+  "n": 18,
+  "p50_ms": 5.9,
+  "p95_ms": 106.1,
+  "max_ms": 106.1
+ },
+ "d3_frame259_top": [
+  [
+   304,
+   0.9755
+  ],
+  [
+   277,
+   0.5947
+  ],
+  [
+   257,
+   0.576
+  ]
+ ],
+ "vm_api_server": {
+  "rss_mb_before": 29.8,
+  "rss_mb_after": 31.9,
+  "hwm_mb": 31.9,
+  "cpu_pct_of_one_core": 76.2
+ },
+ "attention_demo": {
+  "rss_mb_after": 92.1,
+  "hwm_mb": 92.1
+ },
+ "mem_available_mb": {
+  "before": 2932,
+  "after": 2930
+ },
+ "argus_fps": {
+  "before": 29.0,
+  "after": 29.0
+ },
+ "window_s": 5.3,
+ "http_errors": []
+}

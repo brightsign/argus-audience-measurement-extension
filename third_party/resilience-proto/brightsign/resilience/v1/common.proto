@@ -1,0 +1,39 @@
+// BrightSign Resilience Runtime API - common definitions.
+//
+// This package defines the OS-owned, read-only status contract consumed over a
+// local Unix-domain socket by the resilience extension. The OS is the source of
+// truth; the extension is the aggregator/facade. See the resilience API design.
+//
+// Versioning: the package is pinned to v1. Backwards-incompatible changes must
+// introduce a new version package (brightsign.resilience.v2) rather than mutate
+// existing field numbers.
+
+syntax = "proto3";
+
+package brightsign.resilience.v1;
+
+option cc_enable_arenas = true;
+
+// ErrorInfo is an optional, structured error attached to a status snapshot.
+// An empty code means "no error".
+message ErrorInfo {
+  string code = 1;
+  string message = 2;
+}
+
+// SourceProvider identifies which backend produced a snapshot. This lets the
+// extension surface data provenance (e.g. "os_grpc") on the dashboard.
+enum SourceProvider {
+  SOURCE_PROVIDER_UNSPECIFIED = 0;
+  SOURCE_PROVIDER_UNAVAILABLE = 1;
+  SOURCE_PROVIDER_DRM_SYSFS = 2;
+  SOURCE_PROVIDER_CEC_DEVICE = 3;
+  SOURCE_PROVIDER_PLAYER_PUBLISHER = 4;
+  SOURCE_PROVIDER_SCREENSHOT = 5;
+  SOURCE_PROVIDER_VOP_READBACK = 6;
+  // Composed UI + video output captured via weston-mediated VOP2 DRM/KMS
+  // writeback (the DRM master is weston, not this daemon). Distinct from the
+  // generic VOP_READBACK value because the capture is compositor-driven and is
+  // an approximate-HDMI preview, not a bit-exact connector readback.
+  SOURCE_PROVIDER_WESTON_VOP2_WRITEBACK = 7;
+}

@@ -1,0 +1,222 @@
+{
+  "model_name": "mobilenet_v2_embedder",
+  "model_version": "tv-imagenet1k-v1",
+  "description": "torchvision MobileNetV2 (ImageNet-1k) global-average-pooled features as a generic image embedding",
+  "source": {
+    "weights_url": "https://download.pytorch.org/models/mobilenet_v2-b0353104.pth",
+    "code": "torchvision.models.mobilenet_v2 (BSD-3-Clause)",
+    "weights": "MobileNet_V2_Weights.IMAGENET1K_V1, trained on ImageNet-1k"
+  },
+  "licence": "torchvision code BSD-3-Clause; weights as distributed by PyTorch (ImageNet-1k trained)",
+  "weights_sha256": "b03531047ffacf1e2488318dcd2aba1126cde36e3bfe1aa5cb07700aeeee9889",
+  "onnx_file": "mobilenet_v2_embedder.onnx",
+  "onnx_sha256": "ab4ad1b40609324a3bcda0442637416a89f7bb445be2c806c05550dd9dd844b2",
+  "onnx": {
+    "opset": 12,
+    "input_name": "input",
+    "input_shape": [
+      1,
+      3,
+      224,
+      224
+    ],
+    "input_layout": "NCHW",
+    "output_name": "embedding",
+    "output_shape": [
+      1,
+      1280
+    ],
+    "torch_vs_ort_max_abs_diff": 5.9604644775390625e-06,
+    "torch": "2.4.0+cu121",
+    "torchvision": "0.19.0+cpu",
+    "onnx": "1.16.1"
+  },
+  "input": {
+    "size": [
+      224,
+      224
+    ],
+    "channels": "RGB",
+    "onnx_layout": "NCHW",
+    "rknn_layout": "NHWC",
+    "dtype": "float32",
+    "normalisation_inside_model": false
+  },
+  "preprocessing": {
+    "id": "pp1",
+    "resize": "whole image -> 224x224, no crop, aspect NOT preserved; separable antialiased bilinear (triangle, support 1*filterscale) per Pillow precompute_coeffs, float32, no 8-bit rounding; horizontal pass then vertical",
+    "mean": [
+      0.485,
+      0.456,
+      0.406
+    ],
+    "std": [
+      0.229,
+      0.224,
+      0.225
+    ],
+    "formula": "x=(v/255-mean[c])/std[c], RGB"
+  },
+  "output": {
+    "dim": 1280,
+    "post": "flatten, L2-normalise (reject NaN/Inf/norm<1e-6); similarity = dot product"
+  },
+  "rknn_sha256": {
+    "fp16": "d5f3e467b0206a73fa57d6790b76fe415dbd87b821222c0f37282e83d7644e36",
+    "int8": "b19606d53c7bd10a096de2773087535d6dab23042ba1afea73d638329400ba49"
+  },
+  "variants": {
+    "fp16": {
+      "file": "mobilenet_embedder_fp16.rknn",
+      "target_platform": "rk3588",
+      "toolkit": "rknn-toolkit2 2.3.0",
+      "runtime_expected": "librknnrt 2.3.0",
+      "config": {
+        "mean_values": [
+          [
+            0,
+            0,
+            0
+          ]
+        ],
+        "std_values": [
+          [
+            1,
+            1,
+            1
+          ]
+        ],
+        "target_platform": "rk3588",
+        "optimization_level": 3
+      },
+      "do_quantization": false,
+      "quantisation": {
+        "dtype": "float16 (no quantisation)"
+      },
+      "io": {
+        "input": {
+          "name": "input",
+          "shape_nhwc": [
+            1,
+            224,
+            224,
+            3
+          ],
+          "layout": "NHWC",
+          "channel_order": "RGB",
+          "host_dtype": "float32",
+          "note": "pre-normalised by pp1; identity mean/std in RKNN"
+        },
+        "output": {
+          "name": "embedding",
+          "shape": [
+            1,
+            1280
+          ],
+          "host_dtype": "float32"
+        }
+      },
+      "tensor_attr_note": "FP16: float32 NHWC in / float32 out; queried attrs on device give fmt/type.",
+      "device_validation_xt5": {
+        "images": 101,
+        "cosine_vs_onnx_mean": 0.999988,
+        "cosine_vs_onnx_min": 0.99993,
+        "max_abs_diff": 0.00148,
+        "top5_overlap": 0.998,
+        "top1_agreement": 1.0,
+        "npu_inference_ms_p50": 5.9,
+        "npu_inference_ms_p99": 5.9,
+        "enabled_in_production": true
+      }
+    },
+    "int8": {
+      "file": "mobilenet_embedder_int8.rknn",
+      "target_platform": "rk3588",
+      "toolkit": "rknn-toolkit2 2.3.0",
+      "runtime_expected": "librknnrt 2.3.0",
+      "config": {
+        "mean_values": [
+          [
+            0,
+            0,
+            0
+          ]
+        ],
+        "std_values": [
+          [
+            1,
+            1,
+            1
+          ]
+        ],
+        "target_platform": "rk3588",
+        "optimization_level": 3,
+        "quantized_dtype": "asymmetric_quantized-8",
+        "quantized_algorithm": "normal",
+        "quantized_method": "channel"
+      },
+      "do_quantization": true,
+      "quantisation": {
+        "dtype": "asymmetric_quantized-8",
+        "algorithm": "normal",
+        "method": "channel",
+        "calibration": {
+          "count": 41,
+          "preprocessing": "pp1, same values as the NHWC tensor, stored NCHW float32 [1,3,224,224] .npy (rknn-toolkit2 requires the ONNX layout)",
+          "sources": [
+            "imagenet ILSVRC2012_img_val_samples (21)",
+            "COCO subset (20)",
+            "images/the-hundred-eyes-of-Argus.jpg (1)"
+          ]
+        },
+        "device_tensor_attrs": {
+          "input": {
+            "scale": 0.0186585,
+            "zero_point": -14,
+            "type": "INT8"
+          },
+          "output": {
+            "scale": 0.0187422,
+            "zero_point": -128,
+            "type": "INT8"
+          }
+        }
+      },
+      "io": {
+        "input": {
+          "name": "input",
+          "shape_nhwc": [
+            1,
+            224,
+            224,
+            3
+          ],
+          "layout": "NHWC",
+          "channel_order": "RGB",
+          "host_dtype": "float32",
+          "note": "pre-normalised by pp1; identity mean/std in RKNN"
+        },
+        "output": {
+          "name": "embedding",
+          "shape": [
+            1,
+            1280
+          ],
+          "host_dtype": "float32"
+        }
+      },
+      "tensor_attr_note": "INT8: toolkit warns default input AND output dtype in the .rknn are int8 (asymmetric affine, per-tensor scale/zp); query rknn_query(RKNN_QUERY_INPUT_ATTR/OUTPUT_ATTR) for scale/zp. Feed float32 NHWC with rknn_input.pass_through=0 and use want_float=1 on output to dequantise. FP16: float32 in/out, fp16 compute.",
+      "device_validation_xt5": {
+        "images": 101,
+        "cosine_vs_onnx_mean": 0.982,
+        "cosine_vs_onnx_min": 0.962,
+        "max_abs_diff": 0.0463,
+        "top5_overlap": 0.861,
+        "top1_agreement": 0.95,
+        "enabled_in_production": false,
+        "note": "retrieval quality lower; 41-image calibration set; not enabled"
+      }
+    }
+  },
+  "distribution": "Binaries are NOT committed to git. Fetch from the artifact store / build cache and verify with scripts/verify_models.sh (see README)."
+}

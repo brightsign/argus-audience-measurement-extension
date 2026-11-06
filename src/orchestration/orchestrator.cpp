@@ -11,6 +11,9 @@
 #include "orchestration/orchestrator.h"
 #include "orchestration/visualization.h"
 #include "orchestration/inference_worker.h"
+#ifdef ARGUS_VISUAL_MEMORY
+#include "integrations/visual_memory_argus_adapter.h"
+#endif
 #include "input/input_factory.h"
 #include "input/input_usb.h"
 #include "input/registry_helper.h"
@@ -175,7 +178,11 @@ Orchestrator::Orchestrator(PipelineConfig cfg) noexcept
   }
 }
 
-Orchestrator::~Orchestrator() { stop_threads(); destroy_pipeline(); }
+Orchestrator::~Orchestrator() { stop_threads(); destroy_pipeline();
+#ifdef ARGUS_VISUAL_MEMORY
+  if (visual_memory_) visual_memory_->stop();
+#endif
+}
 
 bool Orchestrator::start() noexcept {
   if (state_.load(std::memory_order_acquire) != OrchestratorState::Stopped) return true;
@@ -185,6 +192,20 @@ bool Orchestrator::start() noexcept {
   LG_INFO("Build pipeline from orchestrator");
   if (!build_pipeline()) { state_.store(OrchestratorState::Error, std::memory_order_release); return false; }
   if (!start_threads_after_build())   { destroy_pipeline(); state_.store(OrchestratorState::Error, std::memory_order_release); return false; }
+
+#ifdef ARGUS_VISUAL_MEMORY
+  // Optional Visual Memory frame storage. Created once and kept across pipeline
+  // recoveries. A failure here degrades only Visual Memory; Argus keeps running.
+  if (!visual_memory_) {
+    try {
+      visual_memory_ = std::make_unique<argus::VisualMemoryAdapter>(cfg_.visual_memory);
+      visual_memory_->start();
+    } catch (...) {
+      LG_ERROR("visual_memory: adapter construction failed; continuing without it\n");
+      visual_memory_.reset();
+    }
+  }
+#endif
 
   LG_INFO("Create supervisor thread");
   supervisor_th_ = std::thread(&Orchestrator::supervisor_loop, this);
@@ -199,6 +220,11 @@ void Orchestrator::join() noexcept {
   if (capture_th_.joinable())    capture_th_.join();
   if (face_th_.joinable())       face_th_.join();
   if (yolo_th_.joinable())       yolo_th_.join();
+#ifdef ARGUS_VISUAL_MEMORY
+  // Capture thread is now stopped: no more offers can arrive. Drain + stop
+  // Visual Memory cleanly.
+  if (visual_memory_) visual_memory_->stop();
+#endif
 }
 
 bool Orchestrator::switch_input(const InputConfig& new_input) noexcept {
@@ -1428,6 +1454,16 @@ void Orchestrator::capture_loop_threadfn() noexcept {
         if (camView.plane0) {
             std::memcpy(sf->bgr.data(), camView.plane0, sf->bgr.size());
         }
+
+        // Optional Visual Memory: offer the full-resolution source-scene BGR
+        // frame. The adapter gates sampling (~every sample_interval_ms) and
+        // never blocks this capture thread on I/O, JPEG or SQL work.
+#ifdef ARGUS_VISUAL_MEMORY
+        if (visual_memory_ && visual_memory_->enabled()) {
+            visual_memory_->offer_bgr(sf->bgr.data(), sf->width, sf->height,
+                                      sf->pts_ns, sf->seq);
+        }
+#endif
 
         // Fan out to enabled model mailboxes (lock-free post)
         // Only post to mailboxes that have active consumers

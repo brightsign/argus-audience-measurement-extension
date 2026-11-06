@@ -1,0 +1,56 @@
+{
+ "dataset": {
+  "frames": 240,
+  "instances": 20,
+  "unseen_instances": [
+   "can1",
+   "can2",
+   "can3",
+   "can4"
+  ],
+  "jitter": 0.06,
+  "indexed_regions": 162,
+  "queries_seen": 162,
+  "queries_unseen": 37
+ },
+ "crop_accuracy_vs_local_crop": {
+  "samples": 26,
+  "mean_abs_error_0_255": 2.884,
+  "max": 4.999
+ },
+ "duplicate_handling_ok": true,
+ "instance_retrieval": {
+  "P@1": 0.9321,
+  "P@5": 0.7975,
+  "hit@5": 0.9938,
+  "recall@5": 0.4142,
+  "recall@5_vs_min(5,relevant)": 0.7975,
+  "recall@10": 0.625,
+  "MRR": 0.9527
+ },
+ "class_retrieval": {
+  "P@1": 1,
+  "P@5": 0.9975
+ },
+ "unseen_objects": {
+  "top1_class_correct": 0.9459,
+  "top1_similarity_mean_unseen": 0.8367,
+  "top1_similarity_mean_seen": 0.9128,
+  "AUC_seen_vs_unseen_top1_similarity": 0.9655
+ },
+ "latency_ms_at_162_regions": {
+  "scan_p50": 3.75,
+  "scan_p95": 3.82,
+  "scan_max": 3.9,
+  "server_total_p50": 24.0,
+  "server_total_p95": 48.0,
+  "client_p50": 27.39,
+  "client_p95": 50.8,
+  "n": 199
+ },
+ "index_call_ms": {
+  "p50": 60.6,
+  "p95": 82.5
+ },
+ "latency_vs_index_size": {}
+}

@@ -5,6 +5,19 @@ All notable changes to this project are documented here. The format is based on
 follow [Semantic Versioning](https://semver.org/spec/v2.0.0.html) (pre-1.0: minor
 versions may include breaking changes).
 
+## [Unreleased]
+
+### Added
+- **Visual Memory Stage 2 (optional, disabled by default)**: asynchronous MobileNetV2 (FP16, RKNN) image
+  embeddings, sqlite-vec vector storage and historical similarity search in `libs/visual-memory`. Build with
+  `-DENABLE_VISUAL_EMBEDDINGS=ON`; enable at runtime via `visual_memory.vector_search_enabled` and
+  `visual_memory.embedding.enabled`. Measured on XT5: +17 MiB RSS, no FPS change. See
+  `libs/visual-memory/STAGE2_RESULTS.md`; known issues in `libs/visual-memory/BACKLOG.md`.
+- `vm_embed_demo` CLI (ingest / embed / search / backfill / bench-db), shipped in the XT5 package.
+
+### Changed
+- The committed `configs/config.json` now ships with `visual_memory.enabled: false`.
+
 ## [0.7.0] - 2026-10-05
 
 First tagged release.

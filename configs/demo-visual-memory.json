@@ -1,0 +1,230 @@
+{
+  "_comment_demo": "Development / stakeholder-demo configuration: Visual Memory Stage 1+2 ON (isolated store /storage/sd/vm-demo, 5 s sampling, FP16 MobileNetV2), USB exposure_auto_priority=0 so the camera keeps 30 fps in dim light. NOT the shipped default (configs/config.json keeps Visual Memory off). Copy to /storage/sd/configs/argus-config.json to use; restore your own config afterwards. See docs/VISUAL_MEMORY_DEMO.md.",
+  "_comment_input_source": "Select 'rtsp', 'usb', or 'file' for your input source",
+  "input_source": "usb",
+  "_comment_device_id": "Device identifier for MQTT messages. Leave empty to auto-detect from MAC address",
+  "device_id": "",
+  "_comment_visual_memory": "Optional frame storage (libvisualmemory). OFF by default; requires building with -DENABLE_VISUAL_MEMORY=ON. Stage 2 (embeddings + vector search) additionally needs -DENABLE_VISUAL_EMBEDDINGS=ON and BOTH vector_search_enabled and embedding.enabled = true; retention_hours applies to JPEGs, embedding.retention_days to vectors.",
+  "visual_memory": {
+    "enabled": true,
+    "storage_root": "/storage/sd/vm-demo",
+    "sample_interval_ms": 5000,
+    "stored_width": 640,
+    "stored_height": 360,
+    "jpeg_quality": 75,
+    "max_pending_frames": 4,
+    "max_storage_bytes": 4000000000,
+    "retention_hours": 48,
+    "vector_search_enabled": true,
+    "embedding": {
+      "enabled": true,
+      "backend": "rknn",
+      "model_path": "model/visual_memory/mobilenet_embedder.rknn",
+      "max_pending": 4,
+      "retention_days": 7,
+      "backfill_on_startup": false,
+      "npu_core": -1,
+      "prefer_sqlite_vec": true
+    },
+    "objects": {
+      "enabled": true,
+      "max_regions": 10000,
+      "retention_days": 30,
+      "min_roi_px": 16
+    },
+    "api": {
+      "npu_core": 1,
+      "search_timeout_ms": 10000,
+      "idle_unload_s": 120
+    }
+  },
+  "input": {
+    "rtsp_url": "rtsp://192.168.0.203:8554/live",
+    "usb_device": "/dev/video0",
+    "file_path": "/storage/sd/000921246-shopping-area.mov",
+    "usb": {
+      "width": 640,
+      "height": 480,
+      "fps": 30,
+      "_comment_exposure_auto_priority": "Optional V4L2 exposure_auto_priority for USB cameras: 0 = keep the frame rate constant in dim light, 1 = let the camera lower fps to lengthen exposure. Omit to leave the camera as found. Ignored with a log message if the camera lacks the control. Not used for RTSP/file inputs.",
+      "exposure_auto_priority": 0
+    },
+    "rtsp": {
+      "latency_ms": 100
+    },
+    "file": {
+      "loop": true
+    }
+  },
+  "input_source_priority": "config",
+  "primary_model": {
+    "name": "retinaface",
+    "model_path": "model/retinaface.rknn",
+    "input_size": [
+      320,
+      320
+    ],
+    "npu_core": 0,
+    "norm": {
+      "mean": [
+        123.675,
+        116.28,
+        103.53
+      ],
+      "std": [
+        58.395,
+        57.12,
+        57.375
+      ]
+    },
+    "conf_threshold": 0.3,
+    "nms_threshold": 0.45
+  },
+  "secondary_models": [
+    {
+      "name": "yolox",
+      "model_path": "model/yolox_s.rknn",
+      "input_size": [
+        640,
+        640
+      ],
+      "npu_core": 0,
+      "norm": {
+        "mean": [
+          0,
+          0,
+          0
+        ],
+        "std": [
+          1,
+          1,
+          1
+        ]
+      },
+      "conf_threshold": 0.5,
+      "nms_threshold": 0.45
+    }
+  ],
+  "processing": {
+    "th": {
+      "score": 0.5,
+      "iou": 0.45
+    },
+    "nms_max_dets": 100
+  },
+  "runtime": {
+    "target_fps": 30,
+    "heartbeat_ms": 1000,
+    "_comment_skip_frames": "Frame skipping per model. Value = process every Nth frame: 0 or 1 = every frame (no skipping), 2 = every 2nd frame (half the work), 3 = every 3rd, etc. Higher value = lower NPU/CPU load and less heat, but fewer detections per second (slower reaction to movement). See _frame_skip_notes below for guidance.",
+    "face_skip_frames": 0,
+    "yolo_skip_frames": 0
+  },
+  "publishers": [
+    {
+      "kind": "mqtt",
+      "mqtt": {
+        "host": "localhost",
+        "port": 1883,
+        "topic": "bs/argus/analytics",
+        "qos": 0,
+        "retain": false,
+        "period_ms": 1000
+      }
+    }
+  ],
+  "_comment_dashboard": "Analytics dashboard web server. 'port' is the HTTP port (http://<player>:<port>); 'ws_port' is the mosquitto WebSocket port the dashboard subscribes to. These override the networking.bs-argus-dashboard-port / bs-mqtt-ws-port registry keys.",
+  "dashboard": {
+    "port": 20300,
+    "ws_port": 9001
+  },
+  "log_level": "warn",
+  "_comment_log_dir": "Directory for the rotating structured log (gaze.log, 5MB x 5 files). Default '/tmp' (RAM/tmpfs) is robust against delayed SD-card mount at boot. Use an SD path (e.g. '/storage/sd/logs') only if you need logs to persist across reboots. See _log_notes below.",
+  "log_dir": "/tmp",
+  "log_json": true,
+  "log_performance": false,
+  "enable_frame_output": true,
+  "output_dir": "/tmp",
+  "blur_faces": false,
+  "blur_method": "gaussian",
+  "blur_intensity": 71,
+  "flip_horizontal": true,
+  "test_face_only": false,
+  "test_yolo_only": false,
+  "_input_source_notes": {
+    "description": "Input source selection and configuration",
+    "input_source": "Which input to use: 'rtsp', 'usb', or 'file'",
+    "note": "Set input_source to your desired input type. Configure all three sources so you can easily switch between them",
+    "examples": {
+      "rtsp": "Network RTSP camera stream",
+      "usb": "USB webcam (e.g., /dev/video0)",
+      "file": "Video file for testing (e.g., /path/to/video.mp4)"
+    },
+    "usage": "Change 'input_source' value to switch between inputs without editing URLs/paths"
+  },
+  "_input_source_priority_notes": {
+    "description": "Controls where video input configuration is read from",
+    "config": "Use 'input' section from this config.json file (default, easier for deployment)",
+    "registry": "Use BrightSign registry value 'bsext-gaze-video-device' (flexible for runtime changes)",
+    "priority": "CLI args > [config or registry based on this setting] > [other] > auto-detect",
+    "note": "Set to 'config' to use config.json, or 'registry' to use BrightSign registry",
+    "example_registry": "registry write extension bsext-gaze-video-device rtsp://192.168.0.123:554/stream1"
+  },
+  "_test_mode_notes": {
+    "description": "Test mode configuration for debugging individual models",
+    "test_face_only": "Set to true to run ONLY RetinaFace (disable YOLOX). Default: false",
+    "test_yolo_only": "Set to true to run ONLY YOLOX (disable RetinaFace). Default: false",
+    "note": "Both can be false (default) to run both models in parallel on separate NPU cores (production mode)",
+    "usage": "See TEST_MODES.md for detailed usage examples and debugging workflows"
+  },
+  "_frame_skip_notes": {
+    "description": "Per-model frame skipping to reduce NPU/CPU load. Located under \"runtime\": face_skip_frames (RetinaFace) and yolo_skip_frames (YOLOX).",
+    "how_it_works": "The worker processes 1 out of every N frames and skips the rest. Skipped frames are still captured but not run through the model, so they cost almost nothing.",
+    "values": {
+      "0 or 1": "Process every frame - maximum accuracy/responsiveness, highest load (default)",
+      "2": "Process every 2nd frame - roughly halves that model's NPU + CPU work",
+      "3": "Process every 3rd frame - roughly one third of the work",
+      "N": "Process every Nth frame - effective inference rate becomes (capture_fps / N)"
+    },
+    "effect": "Higher value => lower CPU/NPU usage, lower power/heat, smoother host playback, BUT fewer detections per second and slower reaction to fast movement. Detections are simply reused/absent between processed frames.",
+    "tuning_guidance": {
+      "single_core_npu": "On single-NPU-core SoCs (e.g. LS5/RK3568) both models share one NPU and serialize. Skipping the pricier model (YOLOX) frees the NPU so the other model (RetinaFace) also speeds up. Start with yolo_skip_frames=2.",
+      "multi_core_npu": "On 3-core NPU SoCs (e.g. XT5/RK3588) each model has its own core; skipping is usually unnecessary unless CPU (pre/resize/visualization) is the limit.",
+      "people_counting": "People/faces move slowly relative to 30fps, so yolo_skip_frames=2 or 3 rarely misses anyone while cutting load significantly.",
+      "measure": "Enable log_performance=true and compare the PERF log lines (npu/total ms and fps) before and after changing these values."
+    },
+    "example": "face_skip_frames=0, yolo_skip_frames=2  => RetinaFace every frame, YOLOX every 2nd frame."
+  },
+  "_log_level_notes": {
+    "description": "Controls verbosity of logging output",
+    "options": {
+      "debug": "Most verbose - all logs including DEBUG messages (use for development/troubleshooting)",
+      "info": "General information - INFO, WARN, ERROR, and CRITICAL messages (recommended default)",
+      "warn": "Warnings and errors only - WARN, ERROR, and CRITICAL messages (production mode)",
+      "error": "Errors only - ERROR and CRITICAL messages (minimal logging)"
+    },
+    "note": "Change log_level without recompiling. Logs are written to log_dir location.",
+    "default": "info"
+  },
+  "_log_notes": {
+    "description": "Log file layout on the player.",
+    "structured_log": "log_dir/gaze.log (default /tmp/gaze.log) - the main application log. Rotates automatically at 5MB, keeping 5 files (gaze.log, gaze.log.1 .. gaze.log.4). Grep this for PERF, detections, errors, etc.",
+    "console_log": "/tmp/gaze_console.log - raw stdout/stderr capture (early-boot messages, crashes). Truncated on each start. Not rotated; kept small.",
+    "why_tmp": "/tmp is tmpfs (RAM). Logging here avoids losing logs when the SD card mount is delayed at boot. Downside: logs are cleared on reboot/power-cycle.",
+    "persistent": "Set log_dir to an SD path (e.g. /storage/sd/logs) to keep logs across reboots, accepting the boot-time mount-race risk."
+  },
+  "_blur_faces_notes": {
+    "description": "Person blurring for privacy protection in output frames (blurs entire person bounding box)",
+    "defaults": "All blur settings are optional. Defaults: blur_faces=false, blur_method=pixelate, blur_intensity=12",
+    "blur_faces": "Set to true to enable person blurring (default: false)",
+    "blur_method": {
+      "pixelate": "Fast mosaic/pixelation effect - irreversible anonymization",
+      "gaussian": "Smooth blur effect (currently configured) - use kernel size >= 71 for effective anonymization"
+    },
+    "blur_intensity": {
+      "pixelate": "Block size in pixels (4-32). Smaller = more detail visible. Default: 12",
+      "gaussian": "Kernel size (31-99, must be odd). Larger = more blur. Currently: 71"
+    },
+    "note": "Blur is applied to entire person bounding box (full body), affecting output images written to output_dir",
+    "minimal_config": "To enable with defaults, just add: \"blur_faces\": true"
+  }
+}

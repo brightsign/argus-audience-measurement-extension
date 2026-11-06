@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Argus Audience</title>
 <link rel="stylesheet" href="styles.css">
+<link rel="stylesheet" href="vm.css">
 </head>
 <body>
   <header class="topbar">
@@ -12,6 +13,13 @@
       <span class="dot-logo" aria-hidden="true"></span>
       <h1>Argus <span class="muted">Audience Measurement</span></h1>
     </div>
+    <nav class="tabs" id="tabs" aria-label="Dashboard sections">
+      <a href="#audience" data-tab="audience">Audience Measurement</a>
+      <a href="#memory" data-tab="memory">Visual Memory</a>
+      <a href="#search" data-tab="search">Visual Search</a>
+      <a href="#pop" data-tab="pop">Proof of Play</a>
+    </nav>
+    <a class="vm-pill vm-grey" id="vmPill" href="#memory" title="Visual Memory status"><span class="vm-pill-dot"></span><span id="vmPillText">VM: …</span></a>
     <div class="status" id="status">
       <span class="feed-dot" id="feedDot"></span>
       <span id="feedLabel">connecting…</span>
@@ -20,7 +28,7 @@
     </div>
   </header>
 
-  <main>
+  <main id="view-audience" class="view" data-view="audience">
     <!-- Primary view: video left, data right, matched height -->
     <section class="stage-row">
       <!-- Live frame + overlay -->
@@ -42,6 +50,8 @@
           <div class="tile"><span class="k-label">Peak Today</span><span class="k-val" id="kPeak">0</span></div>
           <div class="tile"><span class="k-label">NPU Load</span><span class="k-val" id="kNpu">0%</span></div>
         </section>
+
+
 
         <section class="panel hist" aria-label="Presence history">
           <div class="panel-head"><h2>Presence History</h2><span class="hint">last 60s</span></div>
@@ -72,9 +82,28 @@
     </section>
   </main>
 
+  <main id="view-memory" class="view vm-view" data-view="memory" hidden></main>
+  <main id="view-search" class="view vm-view" data-view="search" hidden></main>
+  <main id="view-pop" class="view vm-view" data-view="pop" hidden>
+    <!-- Display output preview (OS rendered frames). Hidden unless visual_memory.display.enabled; polls only while the Proof of Play view is on screen. -->
+    <section class="panel disp-panel" id="dispPanel" aria-label="Display output" hidden>
+      <div class="panel-head"><h2>Display output</h2><span class="hint" id="dispHint">what the player is showing (approximate, composed)</span></div>
+      <div class="disp-body">
+        <div class="disp-frame"><img id="dispImg" alt="Display output preview" hidden><div class="disp-empty" id="dispEmpty">Waiting for a display frame…</div></div>
+        <dl class="disp-meta" id="dispMeta" aria-live="off"></dl>
+      </div>
+    </section>
+  </main>
+
   <div class="tooltip" id="tooltip" hidden></div>
 
   <script src="vendor/mqtt.min.js"></script>
   <script src="app.js"></script>
+  <script src="vm.js"></script>
+  <script src="lightbox.js"></script>
+  <script src="objects.js"></script>
+  <script src="pop.js"></script>
+  <script src="display_search.js"></script>
+  <script src="display.js"></script>
 </body>
 </html>

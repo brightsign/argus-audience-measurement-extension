@@ -245,6 +245,54 @@ else()
     message(STATUS "YOLOX ENABLED")
 endif()
 
+# ---- Optional Visual Memory frame storage (libvisualmemory) ----
+# OFF by default for backward compatibility: the audience-measurement product
+# deliberately avoids image retention. When ON, the reusable visualmemory static
+# library is built and linked, and the Argus adapter is compiled in. Runtime
+# storage is STILL gated by config (visual_memory.enabled, default false).
+option(ENABLE_VISUAL_MEMORY "Build and link the Visual Memory frame-storage library" OFF)
+# Stage 2: embeddings + vector search on top of Visual Memory (needs ENABLE_VISUAL_MEMORY=ON).
+option(ENABLE_VISUAL_EMBEDDINGS "Visual Memory Stage 2: RKNN embeddings + vector search" OFF)
+option(ENABLE_SQLITE_VEC "Compile the vendored sqlite-vec (vec0) backend (OFF => BLOB cosine fallback)" ON)
+set(VM_LINK_LIB "")
+if(ENABLE_VISUAL_EMBEDDINGS AND NOT ENABLE_VISUAL_MEMORY)
+    message(FATAL_ERROR "ENABLE_VISUAL_EMBEDDINGS requires ENABLE_VISUAL_MEMORY=ON")
+endif()
+if(ENABLE_VISUAL_MEMORY)
+    add_definitions(-DARGUS_VISUAL_MEMORY=1)
+    set(VISUALMEMORY_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+    set(VISUALMEMORY_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
+    if(ENABLE_VISUAL_EMBEDDINGS)
+        # Build the Stage 2 CLI (vm_embed_demo) so it ships next to attention_demo for on-device demo/benchmarks.
+        set(VISUALMEMORY_BUILD_EXAMPLES ON CACHE BOOL "" FORCE)
+        set(ENABLE_RKNN_EMBEDDINGS ON CACHE BOOL "" FORCE)
+        add_definitions(-DARGUS_VISUAL_EMBEDDINGS=1)
+    endif()
+    add_subdirectory(libs/visual-memory)
+    set(VM_LINK_LIB visualmemory)
+    if(ENABLE_VISUAL_EMBEDDINGS)
+        list(APPEND VM_LINK_LIB visualmemory_rknn)
+        message(STATUS "Visual Memory Stage 2 ENABLED (RKNN embeddings, sqlite-vec=${ENABLE_SQLITE_VEC})")
+    endif()
+    # Dashboard API: read-only HTTP/JSON adapter over libvisualmemory's VisualMemoryReader. A separate
+    # process (never on the capture thread); the dashboard-server proxies /api/vm/* to it (loopback only).
+    find_package(Threads REQUIRED)
+    add_executable(vm_api_server src/tools/vm_api_server.cpp src/tools/pop_service.cpp src/display/display_frame_source.cpp src/display/bridge_client.cpp)
+    target_include_directories(vm_api_server PRIVATE src)
+    add_executable(vm_ingest_dir src/tools/vm_ingest_dir.cpp)   # dev/demo tool, not packaged
+    target_link_libraries(vm_ingest_dir PRIVATE ${VM_LINK_LIB} Threads::Threads)
+    if(ENABLE_VISUAL_EMBEDDINGS)
+        target_compile_definitions(vm_ingest_dir PRIVATE ARGUS_VISUAL_EMBEDDINGS=1)
+    endif()
+    target_link_libraries(vm_api_server PRIVATE ${VM_LINK_LIB} Threads::Threads)
+    if(ENABLE_VISUAL_EMBEDDINGS)
+        target_compile_definitions(vm_api_server PRIVATE ARGUS_VISUAL_EMBEDDINGS=1)
+    endif()
+    message(STATUS "Visual Memory ENABLED - linking libvisualmemory (+ vm_api_server)")
+else()
+    message(STATUS "Visual Memory DISABLED (default)")
+endif()
+
 # ---- Build/version stamp (git hash + UTC build time) ----
 # Regenerated on every build so the binary always reports the exact source it
 # was built from. Query at runtime with `attention_demo --version`; also logged
@@ -287,6 +335,7 @@ add_executable(attention_demo
         src/input/input_from_registry.cpp
         src/input/input_rtsp.cpp
         src/input/input_usb.cpp
+        src/input/v4l2_controls.cpp
         src/input/media_probe.cpp
         src/input/registry_helper.cpp
         # Common utilities
@@ -303,6 +352,8 @@ add_executable(attention_demo
         src/orchestration/orchestrator.cpp
         src/orchestration/orchestrator_fixed.cpp
         src/orchestration/visualization.cpp
+        # Visual Memory Argus adapter (only compiled when ENABLE_VISUAL_MEMORY=ON)
+        $<$<BOOL:${ENABLE_VISUAL_MEMORY}>:src/integrations/visual_memory_argus_adapter.cpp>
         # Output module
         src/output/annotator.cpp
         src/output/async_publisher.cpp
@@ -341,6 +392,7 @@ target_link_libraries(attention_demo
   ${TURBOJPEG_LIB}
   ${MY_LIBS}
   mosquitto
+  ${VM_LINK_LIB}
 )
 
 # Ensure the version stamp is regenerated before attention_demo is (re)built.
@@ -525,7 +577,8 @@ install(FILES ${CMAKE_BINARY_DIR}/dashboard-server
 
 # Install the dashboard static UI (served by dashboard-server)
 install(DIRECTORY ${CMAKE_SOURCE_DIR}/dashboard
-        DESTINATION ./)
+        DESTINATION ./
+        PATTERN "dev" EXCLUDE)       # dev/ holds the UI mock API: never packaged
 
 # Install config.json to the install directory
 install(FILES ${CMAKE_SOURCE_DIR}/configs/config.json

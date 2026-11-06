@@ -265,6 +265,26 @@ TEST_F(ConfigTest, RuntimeAndUsbCaptureOptions) {
     EXPECT_EQ(cfg.input.usb.fps, 30);
 }
 
+// TC-006d: optional USB exposure_auto_priority (0/1); unset or invalid leaves the camera untouched (-1)
+TEST_F(ConfigTest, UsbExposureAutoPriority) {
+    auto load = [&](const std::string& usb_json) {
+        std::string json = R"({"input_source":"usb","input":{"usb":)" + usb_json +
+            R"(},"primary_model":{"name":"RetinaFace","model_path":"model/RetinaFace.rknn"}})";
+        fs::path f = write_config(json);
+        AppConfig cfg; char err[256] = {0};
+        EXPECT_TRUE(config::load_from_file(f.string(), cfg, false, err, sizeof(err))) << err;
+        return cfg.input.usb.exposure_auto_priority;
+    };
+    EXPECT_EQ(load(R"({"width":640})"), -1);                              // absent: existing behaviour
+    EXPECT_EQ(load(R"({"exposure_auto_priority":null})"), -1);            // null: unset
+    EXPECT_EQ(load(R"({"exposure_auto_priority":0})"), 0);
+    EXPECT_EQ(load(R"({"exposure_auto_priority":1})"), 1);
+    EXPECT_EQ(load(R"({"exposure_auto_priority":false})"), 0);            // booleans accepted
+    EXPECT_EQ(load(R"({"exposure_auto_priority":true})"), 1);
+    EXPECT_EQ(load(R"({"exposure_auto_priority":2})"), -1);               // invalid: ignored, not fatal
+    EXPECT_EQ(load(R"({"exposure_auto_priority":"auto"})"), -1);
+}
+
 // TC-006c: USB capture options fall back to struct defaults when absent
 TEST_F(ConfigTest, UsbCaptureOptionsDefaults) {
     std::string json = R"({

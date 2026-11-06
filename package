@@ -285,6 +285,37 @@ copy_binaries() {
             continue
         fi
 
+        # Visual Memory Stage 2 demo/utility CLI (only present in -DENABLE_VISUAL_EMBEDDINGS=ON builds)
+        for _vmc in "$source_dir/vm_embed_demo" "$build_dir/libs/visual-memory/vm_embed_demo"; do
+            if [[ -f "$_vmc" ]]; then
+                cp "$_vmc" "$package_soc_dir/vm_embed_demo"
+                chmod +x "$package_soc_dir/vm_embed_demo"
+                log "  -> packaged vm_embed_demo from $_vmc"
+                break
+            fi
+        done
+
+        # Visual Memory dashboard API (only present in -DENABLE_VISUAL_MEMORY=ON builds)
+        for _vma in "$source_dir/vm_api_server" "$build_dir/vm_api_server"; do
+            if [[ -f "$_vma" ]]; then
+                cp "$_vma" "$package_soc_dir/vm_api_server"
+                chmod +x "$package_soc_dir/vm_api_server"
+                log "  -> packaged vm_api_server from $_vma"
+                break
+            fi
+        done
+
+        # OS rendered-frame bridge (optional; the only gRPC component, built separately with the Resilience SDK:
+        # see docs/RESILIENCE_DISPLAY_FRAMES.md). Packaged only when present; vm_api_server starts it when visual_memory.display.enabled.
+        for _vdb in "${ARGUS_DISPLAY_BRIDGE:-}" "$source_dir/argus_display_bridge" "$build_dir/argus_display_bridge"; do
+            if [[ -n "$_vdb" && -f "$_vdb" ]]; then
+                cp "$_vdb" "$package_soc_dir/argus_display_bridge"
+                chmod +x "$package_soc_dir/argus_display_bridge"
+                log "  -> packaged argus_display_bridge from $_vdb"
+                break
+            fi
+        done
+
         # Copy image stream server binary
         if [[ -f "$source_dir/image-stream-server" ]]; then
             cp "$source_dir/image-stream-server" "$package_soc_dir/"
@@ -408,6 +439,13 @@ copy_models() {
         if [[ -f "$install_dir/model/coco_80_labels_list.txt" ]]; then
             cp "$install_dir/model/coco_80_labels_list.txt" "$package_soc_dir/model/"
             log "Copied COCO labels for $soc"
+        fi
+
+        # Visual Memory Stage 2 embedding model(s), if synced (RK3588 only)
+        if [[ -d "$install_dir/model/visual_memory" ]]; then
+            mkdir -p "$package_soc_dir/model/visual_memory"
+            cp "$install_dir/model/visual_memory/"* "$package_soc_dir/model/visual_memory/"
+            log "Copied Visual Memory embedding model for $soc"
         fi
 
         success "$soc models copied"

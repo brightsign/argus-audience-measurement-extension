@@ -1,0 +1,151 @@
+{
+  "tools": {
+    "numpy": "1.26.4",
+    "rknn-toolkit2": "2.3.0"
+  },
+  "dataset": {
+    "bases": 41,
+    "total_with_transforms": 287,
+    "transforms": [
+      "blur",
+      "bright+20",
+      "bright-20",
+      "crop90",
+      "flip",
+      "jpeg_q30"
+    ],
+    "note": "public ImageNet-val samples, COCO subset, Argus artwork"
+  },
+  "a_ort_vs_torch": {
+    "cos": {
+      "n": 287,
+      "min": 0.9999998807907104,
+      "mean": 0.9999999887851888,
+      "max": 1.0000001192092896
+    },
+    "max_abs_diff": 2.8312206268310547e-07,
+    "pass": true
+  },
+  "b_identical_input": {
+    "bitwise_equal": true
+  },
+  "c_l2_norms": {
+    "min": 0.9999998807907104,
+    "max": 1.0000001192092896,
+    "pass": true
+  },
+  "d_cosine_distribution": {
+    "same_image_identical": 1.0,
+    "base_vs_own_transform_all": {
+      "n": 246,
+      "min": 0.8061109781265259,
+      "mean": 0.9645240062135991,
+      "max": 0.9988740682601929
+    },
+    "base_vs_own_transform_by_type": {
+      "blur": {
+        "n": 41,
+        "min": 0.8061109781265259,
+        "mean": 0.8963223739368159,
+        "max": 0.9988740682601929
+      },
+      "bright+20": {
+        "n": 41,
+        "min": 0.9652571082115173,
+        "mean": 0.9914910895068471,
+        "max": 0.9967974424362183
+      },
+      "bright-20": {
+        "n": 41,
+        "min": 0.9805083274841309,
+        "mean": 0.9921309497298264,
+        "max": 0.9967190623283386
+      },
+      "crop90": {
+        "n": 41,
+        "min": 0.9266483187675476,
+        "mean": 0.959807813167572,
+        "max": 0.9847748875617981
+      },
+      "flip": {
+        "n": 41,
+        "min": 0.9356412887573242,
+        "mean": 0.9691446365379706,
+        "max": 0.9887768030166626
+      },
+      "jpeg_q30": {
+        "n": 41,
+        "min": 0.9559439420700073,
+        "mean": 0.9782471744025626,
+        "max": 0.9986008405685425
+      }
+    },
+    "different_images_base_vs_base": {
+      "n": 1640,
+      "min": 0.3398616313934326,
+      "mean": 0.5089115267119757,
+      "max": 0.7803469896316528
+    },
+    "different_images_base_vs_other_transforms": {
+      "n": 9840,
+      "min": 0.3070398271083832,
+      "mean": 0.5046985882478274,
+      "max": 0.7896724939346313
+    }
+  },
+  "e_retrieval_ort": {
+    "queries": 287,
+    "top1_hit": 1.0,
+    "top5_any_hit": 1.0,
+    "top5_precision": 1.0
+  },
+  "f_invalid_inputs": {
+    "raised": {
+      "nan_float_image": "TypeError",
+      "nan_tensor": "ValueError",
+      "zero_by_zero": "ValueError",
+      "wrong_dtype_float32": "TypeError",
+      "wrong_channels": "ValueError",
+      "zero_vector_l2": "ValueError"
+    },
+    "pass": true
+  },
+  "g_rknn_simulator": {
+    "fp16": {
+      "cos_vs_ort": {
+        "n": 287,
+        "min": 0.9999299049377441,
+        "mean": 0.999986901308186,
+        "max": 0.9999979734420776
+      },
+      "max_abs_diff_l2normed": 0.0020240023732185364,
+      "mean_abs_diff_l2normed": 9.393257641931996e-05,
+      "retrieval": {
+        "queries": 287,
+        "top1_hit": 1.0,
+        "top5_any_hit": 1.0,
+        "top5_precision": 1.0
+      },
+      "top5_overlap_vs_ort": 1.0,
+      "seconds": 6.3
+    },
+    "int8": {
+      "cos_vs_ort": {
+        "n": 287,
+        "min": 0.9186326265335083,
+        "mean": 0.9794390762309164,
+        "max": 0.994166374206543
+      },
+      "max_abs_diff_l2normed": 0.09069592505693436,
+      "mean_abs_diff_l2normed": 0.0038732578977942467,
+      "retrieval": {
+        "queries": 287,
+        "top1_hit": 1.0,
+        "top5_any_hit": 1.0,
+        "top5_precision": 1.0
+      },
+      "top5_overlap_vs_ort": 0.9797909407665505,
+      "seconds": 8.0
+    }
+  }
+}

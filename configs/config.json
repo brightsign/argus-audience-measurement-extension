@@ -4,7 +4,49 @@
   
   "_comment_device_id": "Device identifier for MQTT messages. Leave empty to auto-detect from MAC address",
   "device_id": "",
-  
+
+  "_comment_visual_memory": "Optional frame storage (libvisualmemory). OFF by default; requires building with -DENABLE_VISUAL_MEMORY=ON. Stage 2 (embeddings + vector search) additionally needs -DENABLE_VISUAL_EMBEDDINGS=ON and BOTH vector_search_enabled and embedding.enabled = true; retention_hours applies to JPEGs, embedding.retention_days to vectors.",
+  "visual_memory": {
+    "enabled": false,
+    "storage_root": "/storage/sd/visual-memory",
+    "sample_interval_ms": 5000,
+    "stored_width": 640,
+    "stored_height": 360,
+    "jpeg_quality": 75,
+    "max_pending_frames": 4,
+    "max_storage_bytes": 4000000000,
+    "retention_hours": 48,
+    "vector_search_enabled": false,
+    "embedding": {
+      "enabled": false,
+      "backend": "rknn",
+      "model_path": "model/visual_memory/mobilenet_embedder.rknn",
+      "max_pending": 4,
+      "retention_days": 7,
+      "backfill_on_startup": false,
+      "npu_core": -1,
+      "prefer_sqlite_vec": true
+    },
+    "_comment_objects": "D4 Object Search (manual region-of-interest indexing in the dashboard, served by vm_api_server). OFF by default. Needs Stage 2 embeddings. Regions live in <storage_root>/objects.db; retention follows the time a region was indexed.",
+    "objects": {
+      "enabled": false,
+      "max_regions": 10000,
+      "retention_days": 30,
+      "min_roi_px": 16
+    },
+    "pop": {
+      "enabled": false,
+      "events_path": "/storage/sd/pop/events.jsonl",
+      "jobs_dir": "/storage/sd/pop/jobs",
+      "source_id": "main_display",
+      "poll_ms": 200,
+      "evidence_max_bytes": 536870912,
+      "evidence_retention_days": 30,
+      "allow_test_jobs": false,
+      "thresholds": { "match_sim": 0.80, "reject_sim": 0.60, "margin": 0.05, "min_play_ratio": 0.90, "min_match_fraction": 0.60 }
+    }
+  },
+
   "input": {
     "rtsp_url": "rtsp://192.168.0.203:8554/live",
     "usb_device": "/dev/video0",
@@ -13,7 +55,8 @@
     "usb": {
       "width": 640,
       "height": 480,
-      "fps": 30
+      "fps": 30,
+      "_comment_exposure_auto_priority": "Optional V4L2 exposure_auto_priority for USB cameras: 0 = keep the frame rate constant in dim light, 1 = let the camera lower fps to lengthen exposure. Omit to leave the camera as found. Ignored with a log message if the camera lacks the control. Not used for RTSP/file inputs."
     },
     "rtsp": {
       "latency_ms": 100

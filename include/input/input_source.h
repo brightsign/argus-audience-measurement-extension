@@ -46,6 +46,9 @@ struct UsbOptions {
   int width{640};
   int height{480};
   int fps{30};
+  // V4L2 exposure_auto_priority control: -1 = leave the camera as found (default, existing behaviour),
+  // 0 = keep the frame rate constant in low light, 1 = allow the camera to lower fps for exposure.
+  int exposure_auto_priority{-1};
 };
 
 enum class HealthStatus : uint8_t {

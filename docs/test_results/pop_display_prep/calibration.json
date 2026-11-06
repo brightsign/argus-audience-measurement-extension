@@ -1,0 +1,58 @@
+{
+ "model": "mobilenet_v2_embedder tv-imagenet1k-v1 (ONNX proxy for the device's FP16 RKNN)",
+ "reference_spacing_s": 1.0,
+ "real_frames_of_A": 92,
+ "positives_real_A_vs_A_display_refs": {
+  "n": 92,
+  "min": 0.7837,
+  "p5": 0.9046,
+  "median": 0.9875,
+  "p95": 0.9958,
+  "max": 0.9977
+ },
+ "negatives_real_A_vs_B_display_refs": {
+  "n": 92,
+  "min": 0.4755,
+  "p5": 0.4826,
+  "median": 0.5169,
+  "p95": 0.58,
+  "max": 0.6172
+ },
+ "positives_real_A_vs_legacy_stretched_refs": {
+  "n": 92,
+  "min": 0.8021,
+  "p5": 0.848,
+  "median": 0.9061,
+  "p95": 0.9255,
+  "max": 0.9271
+ },
+ "negatives_simulated_B_frames_vs_A_display_refs": {
+  "n": 60,
+  "min": 0.6014,
+  "p5": 0.6041,
+  "median": 0.6115,
+  "p95": 0.62,
+  "max": 0.6228
+ },
+ "note_simulated_B": "geometry-faithful simulation from the original B video (no real B frames captured yet)",
+ "floor_A_refs_vs_B_refs": {
+  "n": 122,
+  "min": 0.3247,
+  "p5": 0.474,
+  "median": 0.5223,
+  "p95": 0.5839,
+  "max": 0.62
+ },
+ "decision": {
+  "existing_thresholds": {
+   "match_sim": 0.8,
+   "reject_sim": 0.6
+  },
+  "positives_below_0_80": 1,
+  "positives_below_0_60": 0,
+  "negatives_at_or_above_0_60": 62,
+  "negatives_at_or_above_0_80": 0,
+  "separation_gap_min_pos_minus_max_neg": 0.1609,
+  "suggested_midpoint_between_min_pos_and_max_neg": 0.7032
+ }
+}

@@ -1,0 +1,107 @@
+{
+ "video": "meet-brightsign.mp4",
+ "real_frames_used": 40,
+ "side_bar_mean_level": {
+  "left": 0.0,
+  "right": 0.0
+ },
+ "simulated_fps": 5.0,
+ "hypotheses": {
+  "rect_1920x1080_top_left_native_crop": {
+   "median_mse": 17.4,
+   "mean_mse": 388.4,
+   "monotonic_fraction": 0.95,
+   "matched_video_time_range_s": [
+    7.2,
+    24.2
+   ]
+  },
+  "rect_1920x1080_centred_crop": {
+   "median_mse": 3839.9,
+   "mean_mse": 4078.6,
+   "monotonic_fraction": 0.64,
+   "matched_video_time_range_s": [
+    0.8,
+    99.4
+   ]
+  },
+  "rect_1920x1080_top_right_crop": {
+   "median_mse": 3686.8,
+   "mean_mse": 4070.5,
+   "monotonic_fraction": 0.69,
+   "matched_video_time_range_s": [
+    2.0,
+    85.0
+   ]
+  },
+  "fill_crop_left_justified": {
+   "median_mse": 3621.0,
+   "mean_mse": 4021.3,
+   "monotonic_fraction": 0.64,
+   "matched_video_time_range_s": [
+    2.0,
+    99.4
+   ]
+  },
+  "fill_crop_quarter": {
+   "median_mse": 3985.5,
+   "mean_mse": 4061.4,
+   "monotonic_fraction": 0.64,
+   "matched_video_time_range_s": [
+    1.6,
+    99.2
+   ]
+  },
+  "fill_crop_centred": {
+   "median_mse": 3964.4,
+   "mean_mse": 4088.8,
+   "monotonic_fraction": 0.67,
+   "matched_video_time_range_s": [
+    0.6,
+    99.4
+   ]
+  },
+  "fill_crop_three_quarter": {
+   "median_mse": 4028.4,
+   "mean_mse": 4117.1,
+   "monotonic_fraction": 0.62,
+   "matched_video_time_range_s": [
+    0.6,
+    100.2
+   ]
+  },
+  "fill_crop_right_justified": {
+   "median_mse": 4100.1,
+   "mean_mse": 4145.7,
+   "monotonic_fraction": 0.67,
+   "matched_video_time_range_s": [
+    0.6,
+    100.6
+   ]
+  },
+  "stretch_to_display": {
+   "median_mse": 3942.8,
+   "mean_mse": 4133.5,
+   "monotonic_fraction": 0.74,
+   "matched_video_time_range_s": [
+    2.0,
+    79.2
+   ]
+  },
+  "fit_letterbox": {
+   "median_mse": 4141.2,
+   "mean_mse": 4232.5,
+   "monotonic_fraction": 0.72,
+   "matched_video_time_range_s": [
+    1.6,
+    99.8
+   ]
+  }
+ },
+ "best_hypothesis": "rect_1920x1080_top_left_native_crop",
+ "runner_up": {
+  "name": "fill_crop_left_justified",
+  "median_mse": 3621.0
+ },
+ "separation_ratio_runner_up_over_best": 208.1
+}

@@ -81,10 +81,10 @@ std::string pick_config_path(int argc, char** argv) noexcept {
     }
   }
   
-  // 3) Writable SD card location (user override, preferred). config.json is the
-  //    standard name; argus-config.json is accepted as a legacy fallback.
-  static const char* kSdConfig = "/storage/sd/configs/config.json";
-  static const char* kSdConfigLegacy = "/storage/sd/configs/argus-config.json";
+  // 3) Writable SD card location (user override, preferred). argus-config.json
+  //    is the preferred name; config.json is accepted as a fallback.
+  static const char* kSdConfig = "/storage/sd/configs/argus-config.json";
+  static const char* kSdConfigLegacy = "/storage/sd/configs/config.json";
   for (const char* sd : {kSdConfig, kSdConfigLegacy}) {
     bool sd_exists = file_exists(sd);
     LG_INFO("[pick_config_path] SD config check: %s -> %s", sd, sd_exists ? "EXISTS" : "NOT FOUND");
@@ -98,7 +98,7 @@ std::string pick_config_path(int argc, char** argv) noexcept {
   const std::string bin_dir = dirname_of_exe(argv ? argv[0] : nullptr);
   const std::string local        = choose_local_sample(bin_dir);          // config.json
   const std::string local_legacy = choose_local_sample_legacy(bin_dir);   // argus-config.json
-  for (const std::string& pkg : {local, local_legacy}) {
+  for (const std::string& pkg : {local_legacy, local}) {
     bool pkg_exists = file_exists(pkg.c_str());
     LG_INFO("[pick_config_path] Package config check: %s -> %s", pkg.c_str(), pkg_exists ? "EXISTS" : "NOT FOUND");
     if (pkg_exists) {

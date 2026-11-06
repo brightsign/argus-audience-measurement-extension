@@ -1,0 +1,59 @@
+{
+ "what": "argus_display_bridge --probe 100 --probe-interval-ms 200 --idle-check on the dev XT5 (XT1145, FW 9.1.139-9-g916d653f5-debug_sree-bsoe), run once at boot by bsext_init (marker /storage/sd/display_probe.request)",
+ "package": "argus-ext-1793905820.zip",
+ "package_sha256": "d6bc2b29ffcc6f4334baaf584729a92b4803d91dcf9ae8615e8244edbaf90cd2",
+ "bridge_sha256": "1e7150ddce18dc74332df87c19c768243d301b901012e14a37d657127d51c3bd",
+ "os_service": {
+  "daemon": "bs-resilience-api-daemon running",
+  "socket": "/run/brightsign/resilience/runtime_api.sock srw-rw---- uid 894 gid 892 (resilience)",
+  "producer_running_at_diag_time": false,
+  "producer_delivered_frames": true,
+  "first_cycle": "UNAVAILABLE, first frame 200 ms later"
+ },
+ "cycles": 100,
+ "rpc_failures": 0,
+ "frames_with_jpeg": 93,
+ "duplicates_skipped": 6,
+ "ambiguous_discarded": 1,
+ "frame": {
+  "dimensions": "640x360 only",
+  "provider": "7 WESTON_VOP2_WRITEBACK",
+  "jpeg_bytes": {
+   "min": 12221,
+   "median": 26078,
+   "max": 48065
+  }
+ },
+ "cadence": {
+  "frame_gap_ms": {
+   "min": 152,
+   "median": 201.0,
+   "p95": 397,
+   "max": 425
+  },
+  "observed_fps": 4.71,
+  "os_reported_sample_fps": 5.07,
+  "freshness_strictly_increasing": true
+ },
+ "latency_ms": {
+  "acquire_p50": 1,
+  "acquire_p95": 2
+ },
+ "clock_delta_ms": {
+  "min": 0,
+  "max": 1
+ },
+ "idle_check": {
+  "capture_available": false,
+  "capture_error": "STALE",
+  "error_code": "STALE",
+  "frame_served": false,
+  "idle_check": true,
+  "rpc_ok": true,
+  "waited_s": 9
+ },
+ "black_flagged": 0,
+ "frozen_flagged": 3,
+ "not_measured": "producer capture-to-daemon-receipt latency (the real time uncertainty); CPU/RAM/NPU of the bridge and vm_api_server during a viewer or session; display feature was disabled during the probe",
+ "frames": "not committed (they show the presentation video, which contains people)"
+}

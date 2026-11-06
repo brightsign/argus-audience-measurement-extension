@@ -89,7 +89,7 @@ main { padding: var(--gap); display: flex; flex-direction: column; gap: var(--ga
   .stage-row { grid-template-columns: 1fr; height: auto; }
   .hero .stage { min-height: 300px; }
   .panel.hist .chart { height: 180px; flex: none; }
-  .secondary .panel { grid-column: 1 / span 12; }
+  .secondary .panel, .secondary .panel[aria-label] { grid-column: 1 / span 12; }
 }
 
 /* Live stage */
