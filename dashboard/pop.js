@@ -316,9 +316,9 @@
         ? (refsCache[sc.best_other_media + (grpc ? ".display_letterbox" : "")] || {})[sc.best_other_ref_offset_ms] : null;
       const kind = grpc ? "Weston/VOP2 display frame" : "Display screenshot";
       const left = e.status === "ok" && e.image_available
-        ? h("img", { class: "pop-img", src: e.image_url, alt: `${kind} ${e.idx}`, loading: "lazy" })
+        ? h("img", { class: "pop-img", src: e.image_url, alt: `${kind} ${e.idx}`, loading: "lazy", "data-zoom": "1", "data-title": `Checkpoint #${e.idx} · ${kind}`, "data-meta": `session ${d.session_id}|at ${fmtMs(e.actual_offset_ms)} into the play (target ${fmtMs(e.target_offset_ms)})|captured ${e.utc_ms ? new Date(e.utc_ms).toLocaleString() : ""}` })
         : h("div", { class: "pop-noimg", text: e.status === "failed" ? "Capture failed: " + (e.failure_reason || "no image") : "Image no longer retained" });
-      const right = ref ? h("img", { class: "pop-img", src: ref.image_url, alt: "Closest reference frame", loading: "lazy" })
+      const right = ref ? h("img", { class: "pop-img", src: ref.image_url, alt: "Closest reference frame", loading: "lazy", "data-zoom": "1", "data-title": `Reference frame of ${d.expected_media_id} @ ${fmtMs(sc.best_ref_offset_ms)}`, "data-meta": "built from the original video file", "data-searchable": "1" })
         : h("div", { class: "pop-noimg", text: sc ? "No reference frame" : DASH });
       const verdict = sc ? h("span", { class: "pop-chip " + (sc.verdict === "match" ? "ok" : sc.verdict === "mismatch" ? "bad" : "warn"), text: sc.verdict }) : h("span", { class: "pop-chip", text: e.status });
       const figs = [h("figure", null, left, h("figcaption", { text: kind })),
@@ -367,7 +367,7 @@
           "The verification checkpoints above are separate; a history frame never changes the result." }),
         partial ? h("div", { class: "vm-banner warn", text: `Partial history: ${fr.length} of about ${expected} frames. Seconds without a stored frame were not captured (display source unavailable, stale or ambiguous), so this history does not show every moment of the play.` }) : null,
         fr.length ? h("div", { class: "pop-hist" }, ...fr.map((f) => h("figure", { "data-hist": String(f.frame_id) },
-          f.image_available ? h("img", { src: f.image_url, alt: `Display history frame at ${fmtMs(f.actual_offset_ms)}`, loading: "lazy" }) : h("div", { class: "pop-noimg", text: "JPEG expired" }),
+          f.image_available ? h("img", { src: f.image_url, alt: `Display history frame at ${fmtMs(f.actual_offset_ms)}`, loading: "lazy", "data-zoom": "1", "data-title": `Display history +${(f.actual_offset_ms / 1000).toFixed(1)} s`, "data-meta": `session ${d.session_id}|captured ${new Date(f.utc_ms).toLocaleString()}|time uncertainty ${f.time_uncertainty_ms == null ? "not reported" : "≤ " + fmtMs(f.time_uncertainty_ms)}|${f.role === "history_and_checkpoint" ? "also a verification checkpoint" : "history sample"}` }) : h("div", { class: "pop-noimg", text: "JPEG expired" }),
           h("figcaption", null, `+${(f.actual_offset_ms / 1000).toFixed(1)} s`, f.role === "history_and_checkpoint" ? h("span", { class: "pop-chip info", text: "also a checkpoint" }) : null,
             f.embedded ? null : h("span", { class: "pop-chip warn", text: "not embedded yet" }))))) : h("div", { class: "vm-empty", text: "No display-history frames were stored for this session." }));
     }
@@ -376,6 +376,7 @@
       histNode,
       h("h3", { text: "Playback events (player clock)" }), timeline.children.length ? timeline : h("div", { class: "vm-empty", text: "No playback events received." }),
       h("p", { class: "muted", text: "Event times use the player's monotonic clock; wall-clock time is assigned when the event is read (accuracy about a quarter of a second)." }));
+    if (U.lightbox) U.lightbox.attach(body);
     S.modal = U.openModal("Proof of Play — " + d.session_id, body, { wide: true, onClose: () => { S.modal = null; } });
   }
 

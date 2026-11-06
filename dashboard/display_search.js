@@ -191,6 +191,7 @@
           h("div", { class: "vm-row" }, h("label", { class: "inline" }, E.minOn, "Override minimum similarity (default: the Proof-of-Play match threshold)"), E.minSim),
           h("div", { class: "vm-row" }, E.run, E.cancel, E.spin, E.runMsg)))));
     slot.append(h("div", { class: "vm-stack" }, h("div", { class: "vm-note", text: NOTE }), E.hist, E.coverage, E.fs, E.results));
+    if (U.lightbox) U.lightbox.attach(E.results);
     renderRef(); renderCoverage(); renderHistory();
   }
 
@@ -229,17 +230,42 @@
 
   function evImg(x, alt) {
     if (!x.image_url) return h("div", { class: "vm-empty", text: "JPEG expired (retention removed the file; the score and time are kept)" });
-    const img = h("img", { src: x.image_url, alt, loading: "lazy" });
+    const img = h("img", { src: x.image_url, alt, loading: "lazy", "data-zoom": "1", "data-title": (x.role === "history_sample" ? "History sample" : "Verification checkpoint") + " · " + (x.advertisement_name || x.advertisement_id || "") + (isNum(x.offset_in_play_ms) ? " · " + (x.offset_in_play_ms / 1000).toFixed(1) + " s into the play" : ""),
+      "data-meta": [isNum(x.similarity) ? "similarity " + x.similarity.toFixed(4) : "", x.capture_utc_ms ? "captured " + new Date(x.capture_utc_ms).toLocaleString() : "", "session " + x.session_id,
+        "frame " + (x.role === "history_sample" ? "history #" + x.history_id : "checkpoint #" + x.evidence_id) + " · " + fmtInt(x.width) + "×" + fmtInt(x.height)].filter(Boolean).join("|") });
     img.addEventListener("error", () => img.replaceWith(h("div", { class: "vm-empty", text: "JPEG no longer available" })));
     return img;
   }
+  // A stored frame (or any same-origin JPEG) becomes the reference of the next display search.
+  async function reuseFrame(url) {
+    try {
+      const r = await fetch(url, { credentials: "same-origin", cache: "no-store" });
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const b = await r.blob();
+      if (!b.size || (b.type && b.type !== "image/jpeg")) throw new Error("not a JPEG");
+      await setUpload(new File([b], "stored-frame.jpg", { type: "image/jpeg" }));
+      if (E.geom) { E.geom.value = "as_uploaded"; renderRef(); }
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    } catch (e) { E.runMsg.textContent = "Could not use this frame as a reference: " + e.message; }
+  }
+  function consumePending() {
+    if (!SD.pendingRef) return;
+    const f = SD.pendingRef; SD.pendingRef = null;
+    setUpload(f).then(() => { if (E.geom) { E.geom.value = "as_uploaded"; renderRef(); } window.scrollTo({ top: 0 }); });
+  }
+  U.useDisplayReference = (file) => {
+    SD.pendingRef = file;
+    const target = "#search?source=display", same = location.hash === target;
+    location.hash = target;
+    if (same && SD.built) consumePending();
+  };
   function hitCard(x, ref, closest) {
     const s = isNum(x.similarity) ? x.similarity : null;
     const chipCls = STATUS_CLASS[x.session_status] || "";
     const link = h("a", { class: "vm-btn small", href: x.session_link, text: "Open playback session " + x.session_id, "data-session-link": x.session_id });
     return h("div", { class: "panel ds-hit" + (closest ? " ds-closest" : ""), "data-evidence": String(x.role === "history_sample" ? "h" + x.history_id : x.evidence_id), "data-role-kind": x.role || "" },
       h("div", { class: "vm-cmp" },
-        h("div", null, h("h3", { text: "Reference" }), h("div", { class: "vm-thumb ds-img" }, h("img", { src: ref.blobUrl, alt: "Reference" }))),
+        h("div", null, h("h3", { text: "Reference" }), h("div", { class: "vm-thumb ds-img" }, h("img", { src: ref.blobUrl, alt: "Reference", "data-zoom": "1", "data-title": "Reference image", "data-meta": "the image you searched with" }))),
         h("div", null, h("h3", null, closest ? "Closest stored frame" : "Match #" + x.rank,
           h("span", { class: "dh-role " + (x.role === "history_sample" ? "hist" : "ck"), "data-role": "frame-role", text: x.role === "history_sample" ? "History sample" : "Verification checkpoint" })),
           h("div", { class: "vm-thumb ds-img" }, evImg(x, "Stored display frame")))),
@@ -254,7 +280,8 @@
           h("dt", { text: "Session" }), h("dd", null, h("span", { class: "pop-chip " + chipCls, text: x.session_status_label || DASH }), " ", h("span", { class: "muted", text: x.session_id })),
           h("dt", { text: "Source" }), h("dd", { text: (x.capture_method === "resilience_grpc" ? "Weston/VOP2 frame" : x.capture_method === "brightscript_screenshot" ? "BrightScript screenshot" : x.capture_method) + (isNum(x.time_uncertainty_ms) ? " · time ±" + x.time_uncertainty_ms + " ms" : "") }),
           h("dt", { text: "Frame" }), h("dd", { text: (x.role === "history_sample" ? `history frame #${x.history_id} (sample ${x.sec_idx})` : `checkpoint evidence #${x.evidence_id}`) + ` · ${fmtInt(x.width)} × ${fmtInt(x.height)}` })),
-        link));
+        h("div", { class: "vm-row", style: "gap:8px" }, link,
+          x.image_url ? h("button", { class: "vm-btn small", type: "button", "data-role": "search-with-frame", text: "Search with this frame", onclick: () => reuseFrame(x.image_url) }) : null)));
   }
   function renderResults(d, ref) {
     const box = clearChildren(E.results), res = d.results || [], st = d.status || {}, cov = d.coverage || {}, m = d.model || {};
@@ -281,7 +308,7 @@
 
   function mount(slot) {
     if (!SD.built) build(slot);
-    loadCoverage(); loadAds(); loadHistory();
+    loadCoverage(); loadAds(); loadHistory(); consumePending();
     if (!SD.timer) SD.timer = setInterval(() => { if (document.getElementById('view-search') && !document.getElementById('view-search').hidden && E.hist && E.hist.offsetParent !== null) loadHistory(); }, 5000);
   }
   if (U.registerDisplaySearch) U.registerDisplaySearch({ mount });

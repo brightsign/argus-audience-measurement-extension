@@ -275,3 +275,14 @@ table.vm-table { border-collapse: collapse; width: 100%; font-size: 12px; }
 .dh-panel dt{font-size:12px;opacity:.7}.dh-panel dd{margin:0 0 6px 0;font-weight:600}
 .dh-role{display:inline-block;font-size:12px;padding:1px 8px;border-radius:10px;border:1px solid var(--line,#26324a);margin-left:6px}
 .dh-role.hist{border-color:#3b82f6;color:#7fb2ff}.dh-role.ck{border-color:#10b981;color:#6fe3b4}
+
+/* click-to-enlarge viewer */
+img[data-zoom]{cursor:zoom-in}
+.lb-bg{position:fixed;inset:0;background:rgba(3,6,12,0.92);z-index:300;display:flex;align-items:center;justify-content:center;padding:12px}
+.lb-box{display:flex;flex-direction:column;gap:8px;max-width:min(96vw,1400px);max-height:96vh;width:100%}
+.lb-top{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap}
+.lb-stage{display:flex;align-items:center;justify-content:center;gap:8px;min-height:0}
+.lb-stage img{max-width:100%;max-height:68vh;object-fit:contain;background:#000;border-radius:6px;cursor:default}
+.lb-nav{font-size:28px;line-height:1;padding:6px 14px}
+.lb-meta{font-size:13px}
+.lb-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap}

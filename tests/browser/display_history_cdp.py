@@ -396,6 +396,21 @@ async def main():
         check("UI: the top card is a 'History sample' with similarity, capture time, offset in the play, advertisement and session link", all(s.lower() in card.lower() for s in ("History sample", "similarity", "Captured", "Within the play", "Meet BrightSign", "Open playback session")), card)
         check("UI: images decode (reference and stored frame)", await wait_for("[...document.querySelectorAll('#view-search .ds-hit')].slice(0,3).every(c=>[...c.querySelectorAll('img')].length===2&&[...c.querySelectorAll('img')].every(i=>i.complete&&i.naturalWidth>0))", 15))
         await shot("1_display_search_history")
+        # click-to-enlarge on a result card, then "Search with this image" makes the stored frame the reference
+        await ev("(document.querySelector('#view-search .ds-hit .vm-thumb:nth-child(1)'), document.querySelectorAll('#view-search .ds-hit')[0].querySelectorAll('img[data-zoom]')[1].click(), 1)")
+        check("UI: clicking a stored frame opens the large viewer with its details and a link to the original JPEG", await wait_for(
+            "(()=>{const b=document.querySelector('.lb-bg');if(!b)return false;const i=b.querySelector('.lb-stage img');return !!i&&i.complete&&i.naturalWidth===640&&/History sample|Verification checkpoint/.test(b.innerText)&&/session /.test(b.innerText)&&!!b.querySelector('a[href*=\"/api/pop/\"]')})()", 10), await ev("(document.querySelector('.lb-bg')||{}).innerText"))
+        await shot("1b_viewer")
+        await ev("document.dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowRight',bubbles:true})), 1")
+        check("UI: the arrow keys step to the next image (counter changes)", await wait_for("/3 \\/ \\d+/.test(document.querySelector('.lb-bg').innerText)", 5), await ev("(document.querySelector('.lb-bg')||{}).innerText"))
+        await ev("(document.querySelector('[data-role=lb-search]').click(), 1)")
+        check("UI: 'Search with this image' closes the viewer and loads the stored frame as the search reference", await wait_for(
+            "!document.querySelector('.lb-bg') && /stored-frame\\.jpg/.test(document.getElementById('view-search').innerText)", 10), await ev("document.getElementById('view-search').innerText.slice(0,400)"))
+        await ev("([...document.querySelectorAll('#view-search button')].find(b=>b.textContent==='Search display evidence').click(), 1)")
+        check("UI: searching with that stored frame finds itself first (similarity about 1.0)", await wait_for(
+            "(()=>{const t=document.querySelector('#view-search .ds-hit .vm-score');return !!t&&parseFloat(t.textContent.replace('similarity ',''))>0.999})()", 20), await ev("(document.querySelector('#view-search .ds-hit .vm-score')||{}).textContent"))
+        await ev("(document.querySelectorAll('#view-search .ds-hit')[2].querySelector('[data-role=search-with-frame]').click(), 1)")
+        check("UI: each result card also has 'Search with this frame' which replaces the reference", await wait_for("/stored-frame\\.jpg/.test(document.querySelector('#view-search [data-role]') ? document.getElementById('view-search').innerText : '')", 10))
         await ev("document.querySelector('#view-search select[aria-label=\"Frame role\"]').value='verification_checkpoint'; document.querySelector('#view-search select[aria-label=\"Frame role\"]').dispatchEvent(new Event('change')); ([...document.querySelectorAll('#view-search button')].find(b=>b.textContent==='Search display evidence').click(), 1)")
         check("UI: the checkpoint-only filter shows only 'Verification checkpoint' cards", await wait_for("(()=>{const r=[...document.querySelectorAll('#view-search .ds-hit [data-role=frame-role]')].map(x=>x.textContent);return r.length>0&&r.every(x=>x==='Verification checkpoint')})()", 20))
         await ev("document.querySelector('#view-search select[aria-label=\"Frame role\"]').value='any'; ([...document.querySelectorAll('#view-search button')].find(b=>b.textContent==='Search display evidence').click(), 1)")
@@ -415,6 +430,9 @@ async def main():
             opened = await wait_for("!!document.querySelector('[data-role=history-section]')", 20)
         check("UI: the session detail separates 'Verification checkpoints (used for the verdict)' from 'Display history' frames", opened and await ev("(()=>{const t=document.body.innerText;return /verification checkpoints/i.test(t)&&/display history: additional searchable frames/i.test(t)&&/never changes the result/i.test(t)})()") is True)
         check("UI: the history strip lists the session's frames as thumbnails with their offsets", await wait_for("document.querySelectorAll('[data-role=history-section] figure').length>=%d" % (len(fa) - 1), 15), await ev("document.querySelectorAll('[data-role=history-section] figure').length"))
+        await ev("(document.querySelector('[data-role=history-section] figure img').click(), 1)")
+        check("UI: a history thumbnail in the session window opens the large viewer", await wait_for("!!document.querySelector('.lb-bg .lb-stage img') && /Display history \\+/.test(document.querySelector('.lb-bg').innerText)", 10))
+        await ev("document.querySelector('.lb-bg .vm-btn.small').click(), 1")
         await ev("(async()=>{for(const f of document.querySelectorAll('[data-role=history-section] figure')){f.scrollIntoView();await new Promise(r=>setTimeout(r,40));}return 1})()")
         await asyncio.sleep(1.0)
         await shot("3_session_history")
