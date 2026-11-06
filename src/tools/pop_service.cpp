@@ -510,11 +510,24 @@ bool PopService::search_display(const std::vector<uint8_t>& jpeg, const std::map
     }
     o.require_image = q.count("require_image") && q.at("require_image") == "1";
     if (jpeg.size() < 4 || jpeg[0] != 0xFF || jpeg[1] != 0xD8) { http = 400; err = "body must be a JPEG image"; return false; }
+    // Reference geometry: "as_uploaded" (default, the image is embedded exactly as sent) or "display" (the validated display_letterbox transform).
+    std::string geometry = "as_uploaded";
+    if (q.count("geometry")) {
+        geometry = q.at("geometry");
+        if (geometry != "as_uploaded" && geometry != "display") { http = 400; err = "geometry must be as_uploaded or display"; return false; }
+    }
+    int up_w = 0, up_h = 0; std::vector<uint8_t> transformed;
+    const std::vector<uint8_t>* query_jpeg = &jpeg;
+    if (geometry == "display") {
+        std::string terr;
+        if (!display_letterbox_jpeg(jpeg, transformed, up_w, up_h, terr)) { http = 400; err = "cannot apply the display geometry: " + terr; return false; }
+        query_jpeg = &transformed;
+    }
 
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
     o.cancel = [deadline] { return std::chrono::steady_clock::now() > deadline; };
     EvidenceSearchResult res; std::string why, serr; bool ran = false, ok = false;
-    const bool have = run_ && run_([&](EmbeddingProvider& p) { ran = true; ok = store_->search_evidence(p, jpeg, o, res, serr); out["model"] = {{"name", p.spec().model_name}, {"version", p.spec().model_version},
+    const bool have = run_ && run_([&](EmbeddingProvider& p) { ran = true; ok = store_->search_evidence(p, *query_jpeg, o, res, serr); out["model"] = {{"name", p.spec().model_name}, {"version", p.spec().model_version},
                                                                           {"preprocessing", p.spec().preprocessing}, {"dimension", p.spec().dimension}}; }, why);
     if (!have) { http = why == "NPU busy" ? 429 : 503; err = why.empty() ? "embedding model unavailable" : why; return false; }
     if (!ran || !ok) { http = 400; err = serr.empty() ? "search failed" : serr; return false; }
@@ -545,10 +558,24 @@ bool PopService::search_display(const std::vector<uint8_t>& jpeg, const std::map
                    "identification probabilities. Only stored evidence is searched.";
     out["source"] = {{"id", "brightsign_display"}, {"name", "BrightSign Display (Weston/VOP2)"}, {"capture_method", o.capture_method.empty() ? "any" : o.capture_method},
                      {"provenance", "persisted D5 display-capture evidence"}};
-    out["query"] = {{"type", "upload"}, {"embedded_with", out["model"].value("name", "")}};
+    out["query"] = {{"type", "upload"}, {"embedded_with", out["model"].value("name", "")}, {"geometry", geometry},
+                    {"geometry_note", geometry == "display"
+                        ? "The upload was stretched to 1920x1080, cropped to its top-left 1280x800 and letterboxed into 640x360, the geometry of the stored Weston/VOP2 frames."
+                        : "The image was embedded exactly as uploaded. Best scores need display-path frames (640x360 letterbox) or the display geometry option."}};
+    if (geometry == "display") {
+        static const char* T = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        std::string b64; b64.reserve(transformed.size() * 4 / 3 + 4);
+        for (size_t i = 0; i < transformed.size(); i += 3) {
+            uint32_t n = transformed[i] << 16; if (i + 1 < transformed.size()) n |= transformed[i + 1] << 8; if (i + 2 < transformed.size()) n |= transformed[i + 2];
+            b64 += T[(n >> 18) & 63]; b64 += T[(n >> 12) & 63]; b64 += i + 1 < transformed.size() ? T[(n >> 6) & 63] : '='; b64 += i + 2 < transformed.size() ? T[n & 63] : '=';
+        }
+        out["query"]["uploaded_size"] = std::to_string(up_w) + "x" + std::to_string(up_h);
+        out["query"]["embedded_size"] = "640x360";
+        out["query"]["embedded_jpeg_b64"] = b64;
+    }
     out["options"] = {{"top_k", o.top_k}, {"min_similarity", o.min_similarity}, {"min_similarity_default", o.min_similarity == cfg_.thresholds.match_sim},
                       {"start", o.start_utc_ms}, {"end", o.end_utc_ms}, {"media_id", o.media_id}, {"require_image", o.require_image}};
-    out["status"] = {{"code", "ok"}, {"message", ""}, {"elapsed_ms", res.elapsed_ms}, {"candidates_scanned", res.scanned}, {"skipped_invalid", res.skipped_invalid}};
+    out["status"] = {{"code", "ok"}, {"message", ""}, {"elapsed_ms", res.elapsed_ms}, {"embed_ms", res.embed_ms}, {"scan_ms", res.scan_ms}, {"candidates_scanned", res.scanned}, {"skipped_invalid", res.skipped_invalid}};
     out["results"] = hits;
     out["coverage"] = {{"evidence_rows", res.coverage.rows_total}, {"searchable_rows", res.coverage.rows_searchable}, {"other_model_rows", res.coverage.rows_other_model},
                        {"images_retained", res.coverage.images_retained}, {"sessions", res.coverage.sessions},

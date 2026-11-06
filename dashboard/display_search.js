@@ -13,6 +13,7 @@
     "(Weston/VOP2 output frames captured around registered advertisement plays). It uses the same MobileNetV2 image embedding as Proof of Play. " +
     "Similarity scores are not probabilities. Content that was shown outside a registered advertisement session was not stored and cannot be found here.";
   const METHODS = [["resilience_grpc", "Weston/VOP2 output frames (OS service)"], ["brightscript_screenshot", "BrightScript screenshots"], ["any", "All stored display captures"]];
+  const GEOMS = [["as_uploaded", "As uploaded (for 640×360 frames from the display path)"], ["display", "Apply display geometry (for a full-frame 16:9 picture or video frame)"]];
   const STATUS_CLASS = { playback_corroborated: "ok", visual_match: "ok", mismatch: "bad", incomplete: "warn", capture_unsupported: "warn", playback_reported: "info" };
 
   const E = {};
@@ -63,6 +64,17 @@
     box.append(h("div", { class: "vm-ref" }, h("div", { class: "vm-thumb" }, h("img", { src: SD.ref.blobUrl, alt: "Reference upload" })),
       h("div", null, h("div", { text: "Uploaded reference" }), h("div", { class: "muted", text: `${SD.ref.file.name || "pasted image"} · ${fmtBytes(SD.ref.file.size)}` }),
         h("div", { class: "muted", text: "Embedded in memory by the player; never stored." }))));
+    const hint = E.fs && E.fs.querySelector('[data-role="geom-hint"]');
+    if (hint) {
+      const im = box.querySelector("img");
+      const upd = () => {
+        const w = im.naturalWidth, hh = im.naturalHeight, disp = E.geom.value === "display";
+        hint.textContent = disp ? `Display geometry will be applied: ${w}×${hh} → stretched to 1920×1080, top-left 1280×800, letterboxed to 640×360 (the stored Weston/VOP2 frame layout). Use it for a full-frame picture of the advertisement.`
+          : (w === 640 && hh === 360 ? "The image is 640×360, the display-frame size, and is embedded as uploaded."
+            : `The image is ${w}×${hh}, not the 640×360 letterboxed display-frame layout. Scores may be lower; choose “Apply display geometry” for a full-frame picture.`);
+      };
+      if (im.complete && im.naturalWidth) upd(); else im.addEventListener("load", upd);
+    }
     updateRun();
   }
   function updateRun() {
@@ -118,6 +130,8 @@
     E.tf = U.makeTimeFilter(() => {});
     E.method = h("select", { "aria-label": "Display capture method" }, ...METHODS.map(([v, t]) => h("option", { value: v, text: t })));
     E.method.addEventListener("change", loadCoverage);
+    E.geom = h("select", { "aria-label": "Reference geometry" }, ...GEOMS.map(([v, t]) => h("option", { value: v, text: t })));
+    E.geom.addEventListener("change", renderRef);
     E.media = h("select", { "aria-label": "Advertisement" }, h("option", { value: "", text: "Any advertisement" }));
     E.minOn = h("input", { type: "checkbox" }); E.minOn.addEventListener("change", updateRun);
     E.minSim = h("input", { type: "number", min: "0", max: "1", step: "0.01", value: "0.80", disabled: true, "aria-label": "Minimum similarity" });
@@ -132,6 +146,8 @@
       h("div", { class: "panel" }, h("div", { class: "panel-head" }, h("h2", { text: "2. Options" })),
         h("div", { class: "vm-stack" },
           h("div", { class: "vm-row" }, h("label", null, "Top K (1–50)", E.topK), h("label", null, "Advertisement", E.media), h("label", null, "Capture method", E.method)),
+          h("div", { class: "vm-row" }, h("label", null, "Reference geometry", E.geom)),
+          h("p", { class: "muted", "data-role": "geom-hint" }),
           h("div", { class: "vm-row" }, h("label", { class: "inline" }, E.reqImg, "Require JPEG still available")),
           E.tf.el,
           h("div", { class: "vm-row" }, h("label", { class: "inline" }, E.minOn, "Override minimum similarity (default: the Proof-of-Play match threshold)"), E.minSim),
@@ -144,7 +160,7 @@
     if (!SD.ref || SD.ctrl) return;
     const k = Math.floor(Number(E.topK.value));
     if (!(k >= 1 && k <= 50)) { E.runMsg.textContent = "Top K must be between 1 and 50."; return; }
-    const q = new URLSearchParams({ top_k: k, method: E.method.value });
+    const q = new URLSearchParams({ top_k: k, method: E.method.value, geometry: E.geom.value });
     const t = E.tf.get();
     if (t.start != null) q.set("start", t.start);
     if (t.end != null) q.set("end", t.end);
@@ -201,6 +217,10 @@
   function renderResults(d, ref) {
     const box = clearChildren(E.results), res = d.results || [], st = d.status || {}, cov = d.coverage || {}, m = d.model || {};
     box.append(h("div", { class: "vm-label", text: d.label || "" }));
+    if (d.query && d.query.embedded_jpeg_b64) {
+      ref = Object.assign({}, ref, { blobUrl: "data:image/jpeg;base64," + d.query.embedded_jpeg_b64 });
+      box.append(h("p", { class: "muted", "data-role": "geom-note", text: `Reference shown as embedded (${d.query.uploaded_size} upload → ${d.query.embedded_size} display geometry). ${d.query.geometry_note}` }));
+    } else if (d.query && d.query.geometry_note) box.append(h("p", { class: "muted", "data-role": "geom-note", text: d.query.geometry_note }));
     box.append(h("p", { class: "muted", style: "margin-top:10px", text:
       `${res.length} result${res.length === 1 ? "" : "s"} · ${isNum(st.elapsed_ms) ? st.elapsed_ms.toFixed(1) + " ms" : DASH} · ${fmtInt(st.candidates_scanned)} stored evidence frames scanned · ` +
       `minimum similarity ${isNum(d.options && d.options.min_similarity) ? d.options.min_similarity.toFixed(2) : DASH}${d.options && d.options.min_similarity_default ? " (Proof-of-Play match threshold)" : ""} · ` +

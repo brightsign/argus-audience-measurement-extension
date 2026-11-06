@@ -767,6 +767,45 @@ EvidenceCoverage PopStore::evidence_coverage(const EmbeddingSpec* model, const s
     return c;
 }
 
+// Fractional-box area resample of the source rectangle [sx0,sx1)x[sy0,sy1) onto dw x dh (a box smaller than a pixel is widened to one pixel).
+static void area_resample_rgb(const uint8_t* src, int sw, int sh, double sx0, double sy0, double sx1, double sy1, uint8_t* dst, int dw, int dh, int dstride, int dx0) {
+    const double bw = (sx1 - sx0) / dw, bh = (sy1 - sy0) / dh;
+    for (int y = 0; y < dh; ++y) {
+        double a0 = sy0 + y * bh, a1 = a0 + bh;
+        if (a1 - a0 < 1.0) { const double c = (a0 + a1) / 2; a0 = c - 0.5; a1 = c + 0.5; }
+        a0 = std::max(a0, 0.0); a1 = std::min(a1, static_cast<double>(sh));
+        for (int x = 0; x < dw; ++x) {
+            double b0 = sx0 + x * bw, b1 = b0 + bw;
+            if (b1 - b0 < 1.0) { const double c = (b0 + b1) / 2; b0 = c - 0.5; b1 = c + 0.5; }
+            b0 = std::max(b0, 0.0); b1 = std::min(b1, static_cast<double>(sw));
+            double acc[3] = {0, 0, 0}, wsum = 0;
+            for (int yy = static_cast<int>(a0); yy < sh && yy < a1; ++yy) {
+                const double wy = std::min<double>(yy + 1, a1) - std::max<double>(yy, a0);
+                if (wy <= 0) continue;
+                for (int xx = static_cast<int>(b0); xx < sw && xx < b1; ++xx) {
+                    const double wx = std::min<double>(xx + 1, b1) - std::max<double>(xx, b0);
+                    if (wx <= 0) continue;
+                    const uint8_t* px = src + (static_cast<size_t>(yy) * sw + xx) * 3; const double w = wx * wy;
+                    acc[0] += w * px[0]; acc[1] += w * px[1]; acc[2] += w * px[2]; wsum += w;
+                }
+            }
+            uint8_t* d = dst + static_cast<size_t>(y) * dstride + (static_cast<size_t>(dx0) + x) * 3;
+            for (int c = 0; c < 3; ++c) d[c] = static_cast<uint8_t>(wsum > 0 ? std::lround(acc[c] / wsum) : 0);
+        }
+    }
+}
+
+bool display_letterbox_jpeg(const std::vector<uint8_t>& in, std::vector<uint8_t>& out, int& src_w, int& src_h, std::string& err) {
+    detail::DecodedImage img;
+    if (!detail::decode_jpeg_rgb(in.data(), in.size(), img, err)) return false;
+    src_w = img.width; src_h = img.height;
+    std::vector<uint8_t> canvas(static_cast<size_t>(640) * 360 * 3, 0);                     // black
+    // stretch to 1920x1080 then crop the top-left 1280x800: in source pixels the rectangle is [0, W*1280/1920) x [0, H*800/1080)
+    area_resample_rgb(img.rgb.data(), img.width, img.height, 0, 0, img.width * (1280.0 / 1920.0), img.height * (800.0 / 1080.0),
+                      canvas.data(), 576, 360, 640 * 3, 32);
+    return detail::encode_rgb_jpeg(canvas.data(), 640, 360, 90, out, err);
+}
+
 bool PopStore::search_evidence(EmbeddingProvider& provider, const std::vector<uint8_t>& query_jpeg, const EvidenceSearchOptions& o,
                                EvidenceSearchResult& out, std::string& err) {
     out = EvidenceSearchResult{};
@@ -776,6 +815,8 @@ bool PopStore::search_evidence(EmbeddingProvider& provider, const std::vector<ui
     const auto t0 = std::chrono::steady_clock::now();
     std::vector<float> q; int w = 0, h = 0;
     if (!decode_embed(provider, query_jpeg, q, w, h, err)) return false;          // same decoder + provider + normalisation as the evidence
+    const auto t_embedded = std::chrono::steady_clock::now();
+    out.embed_ms = std::chrono::duration<double, std::milli>(t_embedded - t0).count();
     const EmbeddingSpec spec = provider.spec();
     out.coverage = evidence_coverage(&spec, o.capture_method);
     struct Cand { int64_t id; float sim; int64_t utc; };
@@ -825,6 +866,7 @@ bool PopStore::search_evidence(EmbeddingProvider& provider, const std::vector<ui
     for (const auto& c : top) { EvidenceHit hit; if (get_evidence(c.id, hit.evidence)) { hit.similarity = c.sim; out.hits.push_back(std::move(hit)); } }
     if (best.id != 0) { EvidenceHit hit; if (get_evidence(best.id, hit.evidence)) { hit.similarity = best.sim; out.closest = std::move(hit); out.has_closest = true; } }
     out.elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    out.scan_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t_embedded).count();
     return true;
 }
 

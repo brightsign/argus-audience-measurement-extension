@@ -195,6 +195,17 @@ async def main():
     check("dashboard proxy: cross-origin / no-origin upload is refused (403)", st == 403, (st, r))
     st, r = http("POST", "/api/pop/search/display", refA, "image/jpeg", port=DASH_PORT)
     check("dashboard proxy: same-origin upload reaches the search", st == 200 and len(r["results"]) == 3, (st, r))
+    st, r = http("POST", "/api/pop/search/display?geometry=bogus", refA, "image/jpeg")
+    check("API: an unknown geometry is rejected", st == 400, (st, r))
+    st, r = http("POST", "/api/pop/search/display", refA, "image/jpeg")
+    check("API: default geometry embeds the upload as sent (nothing is transformed)", st == 200 and r["query"]["geometry"] == "as_uploaded" and "embedded_jpeg_b64" not in r["query"], r.get("query"))
+    buf = io.BytesIO(); picture("A", 1920, 1080).save(buf, "JPEG", quality=92); full = buf.getvalue()
+    st, r = http("POST", "/api/pop/search/display?geometry=display&min_similarity=0", full, "image/jpeg")
+    emb = Image.open(io.BytesIO(base64.b64decode(r["query"]["embedded_jpeg_b64"]))).convert("RGB") if st == 200 else None
+    check("API: display geometry turns a 1920x1080 picture into the 640x360 letterbox (black bars) and reports it",
+          st == 200 and r["query"]["geometry"] == "display" and r["query"]["uploaded_size"] == "1920x1080" and r["query"]["embedded_size"] == "640x360" and emb.size == (640, 360)
+          and max(emb.getpixel((10, 180))) < 20 and max(emb.getpixel((630, 180))) < 20 and max(emb.getpixel((320, 180))) > 40, (st, (r.get("query") or {}).get("geometry_note")))
+    check("API: the display-geometry search still scans only the display evidence and returns ranked hits", st == 200 and r["status"]["candidates_scanned"] == 6 and len(r["results"]) >= 1 and r["status"]["embed_ms"] >= 0 and r["status"]["scan_ms"] >= 0, r.get("status"))
     before = http("GET", "/api/pop/status")[1]
     http("POST", "/api/pop/search/display", refA, "image/jpeg")
     after = http("GET", "/api/pop/status")[1]
@@ -255,9 +266,13 @@ async def main():
         check("selecting BrightSign Display shows its own note and hides the camera search", await wait_for("(()=>{const v=document.getElementById('view-search').innerText;return /Weston\\/VOP2 output frames/.test(v)&&/stored as evidence/.test(v)})()", 10))
         check("the display page states the coverage: 6 frames from 2 sessions with the capture range", await wait_for("/Searchable stored evidence: 6 frames from 2 playback sessions, captured between/.test(document.getElementById('view-search').innerText)", 10), await ev("document.getElementById('view-search').innerText.slice(0,900)"))
         check("the advertisement list is filled from the registry", await wait_for("[...document.querySelectorAll('#view-search select[aria-label=Advertisement] option')].map(o=>o.value).join()==',ad-a,ad-b'", 10))
+        check("the page offers the reference-geometry choice and explains a non-display-sized upload",
+              await ev("!!document.querySelector('#view-search select[aria-label=\"Reference geometry\"]')") is True)
         check("Search is disabled until a reference is chosen", await ev("[...document.querySelectorAll('#view-search button')].find(b=>b.textContent==='Search display evidence').disabled") is True)
         await upload(refA)
         check("the uploaded reference is previewed and Search becomes enabled", await wait_for("(()=>{const b=[...document.querySelectorAll('#view-search button')].find(b=>b.textContent==='Search display evidence');return !b.disabled && /Uploaded reference/.test(document.getElementById('view-search').innerText)})()", 10))
+        check("the geometry hint reports the size of the upload (640×360 here: embedded as uploaded)",
+              await wait_for("/640×360, the display-frame size, and is embedded as uploaded/.test(document.getElementById('view-search').innerText)", 10), await ev("document.getElementById('view-search').innerText.slice(0,600)"))
         await ev("[...document.querySelectorAll('#view-search button')].find(b=>b.textContent==='Search display evidence').click(), true")
         check("results: three match cards, each with the reference beside the stored frame", await wait_for("document.querySelectorAll('#view-search .ds-hit').length===3", 15))
         check("both images of every card decode (reference and stored 640x360 frame)", await wait_for("[...document.querySelectorAll('#view-search .ds-hit')].every(c=>{const im=[...c.querySelectorAll('img')];return im.length===2&&im.every(i=>i.complete&&i.naturalWidth>0)})", 15))

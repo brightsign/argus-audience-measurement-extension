@@ -247,6 +247,8 @@ struct EvidenceSearchResult {
     EvidenceHit closest;
     uint64_t scanned = 0, skipped_invalid = 0;
     double   elapsed_ms = 0;
+    double   embed_ms = 0;          // decode + preprocess + NPU embedding of the query
+    double   scan_ms = 0;           // SQLite read + exact dot-product scan
     bool     cancelled = false;
     EvidenceCoverage coverage;
 };
@@ -319,6 +321,11 @@ private:
 // 64-bit DCT perceptual hash of a JPEG (0 + false on decode failure) and the Hamming distance of two hashes.
 bool phash_of_jpeg(const std::vector<uint8_t>& jpeg, uint64_t& out, std::string& err);
 int  phash_distance(uint64_t a, uint64_t b);
+
+// The validated display geometry (scripts/pop/make_reference_frames.sh, profile display_letterbox) applied to an arbitrary JPEG so that it is
+// comparable with OS-rendered (Weston/VOP2) frames: stretch to 1920x1080, take the native top-left 1280x800 rectangle, scale it to 576x360 and
+// centre it on a black 640x360 canvas. Output is a 640x360 JPEG. Area-averaging resampler (not Lanczos): close to, not bit-identical with, ffmpeg.
+bool display_letterbox_jpeg(const std::vector<uint8_t>& in, std::vector<uint8_t>& out, int& src_w, int& src_h, std::string& err);
 
 } // namespace visualmemory
 

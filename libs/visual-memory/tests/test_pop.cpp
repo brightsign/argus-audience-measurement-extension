@@ -511,3 +511,37 @@ TEST(PopSearch, CancellationStopsTheScan) {
     ASSERT_TRUE(f.store.search_evidence(f.prov, make_jpeg(0, 0), o, r, e)) << e;
     EXPECT_TRUE(r.cancelled); EXPECT_EQ(r.scanned, 0u);
 }
+
+// ---- display geometry transform for uploaded references -------------------------------------------------------------------------------------
+TEST(PopSearch, DisplayGeometryMatchesTheValidatedLetterboxTransform) {
+    // 1920x1080 test picture: left of x=960 red else green; above y=540 blue-ish dominant channel else yellow-ish, so each quadrant is identifiable.
+    const int W = 1920, H = 1080;
+    std::vector<uint8_t> rgb(static_cast<size_t>(W) * H * 3);
+    for (int y = 0; y < H; ++y) for (int x = 0; x < W; ++x) {
+        uint8_t* p = &rgb[(static_cast<size_t>(y) * W + x) * 3];
+        const bool left = x < 960, top = y < 540;
+        p[0] = left ? 220 : 20; p[1] = left ? 20 : 220; p[2] = top ? 200 : 30;
+    }
+    std::vector<uint8_t> in, out; std::string e; ASSERT_TRUE(detail::encode_rgb_jpeg(rgb.data(), W, H, 95, in, e)) << e;
+    int sw = 0, sh = 0; ASSERT_TRUE(display_letterbox_jpeg(in, out, sw, sh, e)) << e;
+    EXPECT_EQ(sw, W); EXPECT_EQ(sh, H);
+    detail::DecodedImage d; ASSERT_TRUE(detail::decode_jpeg_rgb(out.data(), out.size(), d, e)) << e;
+    ASSERT_EQ(d.width, 640); ASSERT_EQ(d.height, 360);
+    auto at = [&](int x, int y, int c) { return static_cast<int>(d.rgb[(static_cast<size_t>(y) * 640 + x) * 3 + c]); };
+    for (int y : {5, 180, 355}) { EXPECT_LT(at(8, y, 0), 12); EXPECT_LT(at(630, y, 1), 12); }       // black side bars (x<32 and x>=608)
+    // The crop keeps the left 1280 of 1920 px: red/green boundary at 960/1280 of the 576 px picture = x 32+432 = 464; the top 800 of 1080 rows:
+    // the blue/low boundary at 540/800 of 360 rows = y 243.
+    EXPECT_GT(at(200, 100, 0), 150); EXPECT_LT(at(200, 100, 1), 80); EXPECT_GT(at(200, 100, 2), 140);  // red, blue-ish
+    EXPECT_GT(at(560, 100, 1), 150); EXPECT_LT(at(560, 100, 0), 80);                                  // green (right of x=464)
+    EXPECT_LT(at(200, 300, 2), 90);                                                                   // below y=243: low blue
+    EXPECT_GT(at(440, 100, 0), 150); EXPECT_GT(at(490, 100, 1), 150);                                 // boundary within a few px of 464
+}
+
+TEST(PopSearch, DisplayGeometryRejectsNonJpegAndHandlesTinyImages) {
+    std::vector<uint8_t> out; int w, h; std::string e;
+    EXPECT_FALSE(display_letterbox_jpeg({1, 2, 3, 4}, out, w, h, e));
+    std::vector<uint8_t> px(4 * 3 * 3, 128), tiny; ASSERT_TRUE(detail::encode_rgb_jpeg(px.data(), 4, 3, 90, tiny, e)) << e;
+    ASSERT_TRUE(display_letterbox_jpeg(tiny, out, w, h, e)) << e;
+    detail::DecodedImage d; ASSERT_TRUE(detail::decode_jpeg_rgb(out.data(), out.size(), d, e)) << e;
+    EXPECT_EQ(d.width, 640); EXPECT_EQ(d.height, 360);
+}
