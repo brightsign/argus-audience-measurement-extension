@@ -47,3 +47,12 @@ API (via the dashboard proxy; same-origin POST only):
 
 ## 8. Phase 2 (not implemented): evaluation notes
 See the report in the conversation: reuse of the 5 FPS feed, bounded queue, quota and retention are all feasible, but at 1 FPS a 30 s slot adds 30 frames (about 12 KB JPEG, 5 KB vector, one NPU embedding each) versus 3 today. Decide after Phase 1 is accepted on hardware.
+
+## 9. Hardware validation on the development XT5 (2026-11-06)
+Installed package `argus-ext-1793966121.zip` (SHA-256 `2479055a9f235e3e42e010cecb4d02df2882022281d33f38caed3b02552383dd`, squashfs `45940e70c5991738309cfe3afb3269e58c76c095275095b6f5c370f410ffa780`) from commits `5e067f4` + `5e1f751`; one reboot. Relative to the previously installed `argus-ext-1793953264.zip` only `vm_api_server`, `dashboard-server` and five dashboard files differ; all other binaries, libraries, models and configs are byte-identical.
+* Config, autorun, gate file, schema-1 `visual-memory/pop.db` and the schema-2 `pop-grpc-demo/pop.db` were byte-identical to their pre-install backups after the reboot.
+* Reference geometry: option `geometry=display` applies the validated display_letterbox transform (area-average resampler; MSE 3 to 20 against ffmpeg/Lanczos on real ad frames). The default `as_uploaded` is unchanged and the camera search is untouched.
+* Real RKNN scores: Ad A references 0.97 to 0.996 (Ad A evidence only), Ad B references 0.99 (Ad B evidence only), unrelated pictures 0.61 to 0.63 (no match). Ad A frames from moments that were never captured (12 s, 40 s) give "No matching stored evidence" (closest 0.76).
+* Latency: query embedding 20 ms median (decode + RKNN), exact scan of 53 to 60 rows 1.5 ms; end to end 25 to 50 ms as uploaded, 95 to 135 ms with the display transform of a 1080p JPEG (CPU, before the NPU is taken).
+* Argus FPS 29.0 baseline vs 29.1 under one search per second vs 29.05 during a Proof-of-Play session with a search every 0.7 s; PoP verdicts unchanged.
+* Not installed (needs a second reboot, not approved): the one-line wording added to the page note after validation (a match is an observation, not independent proof).

@@ -11,7 +11,7 @@
   const MAX_UPLOAD = 8 * 1024 * 1024;
   const NOTE = "BrightSign Display search looks only at frames that Proof of Play stored as evidence of what the player's screen showed " +
     "(Weston/VOP2 output frames captured around registered advertisement plays). It uses the same MobileNetV2 image embedding as Proof of Play. " +
-    "Similarity scores are not probabilities. Content that was shown outside a registered advertisement session was not stored and cannot be found here.";
+    "Similarity scores are not probabilities, and a match is an observation that captured display content resembled the reference, not independent proof that the complete advertisement played. Content that was shown outside a registered advertisement session was not stored and cannot be found here.";
   const METHODS = [["resilience_grpc", "Weston/VOP2 output frames (OS service)"], ["brightscript_screenshot", "BrightScript screenshots"], ["any", "All stored display captures"]];
   const GEOMS = [["as_uploaded", "As uploaded (for 640×360 frames from the display path)"], ["display", "Apply display geometry (for a full-frame 16:9 picture or video frame)"]];
   const STATUS_CLASS = { playback_corroborated: "ok", visual_match: "ok", mismatch: "bad", incomplete: "warn", capture_unsupported: "warn", playback_reported: "info" };
