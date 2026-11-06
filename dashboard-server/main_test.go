@@ -99,6 +99,30 @@ func TestObjectEndpointsPostPolicy(t *testing.T) {
 	}
 }
 
+func TestDisplaySearchRoute(t *testing.T) {
+	h, _ := handler(t, "")
+	p := "/api/pop/search/display?top_k=5"
+	if w := do(h, "POST", p, []byte("x"), nil); w.Code != 403 {
+		t.Errorf("no origin: %d", w.Code)
+	}
+	if w := do(h, "POST", p, []byte("x"), map[string]string{"Origin": "http://evil.example"}); w.Code != 403 {
+		t.Errorf("evil origin: %d", w.Code)
+	}
+	if w := do(h, "POST", p, []byte("x"), okOrigin); w.Code != 200 {
+		t.Errorf("same-origin upload: %d", w.Code)
+	}
+	if w := do(h, "POST", "/api/pop/search/other", []byte("x"), okOrigin); w.Code != 405 {
+		t.Errorf("other search route must stay closed: %d", w.Code)
+	}
+	if w := do(h, "PUT", "/api/pop/search/display", []byte("x"), okOrigin); w.Code != 405 {
+		t.Errorf("PUT: %d", w.Code)
+	}
+	big := make([]byte, 9<<20)
+	if w := do(h, "POST", "/api/pop/search/display", big, okOrigin); w.Code != 413 {
+		t.Errorf("oversize reference: %d", w.Code)
+	}
+}
+
 func TestOriginCheck(t *testing.T) {
 	h, _ := handler(t, "")
 	p := "/api/vm/search/image"

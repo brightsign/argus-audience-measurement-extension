@@ -1130,6 +1130,24 @@ Response route_pop(App& a, const Request& rq) {
         return jerr(404, "not_found", "unknown route");
     }
 
+    if (seg[0] == "search" && seg.size() == 2 && seg[1] == "display") {                // Visual Search, source "BrightSign Display"
+        if (get) {                                                                       // historical coverage of the searchable evidence
+            const std::string m = rq.query.count("method") ? rq.query.at("method") : std::string("resilience_grpc");
+            if (m != "any" && m != "resilience_grpc" && m != "brightscript_screenshot") return jerr(400, "invalid_argument", "bad method");
+            const EvidenceCoverage c = st.evidence_coverage(nullptr, m == "any" ? std::string() : m);
+            return jok({{"capture_method", m}, {"evidence_rows", c.rows_total}, {"searchable_rows", c.rows_searchable}, {"images_retained", c.images_retained},
+                        {"sessions", c.sessions}, {"oldest_utc_ms", c.oldest_utc_ms ? json(c.oldest_utc_ms) : json(nullptr)},
+                        {"newest_utc_ms", c.newest_utc_ms ? json(c.newest_utc_ms) : json(nullptr)}, {"schema_v2", st.schema_v2()},
+                        {"min_similarity_default", ps.cfg().thresholds.match_sim}});
+        }
+        if (!post) return jerr(405, "method_not_allowed", "GET or POST only");
+        json out; int http = 400; std::string err;
+        std::map<std::string, std::string> q(rq.query.begin(), rq.query.end());
+        std::vector<uint8_t> jpeg(rq.body.begin(), rq.body.end());
+        if (!ps.search_display(jpeg, q, out, http, err))
+            return jerr(http, http == 429 ? "busy" : http == 503 ? "provider_unavailable" : http == 504 ? "timeout" : "invalid_argument", err);
+        return jok(out);
+    }
     if (seg[0] == "sessions") {
         if (seg.size() == 1) {
             if (post) {

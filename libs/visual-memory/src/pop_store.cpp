@@ -14,6 +14,7 @@
 #include <cstring>
 #include <ctime>
 #include <fcntl.h>
+#include <cmath>
 #include <filesystem>
 #include <mutex>
 #include <set>
@@ -721,6 +722,110 @@ std::string PopStore::get_verification_json(const std::string& session_id) {
     if (!q) return {};
     q.text(1, session_id);
     return sqlite3_step(q.s) == SQLITE_ROW ? col_text(q.s, 0) : std::string{};
+}
+
+
+// ---- display-evidence search --------------------------------------------------------------------------------------
+bool PopStore::get_evidence(int64_t evidence_id, Evidence& out) {
+    std::lock_guard<std::mutex> lk(impl_->mu);
+    if (!impl_->db) return false;
+    Stmt q(impl_->db, std::string("SELECT ") + (impl_->v2 ? kEvidenceCols : kEvidenceColsV1) + " FROM display_capture_evidence WHERE evidence_id=?;");
+    if (!q) return false;
+    sqlite3_bind_int64(q.s, 1, evidence_id);
+    if (sqlite3_step(q.s) != SQLITE_ROW) return false;
+    out = row_evidence(q.s);
+    return true;
+}
+
+EvidenceCoverage PopStore::evidence_coverage(const EmbeddingSpec* model, const std::string& capture_method) {
+    EvidenceCoverage c;
+    std::lock_guard<std::mutex> lk(impl_->mu);
+    if (!impl_->db) return c;
+    c.rows_total = impl_->count("SELECT COUNT(*) FROM display_capture_evidence;");
+    const int64_t mid = model ? impl_->model_id(*model, false) : 0;
+    // capture_method is a schema-2 column; a schema-1 file only holds screenshots, so a resilience_grpc filter matches nothing there.
+    const bool method_filter = !capture_method.empty();
+    if (method_filter && !impl_->v2 && capture_method != "brightscript_screenshot") return c;
+    const std::string where = std::string("status='ok' AND embedded=1") + (method_filter && impl_->v2 ? " AND capture_method=?" : "");
+    {
+        Stmt q(impl_->db, "SELECT COUNT(*) FROM display_capture_evidence WHERE " + where + (model ? " AND model_id<>?" : "") + ";");
+        if (q) {
+            int i = 1; if (method_filter && impl_->v2) q.text(i++, capture_method);
+            if (model) sqlite3_bind_int64(q.s, i, mid);
+            if (sqlite3_step(q.s) == SQLITE_ROW) c.rows_other_model = model ? static_cast<uint64_t>(sqlite3_column_int64(q.s, 0)) : 0;
+        }
+    }
+    Stmt q(impl_->db, "SELECT COUNT(*),COALESCE(SUM(image_available),0),COALESCE(MIN(utc_ms),0),COALESCE(MAX(utc_ms),0),COUNT(DISTINCT session_id) "
+                      "FROM display_capture_evidence WHERE " + where + (model ? " AND model_id=?" : "") + ";");
+    if (!q) return c;
+    int i = 1; if (method_filter && impl_->v2) q.text(i++, capture_method);
+    if (model) sqlite3_bind_int64(q.s, i, mid);
+    if (sqlite3_step(q.s) == SQLITE_ROW) {
+        c.rows_searchable = static_cast<uint64_t>(sqlite3_column_int64(q.s, 0)); c.images_retained = static_cast<uint64_t>(sqlite3_column_int64(q.s, 1));
+        c.oldest_utc_ms = sqlite3_column_int64(q.s, 2); c.newest_utc_ms = sqlite3_column_int64(q.s, 3); c.sessions = static_cast<uint64_t>(sqlite3_column_int64(q.s, 4));
+    }
+    return c;
+}
+
+bool PopStore::search_evidence(EmbeddingProvider& provider, const std::vector<uint8_t>& query_jpeg, const EvidenceSearchOptions& o,
+                               EvidenceSearchResult& out, std::string& err) {
+    out = EvidenceSearchResult{};
+    if (o.top_k < 1 || o.top_k > 50) { err = "top_k must be 1..50"; return false; }
+    if (o.has_min_similarity && !(o.min_similarity >= -1.f && o.min_similarity <= 1.f)) { err = "min_similarity must be in [-1,1]"; return false; }
+    if (query_jpeg.empty() || query_jpeg.size() > kMaxJpegBytes) { err = "reference image missing or larger than 8 MiB"; return false; }
+    const auto t0 = std::chrono::steady_clock::now();
+    std::vector<float> q; int w = 0, h = 0;
+    if (!decode_embed(provider, query_jpeg, q, w, h, err)) return false;          // same decoder + provider + normalisation as the evidence
+    const EmbeddingSpec spec = provider.spec();
+    out.coverage = evidence_coverage(&spec, o.capture_method);
+    struct Cand { int64_t id; float sim; int64_t utc; };
+    std::vector<Cand> top;                                                         // hits at or above the minimum, bounded to top_k
+    Cand best{0, -2.f, 0};
+    {
+        std::lock_guard<std::mutex> lk(impl_->mu);
+        if (!impl_->db) { err = "store not open"; return false; }
+        const int64_t mid = impl_->model_id(spec, false);
+        const bool method_filter = !o.capture_method.empty();
+        if (mid != 0 && !(method_filter && !impl_->v2 && o.capture_method != "brightscript_screenshot")) {
+            std::string sql = "SELECT e.evidence_id,e.embedding,e.utc_ms FROM display_capture_evidence e";
+            if (!o.media_id.empty()) sql += " JOIN playback_sessions s ON s.session_id=e.session_id";
+            sql += " WHERE e.status='ok' AND e.embedded=1 AND e.model_id=?";
+            if (method_filter && impl_->v2) sql += " AND e.capture_method=?";
+            if (o.start_utc_ms > 0) sql += " AND e.utc_ms>=?";
+            if (o.end_utc_ms > 0) sql += " AND e.utc_ms<?";
+            if (o.require_image) sql += " AND e.image_available=1";
+            if (!o.media_id.empty()) sql += " AND (s.expected_media_id=? OR s.played_media_id=?)";
+            Stmt st(impl_->db, sql + ";");
+            if (!st) { err = sqlite3_errmsg(impl_->db); return false; }
+            int i = 1;
+            sqlite3_bind_int64(st.s, i++, mid);
+            if (method_filter && impl_->v2) st.text(i++, o.capture_method);
+            if (o.start_utc_ms > 0) sqlite3_bind_int64(st.s, i++, o.start_utc_ms);
+            if (o.end_utc_ms > 0) sqlite3_bind_int64(st.s, i++, o.end_utc_ms);
+            if (!o.media_id.empty()) { st.text(i++, o.media_id); st.text(i++, o.media_id); }
+            const size_t dim = q.size();
+            auto worse = [](const Cand& a, const Cand& b) { return a.sim > b.sim || (a.sim == b.sim && a.utc > b.utc); };   // "a ranks before b"
+            while (sqlite3_step(st.s) == SQLITE_ROW) {
+                if ((out.scanned & 255) == 0 && o.cancel && o.cancel()) { out.cancelled = true; break; }
+                ++out.scanned;
+                if (static_cast<size_t>(sqlite3_column_bytes(st.s, 1)) != dim * sizeof(float)) { ++out.skipped_invalid; continue; }
+                const float* v = static_cast<const float*>(sqlite3_column_blob(st.s, 1));
+                double dot = 0; for (size_t k = 0; k < dim; ++k) dot += static_cast<double>(v[k]) * q[k];
+                if (!std::isfinite(dot)) { ++out.skipped_invalid; continue; }
+                const Cand c{sqlite3_column_int64(st.s, 0), static_cast<float>(std::max(-1.0, std::min(1.0, dot))), sqlite3_column_int64(st.s, 2)};
+                if (best.id == 0 || worse(c, best)) best = c;
+                if (o.has_min_similarity && c.sim < o.min_similarity) continue;
+                top.push_back(c);
+                if (top.size() > static_cast<size_t>(o.top_k) * 4 + 64) { std::partial_sort(top.begin(), top.begin() + o.top_k, top.end(), worse); top.resize(o.top_k); }
+            }
+            std::sort(top.begin(), top.end(), worse);
+            if (top.size() > static_cast<size_t>(o.top_k)) top.resize(o.top_k);
+        }
+    }
+    for (const auto& c : top) { EvidenceHit hit; if (get_evidence(c.id, hit.evidence)) { hit.similarity = c.sim; out.hits.push_back(std::move(hit)); } }
+    if (best.id != 0) { EvidenceHit hit; if (get_evidence(best.id, hit.evidence)) { hit.similarity = best.sim; out.closest = std::move(hit); out.has_closest = true; } }
+    out.elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    return true;
 }
 
 // ---- retention --------------------------------------------------------------------------------------------------

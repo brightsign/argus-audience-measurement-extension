@@ -7,10 +7,12 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <random>
 #include <sstream>
 
@@ -483,6 +485,83 @@ bool PopService::verify(const std::string& sid, json& out, int& http, std::strin
     Verification v;
     if (!store_->verify_session(sid, cfg_.thresholds, v, err)) { http = err == "unknown session" ? 404 : 500; return false; }
     out = json::parse(store_->get_verification_json(sid), nullptr, false);
+    http = 200;
+    return true;
+}
+
+bool PopService::search_display(const std::vector<uint8_t>& jpeg, const std::map<std::string, std::string>& q, json& out, int& http, std::string& err) {
+    EvidenceSearchOptions o; o.min_similarity = cfg_.thresholds.match_sim;
+    auto num = [&](const char* k, double& v) -> int {                 // 0 absent, 1 ok, -1 invalid
+        auto it = q.find(k); if (it == q.end() || it->second.empty()) return 0;
+        char* e = nullptr; v = std::strtod(it->second.c_str(), &e); return (*e || !std::isfinite(v)) ? -1 : 1;
+    };
+    double v = 0;
+    if (const int r = num("top_k", v)) { if (r < 0 || v < 1 || v > 50 || v != std::floor(v)) { http = 400; err = "top_k must be 1..50"; return false; } o.top_k = static_cast<int>(v); } else o.top_k = 10;
+    if (const int r = num("min_similarity", v)) { if (r < 0 || v < -1 || v > 1) { http = 400; err = "min_similarity must be in [-1,1]"; return false; } o.min_similarity = static_cast<float>(v); }
+    if (const int r = num("start", v)) { if (r < 0 || v < 0) { http = 400; err = "bad start"; return false; } o.start_utc_ms = static_cast<int64_t>(v); }
+    if (const int r = num("end", v)) { if (r < 0 || v < 0) { http = 400; err = "bad end"; return false; } o.end_utc_ms = static_cast<int64_t>(v); }
+    if (o.start_utc_ms && o.end_utc_ms && o.end_utc_ms <= o.start_utc_ms) { http = 400; err = "end must be after start"; return false; }
+    if (q.count("media_id")) o.media_id = q.at("media_id");
+    if (!o.media_id.empty() && o.media_id.size() > 64) { http = 400; err = "bad media_id"; return false; }
+    if (q.count("method")) {                                           // resilience_grpc (Weston/VOP2, default) | brightscript_screenshot | any
+        const std::string& m = q.at("method");
+        if (m == "any") o.capture_method.clear(); else if (m == "resilience_grpc" || m == "brightscript_screenshot") o.capture_method = m;
+        else { http = 400; err = "method must be resilience_grpc, brightscript_screenshot or any"; return false; }
+    }
+    o.require_image = q.count("require_image") && q.at("require_image") == "1";
+    if (jpeg.size() < 4 || jpeg[0] != 0xFF || jpeg[1] != 0xD8) { http = 400; err = "body must be a JPEG image"; return false; }
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    o.cancel = [deadline] { return std::chrono::steady_clock::now() > deadline; };
+    EvidenceSearchResult res; std::string why, serr; bool ran = false, ok = false;
+    const bool have = run_ && run_([&](EmbeddingProvider& p) { ran = true; ok = store_->search_evidence(p, jpeg, o, res, serr); out["model"] = {{"name", p.spec().model_name}, {"version", p.spec().model_version},
+                                                                          {"preprocessing", p.spec().preprocessing}, {"dimension", p.spec().dimension}}; }, why);
+    if (!have) { http = why == "NPU busy" ? 429 : 503; err = why.empty() ? "embedding model unavailable" : why; return false; }
+    if (!ran || !ok) { http = 400; err = serr.empty() ? "search failed" : serr; return false; }
+    if (res.cancelled) { http = 504; err = "the search timed out"; return false; }
+
+    auto hit_json = [&](const EvidenceHit& h, int rank) {
+        const Evidence& e = h.evidence; PopSession s; Verification ver; MediaAsset ma;
+        const bool hs = store_->get_session(e.session_id, s);
+        const bool hv = store_->get_verification(e.session_id, ver);
+        json j = evidence_json(e);
+        j.erase("sha256"); j.erase("phash"); j.erase("bytes"); j.erase("took_ms");
+        j["rank"] = rank; j["similarity"] = h.similarity; j["session_id"] = e.session_id; j["capture_utc_ms"] = e.utc_ms;
+        j["offset_in_play_ms"] = e.actual_offset_ms;
+        j["session_link"] = "#pop?session=" + e.session_id;
+        if (hs) {
+            j["expected_media_id"] = s.expected_media_id; j["played_media_id"] = s.played_media_id;
+            j["advertisement_id"] = !s.played_media_id.empty() ? s.played_media_id : s.expected_media_id;
+            j["session_start_utc_ms"] = s.start_utc_ms; j["session_end_utc_ms"] = s.end_utc_ms;
+            if (store_->get_media(j["advertisement_id"].get<std::string>(), ma)) j["advertisement_name"] = ma.display_name;
+        }
+        j["session_status"] = hv ? to_string(ver.status) : "scheduled";
+        j["session_status_label"] = hv ? pop_status_label(ver.status) : "Scheduled";
+        return j;
+    };
+    json hits = json::array(); int rank = 0;
+    for (const auto& h : res.hits) hits.push_back(hit_json(h, ++rank));
+    out["label"] = "Display-evidence similarity (MobileNetV2 embedding of frames stored as Proof-of-Play evidence). Scores are cosine similarities, not "
+                   "identification probabilities. Only stored evidence is searched.";
+    out["source"] = {{"id", "brightsign_display"}, {"name", "BrightSign Display (Weston/VOP2)"}, {"capture_method", o.capture_method.empty() ? "any" : o.capture_method},
+                     {"provenance", "persisted D5 display-capture evidence"}};
+    out["query"] = {{"type", "upload"}, {"embedded_with", out["model"].value("name", "")}};
+    out["options"] = {{"top_k", o.top_k}, {"min_similarity", o.min_similarity}, {"min_similarity_default", o.min_similarity == cfg_.thresholds.match_sim},
+                      {"start", o.start_utc_ms}, {"end", o.end_utc_ms}, {"media_id", o.media_id}, {"require_image", o.require_image}};
+    out["status"] = {{"code", "ok"}, {"message", ""}, {"elapsed_ms", res.elapsed_ms}, {"candidates_scanned", res.scanned}, {"skipped_invalid", res.skipped_invalid}};
+    out["results"] = hits;
+    out["coverage"] = {{"evidence_rows", res.coverage.rows_total}, {"searchable_rows", res.coverage.rows_searchable}, {"other_model_rows", res.coverage.rows_other_model},
+                       {"images_retained", res.coverage.images_retained}, {"sessions", res.coverage.sessions},
+                       {"oldest_utc_ms", res.coverage.oldest_utc_ms ? json(res.coverage.oldest_utc_ms) : json(nullptr)},
+                       {"newest_utc_ms", res.coverage.newest_utc_ms ? json(res.coverage.newest_utc_ms) : json(nullptr)}};
+    if (hits.empty()) {
+        out["no_match"] = true;
+        out["message"] = "No matching stored evidence";
+        out["message_detail"] = "No stored display evidence reached the minimum similarity. This does not show that the content was never played: it only means "
+                                "that none of the " + std::to_string(res.coverage.rows_searchable) + " stored evidence frames matches. Playback outside a registered "
+                                "advertisement session is not stored.";
+        if (res.has_closest) out["closest_below_minimum"] = hit_json(res.closest, 0);
+    }
     http = 200;
     return true;
 }

@@ -23,6 +23,7 @@
 #include "visualmemory/types.h"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 #include <vector>
@@ -215,6 +216,41 @@ struct SessionFilter {
     int64_t start_utc_ms = 0, end_utc_ms = 0;
 };
 
+// ---- display-evidence search (BrightSign Display source of Visual Search) ----------------------------------------
+// Exact cosine search over the persisted, embedded display-capture evidence. Only rows that exist in display_capture_evidence
+// (status ok, embedded, same model as the query) are candidates; nothing is generated, estimated or read from the camera store.
+struct EvidenceSearchOptions {
+    int     top_k = 10;                                     // 1..50
+    bool    has_min_similarity = true;
+    float   min_similarity = 0.80f;                          // hits below it are not "matches" (the closest one is still reported)
+    int64_t start_utc_ms = 0, end_utc_ms = 0;               // capture-time window, 0 = open
+    std::string capture_method = "resilience_grpc";         // "" = any capture method
+    std::string media_id;                                    // "" = any advertisement (matches the session's expected or played media)
+    bool    require_image = false;                           // only evidence whose JPEG is still retained
+    std::function<bool()> cancel;                            // polled during the scan
+};
+struct EvidenceHit {
+    Evidence evidence;
+    float    similarity = 0;
+};
+struct EvidenceCoverage {
+    uint64_t rows_total = 0;                                 // every evidence row (any status)
+    uint64_t rows_searchable = 0;                            // ok + embedded + the query's model + the filters
+    uint64_t rows_other_model = 0;                           // ok + embedded but produced by a different model (not comparable)
+    uint64_t images_retained = 0;                            // searchable rows whose JPEG is still on disk
+    uint64_t sessions = 0;                                   // distinct sessions among the searchable rows
+    int64_t  oldest_utc_ms = 0, newest_utc_ms = 0;           // capture-time range of the searchable rows
+};
+struct EvidenceSearchResult {
+    std::vector<EvidenceHit> hits;                           // similarity >= min (or all, when no minimum), best first, at most top_k
+    bool     has_closest = false;                            // the best candidate overall, reported even when below the minimum
+    EvidenceHit closest;
+    uint64_t scanned = 0, skipped_invalid = 0;
+    double   elapsed_ms = 0;
+    bool     cancelled = false;
+    EvidenceCoverage coverage;
+};
+
 class PopStore {
 public:
     explicit PopStore(PopConfig cfg);
@@ -255,6 +291,13 @@ public:
     std::vector<Evidence> list_evidence(const std::string& session_id);
     bool evidence_jpeg(int64_t evidence_id, std::vector<uint8_t>& out);
     static std::string partition_path(const std::string& source, int64_t utc_ms, const std::string& file_name);
+    bool get_evidence(int64_t evidence_id, Evidence& out);
+
+    // Display-evidence search. The query JPEG is decoded and embedded exactly like evidence and references are (same decoder, same provider
+    // preprocessing, L2 normalisation). The scan is EXACT over the evidence BLOB column; pop.db has no ANN/vec0 table (see docs).
+    bool search_evidence(EmbeddingProvider& provider, const std::vector<uint8_t>& query_jpeg, const EvidenceSearchOptions& o,
+                         EvidenceSearchResult& out, std::string& err);
+    EvidenceCoverage evidence_coverage(const EmbeddingSpec* model, const std::string& capture_method);   // model == nullptr: any model
 
     // verification: loads the session, its events/evidence and every media's references, runs verify_playback,
     // stores the result (replacing the previous one of the session).

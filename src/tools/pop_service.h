@@ -18,6 +18,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace argus_display { class DisplayFrameSource; struct DisplayFrame; }
 
@@ -73,6 +74,9 @@ public:
     // Optional OS rendered-frame source (capture_backend "resilience_grpc"). Not owned.
     void set_display(argus_display::DisplayFrameSource* d) { display_ = d; }
     bool verify(const std::string& session_id, nlohmann::json& out, int& http, std::string& err);
+    // Visual Search source "BrightSign Display": searches only the persisted display-capture evidence with a reference JPEG embedded by the
+    // same provider as D5. `q` carries top_k, min_similarity (default: thresholds.match_sim), start, end, media_id, method, require_image.
+    bool search_display(const std::vector<uint8_t>& jpeg, const std::map<std::string, std::string>& q, nlohmann::json& out, int& http, std::string& err);
 
     nlohmann::json session_detail(const std::string& id, bool* found);
     nlohmann::json session_json(const visualmemory::PopSession& s);

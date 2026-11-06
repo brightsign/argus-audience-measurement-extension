@@ -702,11 +702,27 @@
     E.objSlot = h("div", { hidden: true });
     E.modeFull = h("button", { class: "vm-btn on", type: "button", text: "Full frame search", onclick: () => setSearchMode("frame") });
     E.modeObj = h("button", { class: "vm-btn", type: "button", text: "Object search", onclick: () => setSearchMode("objects") });
-    root.append(h("div", { class: "vm-stack" }, h("div", { class: "vm-row", role: "group", "aria-label": "Search mode" }, E.modeFull, E.modeObj), E.full, E.objSlot));
+    // Source selector: the audience camera (everything above, unchanged) or the BrightSign display (persisted Proof-of-Play display evidence).
+    E.srcCam = h("button", { class: "vm-btn on", type: "button", text: "Audience Camera", onclick: () => setSearchSource("camera") });
+    E.srcDisp = h("button", { class: "vm-btn", type: "button", text: "BrightSign Display (Weston/VOP2)", onclick: () => setSearchSource("display") });
+    E.camWrap = h("div", { class: "vm-stack" }, h("div", { class: "vm-row", role: "group", "aria-label": "Search mode" }, E.modeFull, E.modeObj), E.full, E.objSlot);
+    E.dispSlot = h("div", { hidden: true });
+    root.append(h("div", { class: "vm-stack" }, h("div", { class: "vm-row", role: "group", "aria-label": "Search source" }, h("b", { text: "Source" }), E.srcCam, E.srcDisp), E.camWrap, E.dispSlot));
     renderRef();
     onStatus(() => { updateRunBtn(); });
     tz.subs.push(() => refreshTs(root));
     document.addEventListener("vm-authed", updateRunBtn);
+  }
+
+  let searchSource = "camera";
+  function setSearchSource(src) {
+    searchSource = src === "display" ? "display" : "camera";
+    buildSearch();
+    const E = searchEls, disp = searchSource === "display";
+    E.camWrap.hidden = disp; E.dispSlot.hidden = !disp;
+    E.srcCam.classList.toggle("on", !disp); E.srcDisp.classList.toggle("on", disp);
+    E.srcCam.setAttribute("aria-pressed", String(!disp)); E.srcDisp.setAttribute("aria-pressed", String(disp));
+    if (disp) { if (VMUI.displaySearch) VMUI.displaySearch.mount(E.dispSlot); else E.dispSlot.replaceChildren(h("div", { class: "vm-banner warn", text: "Display search is loading…" })); }
   }
 
   let searchMode = "frame";
@@ -840,6 +856,8 @@
       if (fid) { setSearchMode("frame"); setFrameRef(Number(fid)); history.replaceState(null, "", "#search"); }
       else if (prm.get("mode") === "objects") { setSearchMode("objects"); history.replaceState(null, "", "#search"); }
       else setSearchMode(searchMode);
+      setSearchSource(prm.get("source") === "display" ? "display" : searchSource);
+      if (prm.get("source")) history.replaceState(null, "", "#search");
     }
     if (view === "pop" && window.VMUI && window.VMUI.pop) window.VMUI.pop();
     if (view === "audience") window.dispatchEvent(new Event("resize"));
@@ -850,6 +868,8 @@
     makeTimeFilter, sourceSelect, makeGallery, openDetail, onStatus, pollStatus, refreshTs, tzSubscribe: (f) => tz.subs.push(f),
     showSearchMode: (m) => setSearchMode(m), objects: null,
     registerObjects(o) { VMUI.objects = o; if (SR.built) setSearchMode(searchMode); },
+    displaySearch: null, showSearchSource: (m) => setSearchSource(m),
+    registerDisplaySearch(o) { VMUI.displaySearch = o; if (SR.built && searchSource === "display") setSearchSource("display"); },
     pop: null,
     registerPop(show) { VMUI.pop = show; if (currentView === "pop") show(); },
   };

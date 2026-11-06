@@ -384,6 +384,9 @@
   function show() {
     if (!S.view) build();
     refresh(true);
+    // deep link from Visual Search (BrightSign Display source): #pop?session=<id> opens that playback session
+    const sid = new URLSearchParams((location.hash.split("?")[1]) || "").get("session");
+    if (sid) { history.replaceState(null, "", "#pop"); openDetail(sid); }
     clearInterval(S.timer);
     // 1 s while a session is in progress (live progress), 5 s otherwise
     S.timer = setInterval(() => {

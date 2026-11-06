@@ -195,7 +195,7 @@ func tokenEq(a, b string) bool {
 
 // vmPostAllowed lists the only POST routes the browser may reach (all others are read-only GETs).
 func vmPostAllowed(p string) bool {
-	return strings.HasPrefix(p, "/api/vm/search/") || vmSmallBody(p)
+	return strings.HasPrefix(p, "/api/vm/search/") || p == "/api/pop/search/display" || vmSmallBody(p)
 }
 
 // vmSmallBody: JSON-only object endpoints (bounded to vmObjMaxBody).
@@ -295,7 +295,7 @@ func newVMHandler(target *url.URL, token string) http.Handler {
 		case http.MethodPost:
 			if !vmPostAllowed(r.URL.Path) {
 				w.Header().Set("Allow", "GET, HEAD")
-				vmErr(w, 405, "method_not_allowed", "POST is only allowed on /api/vm/search/*, /api/vm/objects, /api/vm/objects/search and the /api/pop/ media, sessions and verify routes")
+				vmErr(w, 405, "method_not_allowed", "POST is only allowed on /api/vm/search/*, /api/pop/search/display, /api/vm/objects, /api/vm/objects/search and the /api/pop/ media, sessions and verify routes")
 				return
 			}
 			if !sameOrigin(r) {

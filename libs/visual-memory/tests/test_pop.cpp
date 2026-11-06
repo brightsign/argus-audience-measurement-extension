@@ -407,3 +407,107 @@ TEST(PopStore, DisplayWrongAdMissingAndInterruptedOutcomesAreUnchanged) {
     shot_via(f, "i", 1, 2, 3000, "resilience_grpc");
     EXPECT_EQ(f.verify("i").status, PopStatus::Incomplete);
 }
+
+// ---- display-evidence search (Visual Search, source "BrightSign Display") ----------------------------------------------------------------------
+namespace {
+// Three sessions on the display path: g1 and g2 show ad A (kind 0), g3 shows ad B (kind 1); plus one screenshot-path row.
+void search_fixture(Fx& f) {
+    f.media("ad-a", 0); f.media("ad-b", 1);
+    f.schedule("g1", "ad-a"); f.full_play("g1");
+    shot_via(f, "g1", 1, 0, 3000, "resilience_grpc"); shot_via(f, "g1", 2, 0, 15000, "resilience_grpc", 3); shot_via(f, "g1", 3, 0, 27000, "resilience_grpc", 6);
+    f.schedule("g2", "ad-a"); f.full_play("g2");
+    shot_via(f, "g2", 1, 0, 3000, "resilience_grpc");
+    f.schedule("g3", "ad-b"); f.full_play("g3");
+    shot_via(f, "g3", 1, 1, 3000, "resilience_grpc"); shot_via(f, "g3", 2, 1, 15000, "resilience_grpc");
+    f.schedule("s1", "ad-a"); f.full_play("s1");
+    shot_via(f, "s1", 1, 0, 3000, "brightscript_screenshot");
+}
+}
+
+TEST(PopSearch, FindsTheMatchingEvidenceRankedBySimilarityWithItsSessionAndTime) {
+    Fx f; search_fixture(f);
+    EvidenceSearchOptions o; o.top_k = 10;
+    EvidenceSearchResult r; std::string e;
+    ASSERT_TRUE(f.store.search_evidence(f.prov, make_jpeg(0, 0), o, r, e)) << e;
+    ASSERT_FALSE(r.hits.empty());
+    EXPECT_EQ(r.scanned, 6u);                                           // only the resilience_grpc rows are candidates (not the screenshot)
+    EXPECT_EQ(r.coverage.rows_searchable, 6u);
+    EXPECT_EQ(r.coverage.sessions, 3u);
+    EXPECT_EQ(r.coverage.images_retained, 6u);
+    for (size_t i = 1; i < r.hits.size(); ++i) EXPECT_GE(r.hits[i - 1].similarity, r.hits[i].similarity);
+    EXPECT_NEAR(r.hits[0].similarity, 1.0, 1e-3);                      // the identical picture
+    EXPECT_EQ(r.hits[0].evidence.capture_method, "resilience_grpc");
+    for (const auto& h : r.hits) { EXPECT_GE(h.similarity, 0.80f); EXPECT_NE(h.evidence.session_id, "g3"); EXPECT_NE(h.evidence.session_id, "s1"); }
+    EXPECT_EQ(r.hits[0].evidence.utc_ms, kT0 + 1000 + r.hits[0].evidence.target_offset_ms);   // time comes from the stored row
+    EXPECT_NE(r.hits[0].evidence.uncertainty_ms, -1);
+}
+
+TEST(PopSearch, NoMatchIsReportedAsNoMatchButTheClosestCandidateIsStillShown) {
+    Fx f; search_fixture(f);
+    EvidenceSearchOptions o; o.min_similarity = 0.999f;
+    EvidenceSearchResult r; std::string e;
+    ASSERT_TRUE(f.store.search_evidence(f.prov, make_smooth(0.31, 0.17, 160, 100), o, r, e)) << e;      // a picture that was never on the display
+    EXPECT_TRUE(r.hits.empty());
+    ASSERT_TRUE(r.has_closest);
+    EXPECT_LT(r.closest.similarity, 0.999f);
+    EXPECT_GT(r.scanned, 0u);
+}
+
+TEST(PopSearch, FiltersByTimeAdvertisementCaptureMethodAndImageAvailability) {
+    Fx f; search_fixture(f);
+    EvidenceSearchResult r; std::string e; EvidenceSearchOptions o; o.has_min_similarity = false; o.top_k = 50;
+    o.media_id = "ad-b";
+    ASSERT_TRUE(f.store.search_evidence(f.prov, make_jpeg(0, 0), o, r, e)) << e;
+    EXPECT_EQ(r.scanned, 2u); for (const auto& h : r.hits) EXPECT_EQ(h.evidence.session_id, "g3");
+    o.media_id.clear(); o.start_utc_ms = kT0 + 1000 + 10000; o.end_utc_ms = kT0 + 1000 + 20000;       // only the 15 s captures
+    ASSERT_TRUE(f.store.search_evidence(f.prov, make_jpeg(0, 0), o, r, e)) << e;
+    EXPECT_EQ(r.scanned, 2u); for (const auto& h : r.hits) EXPECT_EQ(h.evidence.target_offset_ms, 15000);
+    o.start_utc_ms = o.end_utc_ms = 0; o.capture_method = "brightscript_screenshot";
+    ASSERT_TRUE(f.store.search_evidence(f.prov, make_jpeg(0, 0), o, r, e)) << e;
+    EXPECT_EQ(r.scanned, 1u); EXPECT_EQ(r.hits[0].evidence.session_id, "s1");
+    o.capture_method.clear();                                                                           // any display capture
+    ASSERT_TRUE(f.store.search_evidence(f.prov, make_jpeg(0, 0), o, r, e)) << e;
+    EXPECT_EQ(r.scanned, 7u);
+    // retention removes the JPEG but keeps the row and the vector: still searchable, but require_image drops it
+    f.store.prune_evidence(kT0 + 1000 + 5000, 0);
+    o.capture_method = "resilience_grpc"; o.require_image = false;
+    ASSERT_TRUE(f.store.search_evidence(f.prov, make_jpeg(0, 0), o, r, e)) << e;
+    EXPECT_EQ(r.scanned, 6u); EXPECT_LT(r.coverage.images_retained, 6u);
+    o.require_image = true;
+    ASSERT_TRUE(f.store.search_evidence(f.prov, make_jpeg(0, 0), o, r, e)) << e;
+    EXPECT_LT(r.scanned, 6u);
+}
+
+TEST(PopSearch, EmptyStoreFailedCapturesAndOtherModelsGiveNoCandidatesNotErrors) {
+    Fx f; f.media("ad-a", 0);
+    EvidenceSearchResult r; std::string e; EvidenceSearchOptions o;
+    ASSERT_TRUE(f.store.search_evidence(f.prov, make_jpeg(0, 0), o, r, e)) << e;
+    EXPECT_TRUE(r.hits.empty()); EXPECT_FALSE(r.has_closest); EXPECT_EQ(r.scanned, 0u); EXPECT_EQ(r.coverage.rows_searchable, 0u);
+    f.schedule("m", "ad-a"); f.full_play("m");
+    EvidenceIn in; in.session_id = "m"; in.idx = 1; in.status = "failed"; in.capture_method = "resilience_grpc"; in.failure_reason = "no fresh display frame";
+    Evidence ev; ASSERT_TRUE(f.store.add_evidence(f.prov, in, ev, e)) << e;
+    ASSERT_TRUE(f.store.search_evidence(f.prov, make_jpeg(0, 0), o, r, e)) << e;
+    EXPECT_EQ(r.scanned, 0u); EXPECT_EQ(r.coverage.rows_total, 1u);
+    // evidence stored with a 64-d model is not comparable with a 32-d query: reported as another model, never mixed
+    shot_via(f, "m", 2, 0, 3000, "resilience_grpc");
+    MockEmbeddingProvider other(32);
+    ASSERT_TRUE(f.store.search_evidence(other, make_jpeg(0, 0), o, r, e)) << e;
+    EXPECT_EQ(r.scanned, 0u); EXPECT_EQ(r.coverage.rows_other_model, 1u); EXPECT_TRUE(r.hits.empty());
+}
+
+TEST(PopSearch, RejectsBadArgumentsAndBadImages) {
+    Fx f; search_fixture(f);
+    EvidenceSearchResult r; std::string e; EvidenceSearchOptions o;
+    o.top_k = 0; EXPECT_FALSE(f.store.search_evidence(f.prov, make_jpeg(0, 0), o, r, e)); o.top_k = 51; EXPECT_FALSE(f.store.search_evidence(f.prov, make_jpeg(0, 0), o, r, e));
+    o.top_k = 5; o.min_similarity = 2.f; EXPECT_FALSE(f.store.search_evidence(f.prov, make_jpeg(0, 0), o, r, e));
+    o.min_similarity = 0.8f; EXPECT_FALSE(f.store.search_evidence(f.prov, {}, o, r, e));
+    EXPECT_FALSE(f.store.search_evidence(f.prov, std::vector<uint8_t>(100, 0x42), o, r, e));
+    EXPECT_FALSE(e.empty());
+}
+
+TEST(PopSearch, CancellationStopsTheScan) {
+    Fx f; search_fixture(f);
+    EvidenceSearchResult r; std::string e; EvidenceSearchOptions o; o.cancel = [] { return true; };
+    ASSERT_TRUE(f.store.search_evidence(f.prov, make_jpeg(0, 0), o, r, e)) << e;
+    EXPECT_TRUE(r.cancelled); EXPECT_EQ(r.scanned, 0u);
+}
