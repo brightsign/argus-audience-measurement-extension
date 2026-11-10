@@ -298,6 +298,39 @@ struct HistoryStats {
 };
 struct HistoryPruneResult { uint64_t images_removed = 0, rows_removed = 0, bytes_freed = 0; };
 
+// ---- time-based lookup of stored display-output frames (read-only; no model, no RKNN) -------------------------------------------
+// A "display frame" is a Weston/VOP2 frame (capture_method resilience_grpc) kept either as a Phase 2 history sample or as a D5
+// verification checkpoint that has no history row. A checkpoint that history already links to is reported once, as the history row.
+struct DisplayFrameRef {
+    std::string kind;                         // history_sample | history_and_checkpoint | verification_checkpoint
+    int64_t     frame_id = 0;                 // display_history_frames.frame_id (0 for a pure checkpoint)
+    int64_t     evidence_id = 0;              // display_capture_evidence.evidence_id (0 for a pure history sample)
+    int         index = 0;                    // sec_idx (history) or idx (checkpoint)
+    std::string session_id, source, capture_method, provenance, expected_media_id;
+    int64_t     utc_ms = 0;                   // capture instant, UTC
+    int         actual_offset_ms = 0;         // relative to the player-reported play start of the session
+    int         uncertainty_ms = -1;          // -1: the capture timestamp has no stated bound
+    int         width = 0, height = 0;
+    uint64_t    bytes = 0;
+    std::string sha256;
+    bool        embedded = false, image_available = false;
+};
+struct NearestDisplayFrame {
+    bool    found = false;                    // a frame exists within max_diff_ms
+    DisplayFrameRef frame;                    // the nearest frame at all (valid when has_nearest), also when it is outside the tolerance
+    bool    has_nearest = false;
+    int64_t diff_ms = 0;                      // recorded - requested (negative: the frame is earlier than the requested time)
+    uint64_t frames_in_store = 0;             // display frames retained (history rows + unlinked checkpoints), all sessions
+    int64_t oldest_utc_ms = 0, newest_utc_ms = 0;
+};
+struct FrameSimQuery { int64_t frame_id = 0, evidence_id = 0; };
+struct FrameSim {
+    bool    ok = false;
+    float   sim = -1.0f;                      // best cosine to a reference frame of the session's expected media
+    int     best_ref_offset_ms = -1, refs = 0;
+    std::string reason;                       // why ok == false
+};
+
 class PopStore {
 public:
     explicit PopStore(PopConfig cfg);
@@ -328,6 +361,9 @@ public:
     bool schedule_session(const PopSession& s, std::string& err);         // creates (state "scheduled") or refuses a duplicate id
     bool get_session(const std::string& id, PopSession& out);
     std::vector<PopSession> list_sessions(const SessionFilter& f, int limit, int offset, uint64_t* total = nullptr);
+    // Sessions whose play interval overlaps [from,to] (start..end; a session that never ended is bounded by start+slot) plus
+    // sessions scheduled inside it that never started. Read-only.
+    std::vector<PopSession> list_sessions_overlapping(int64_t from_utc_ms, int64_t to_utc_ms, int limit);
     // Applies the canonical event vocabulary: stores the event and advances the session state. Unknown sessions
     // are created ad hoc (expected_media_id from the event, else the played one).
     bool apply_event(const PopEventIn& e, std::string& err);
@@ -370,6 +406,11 @@ public:
     std::vector<HistoryFrame> list_history(const std::string& session_id, int limit, int offset, uint64_t* total = nullptr);
     bool history_jpeg(int64_t frame_id, std::vector<uint8_t>& out);
     HistoryStats history_stats();
+    // Time lookup. All three are read-only SELECTs that use the utc_ms indexes; the answer never depends on the model.
+    bool nearest_display_frame(int64_t utc_ms, int64_t max_diff_ms, const std::string& session_id, NearestDisplayFrame& out);
+    std::vector<DisplayFrameRef> display_frames_between(int64_t from_utc_ms, int64_t to_utc_ms, const std::string& session_id, int limit, bool* truncated = nullptr,
+                                                        bool newest_first = false);   // newest_first: the LAST `limit` frames of the range, newest first
+    std::vector<FrameSim> expected_similarity(const std::string& session_id, const std::vector<FrameSimQuery>& frames);
     // End of a session: records the played media on its rows and removes any frame captured after (end_utc_ms - guard_ms).
     uint64_t history_finalize_session(const std::string& session_id, int64_t end_utc_ms, int guard_ms, const std::string& played_media_id);
     // JPEGs older than jpeg_older_than_ms, and the oldest ones beyond max_bytes, are removed (row and vector stay); rows older than

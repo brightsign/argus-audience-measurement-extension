@@ -203,6 +203,10 @@ func vmSmallBody(p string) bool {
 	if p == "/api/vm/objects" || p == "/api/vm/objects/search" || p == "/api/pop/media" || p == "/api/pop/sessions" {
 		return true
 	}
+	// D4 automatic indexing: bounded backfill request and its cancel (small JSON bodies, same-origin only like every POST)
+	if p == "/api/vm/objects/auto/backfill" || p == "/api/vm/objects/auto/backfill/cancel" {
+		return true
+	}
 	// /api/pop/media/{id}/references/build and /api/pop/sessions/{id}/verify (exactly one id segment)
 	seg := strings.Split(strings.Trim(p, "/"), "/")
 	if len(seg) == 5 && seg[0] == "api" && seg[1] == "pop" && seg[2] == "media" && seg[3] != "" && seg[4] == "references" {
@@ -295,7 +299,7 @@ func newVMHandler(target *url.URL, token string) http.Handler {
 		case http.MethodPost:
 			if !vmPostAllowed(r.URL.Path) {
 				w.Header().Set("Allow", "GET, HEAD")
-				vmErr(w, 405, "method_not_allowed", "POST is only allowed on /api/vm/search/*, /api/pop/search/display, /api/vm/objects, /api/vm/objects/search and the /api/pop/ media, sessions and verify routes")
+				vmErr(w, 405, "method_not_allowed", "POST is only allowed on /api/vm/search/*, /api/pop/search/display, /api/vm/objects, /api/vm/objects/search, /api/vm/objects/auto/backfill[/cancel] and the /api/pop/ media, sessions and verify routes")
 				return
 			}
 			if !sameOrigin(r) {

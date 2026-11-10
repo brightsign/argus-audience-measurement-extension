@@ -115,3 +115,7 @@ Host (mock embedder, real gRPC chain; synthetic pictures only):
 * **Similarity** is image-embedding similarity. Scene-level similarity can exceed 0.80 for different moments of the same advertisement; a match is an observation of captured visual content, not independent proof that the complete advertisement played.
 * **Scale.** The exact scan is linear; the row bound (50,000) and retention keep it bounded. A hot SD card or a very long retention would need a resident vector cache.
 * **Restart.** Staged (not yet committed) frames are lost on a restart; committed rows survive; un-embedded rows are embedded on the next idle NPU turns.
+
+## 12. Search by time
+
+Looking up what was playing at a date and time (nearest stored display frame, sessions overlapping a window, player-reported versus visually corroborated) is documented in [VISUAL_MEMORY_DISPLAY_TIME_SEARCH.md](VISUAL_MEMORY_DISPLAY_TIME_SEARCH.md).

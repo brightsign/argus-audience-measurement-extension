@@ -59,6 +59,10 @@ public:
 
     // Insert one row. Returns the new rowid, or -1 on failure.
     int64_t insert(const InsertRow& row);
+    // Diagnostics of the most recent failed insert (count/code/message/time). Cheap, never blocks behind a write.
+    DbErrorInfo last_insert_error() const;
+    // Busy timeout of the writer connection (default 5000 ms). Exposed for tests and tuning.
+    void set_busy_timeout_ms(int ms);
 
     // Query capture_utc_ms in [start, end), optionally filtered by source_id,
     // ordered by (capture_utc_ms, id). limit<=0 means unlimited.
@@ -99,6 +103,9 @@ private:
 
     sqlite3*           db_ = nullptr;
     mutable std::mutex m_;
+    mutable std::mutex err_m_;       // guards last_err_ only (readable while an insert is in flight)
+    DbErrorInfo last_err_;
+    void note_error(const char* op, int64_t seq);
     bool               vec_available_ = false;
     std::string        vec_version_;
     int                schema_version_ = 0;

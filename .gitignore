@@ -41,3 +41,4 @@ fps_*.csv
 # Model binaries are distributed via the artifact store, not git (see libs/visual-memory/models/README.md)
 libs/visual-memory/models/*.onnx
 libs/visual-memory/models/*.rknn
+docs/ARGUS_D4_D5_STAKEHOLDER_DEMO_RUNBOOK.md

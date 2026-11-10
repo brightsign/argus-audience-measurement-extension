@@ -10,9 +10,16 @@
 #include <3rdparty/nlohmann/json.hpp>
 
 #include "visualmemory/mock_embedding_provider.h"
+#include "visualmemory/object_detector.h"
+#include "visualmemory/object_frame_source.h"
 #include "visualmemory/object_index.h"
+#include "visualmemory/object_indexer.h"
 #include "visualmemory/reader.h"
 #include "pop_service.h"
+#include "mock_colour_detector.h"
+#ifdef ARGUS_OBJECT_DETECTOR
+#include "yolox_detector.h"
+#endif
 #ifdef ARGUS_VISUAL_EMBEDDINGS
 #include "rknn_embedding_provider.h"
 #endif
@@ -40,6 +47,7 @@
 #include <map>
 #include <mutex>
 #include <sstream>
+#include <sys/prctl.h>
 #include <sys/stat.h>
 #include <thread>
 
@@ -88,6 +96,25 @@ struct Cfg {
     uint64_t    objects_max_regions = 10000;
     int         objects_retention_days = 30;
     int         objects_min_roi_px = 16;
+    // D4 object-crop images (schema v2): own JPEG per object with their own age + quota limits
+    bool        objects_store_crops = true;
+    int         objects_crop_max_side = 256, objects_crop_quality = 80;
+    int         objects_crop_retention_days = 30;
+    uint64_t    objects_crop_max_bytes = 256ull << 20;
+    // D4 automatic object indexing (visual_memory.objects.auto.*): OFF by default
+    struct AutoObj {
+        bool  enabled = false, live_scan = true;
+        std::vector<std::string> classes = {"bottle", "cup", "wine glass", "laptop", "cell phone", "book"};
+        std::vector<int> class_ids = {39, 41, 40, 63, 67, 73};
+        float min_confidence = 0.30f;
+        int   max_objects_per_frame = 8, min_box_px = 24, frames_per_minute = 12, queue_depth = 8, max_backfill_frames = 100, backfill_pause_ms = 150;
+        std::string detector_model = "model/yolox_s.rknn";
+        int   detector_npu_core = 1;
+        bool  camera_enabled = true;                                    // auto.camera.enabled (default on when auto.enabled, as before)
+        // BrightSign display (Weston/VOP2 frames kept by Proof of Play): OFF by default until validated
+        bool  display_enabled = false, display_live_scan = false;
+        int   display_frames_per_minute = 12, display_queue_depth = 8;
+    } auto_objects;
     argus_pop::PopCfg pop;                    // visual_memory.pop.* (D5 Proof of Play; off by default)
     argus_display::DisplayCfg display;        // visual_memory.display.* (OS rendered-frame preview; off by default)
     std::string config_path;
@@ -120,6 +147,47 @@ Cfg load_cfg(const std::string& path) {
         c.objects_max_regions = ob.value("max_regions", static_cast<uint64_t>(10000));
         c.objects_retention_days = ob.value("retention_days", 30);
         c.objects_min_roi_px = std::max(8, std::min(256, ob.value("min_roi_px", 16)));
+        {
+            const json cr = ob.value("crops", json::object());
+            c.objects_store_crops = cr.value("enabled", true);
+            c.objects_crop_max_side = std::max(32, std::min(640, cr.value("max_side", 256)));
+            c.objects_crop_quality = std::max(40, std::min(95, cr.value("quality", 80)));
+            c.objects_crop_retention_days = std::max(0, cr.value("retention_days", 30));
+            c.objects_crop_max_bytes = static_cast<uint64_t>(std::max<int64_t>(0, cr.value("max_mb", 256))) << 20;
+            const json au = ob.value("auto", json::object());
+            auto& A = c.auto_objects;
+            A.enabled = au.value("enabled", false);
+            A.live_scan = au.value("live_scan", true);
+            A.min_confidence = static_cast<float>(std::max(0.05, std::min(0.99, au.value("min_confidence", 0.30))));
+            A.max_objects_per_frame = std::max(1, std::min(32, au.value("max_objects_per_frame", 8)));
+            A.min_box_px = std::max(8, std::min(256, au.value("min_box_px", 24)));
+            A.frames_per_minute = std::max(1, std::min(120, au.value("frames_per_minute", 12)));
+            A.queue_depth = std::max(1, std::min(32, au.value("queue_depth", 8)));
+            A.max_backfill_frames = std::max(1, std::min(200, au.value("max_backfill_frames", 100)));
+            A.backfill_pause_ms = std::max(0, std::min(5000, au.value("backfill_pause_ms", 150)));
+            A.detector_model = au.value("detector_model", A.detector_model);
+            A.detector_npu_core = std::max(-1, std::min(3, au.value("detector_npu_core", 1)));
+            A.camera_enabled = au.value("camera", json::object()).value("enabled", true);
+            {
+                const json dp = au.value("display", json::object());
+                A.display_enabled = dp.value("enabled", false);
+                A.display_live_scan = dp.value("live_scan", false);
+                A.display_frames_per_minute = std::max(1, std::min(120, dp.value("frames_per_minute", 12)));
+                A.display_queue_depth = std::max(1, std::min(32, dp.value("queue_depth", 8)));
+            }
+            if (au.contains("classes") && au["classes"].is_array()) {              // names (COCO-80) or numeric ids; unknown entries are ignored
+                A.classes.clear(); A.class_ids.clear();
+                for (const auto& e : au["classes"]) {
+                    int id = -1;
+                    if (e.is_string()) id = coco80_id(e.get<std::string>());
+                    else if (e.is_number_integer()) id = e.get<int>();
+                    if (id < 0 || id > 79 || std::find(A.class_ids.begin(), A.class_ids.end(), id) != A.class_ids.end()) continue;
+                    A.class_ids.push_back(id); A.classes.push_back(coco80_name(id));
+                }
+            } else { A.classes.clear(); for (int id : A.class_ids) A.classes.push_back(coco80_name(id)); }
+            A.class_ids.erase(std::remove(A.class_ids.begin(), A.class_ids.end(), 0), A.class_ids.end());   // "person" is never indexed automatically
+            A.classes.erase(std::remove(A.classes.begin(), A.classes.end(), std::string("person")), A.classes.end());
+        }
         const json pp = vm.value("pop", json::object());
         c.pop.enabled = pp.value("enabled", false);
         c.pop.events_path = pp.value("events_path", c.pop.events_path);
@@ -131,6 +199,7 @@ Cfg load_cfg(const std::string& path) {
         c.pop.evidence_max_bytes = pp.value("evidence_max_bytes", c.pop.evidence_max_bytes);
         c.pop.evidence_retention_days = pp.value("evidence_retention_days", 30);
         c.pop.allow_test_jobs = pp.value("allow_test_jobs", false);
+        c.pop.device_timezone = pp.value("device_timezone", std::string()).substr(0, 64);   // IANA name, informational (the UI converts local time to UTC)
         {   // Phase 2: display history (1 FPS during registered sessions), OFF by default
             const json hp = pp.value("history", json::object());
             auto& h = c.pop.history;
@@ -338,6 +407,22 @@ struct App {
     int64_t last_open_try_ms = 0;
     std::string open_err;
 
+    ObjectIndexConfig object_index_config() const {
+        ObjectIndexConfig oc; oc.root_directory = cfg.storage_root; oc.min_roi_px = cfg.objects_min_roi_px;
+        oc.store_crops = cfg.objects_store_crops; oc.crop_max_side = cfg.objects_crop_max_side; oc.crop_quality = cfg.objects_crop_quality;
+        oc.max_crop_bytes = cfg.objects_crop_max_bytes;
+        return oc;
+    }
+    std::string detector_kind = "auto";         // auto (RKNN YOLOX per config) | mock (dev/tests only)
+    // D4 automatic indexing worker: its OWN reader and ObjectIndex connections (independent of request handling).
+    std::unique_ptr<VisualMemoryReader> ix_reader;
+    std::unique_ptr<ObjectIndex> ix_objects;
+    std::unique_ptr<ObjectIndexer> indexer;
+    // Weston/VOP2 display frames kept by Proof of Play, as an object-frame source (set in main once the PoP store is open). Used by the API
+    // for manual indexing / search / crops and by the worker. Null when Proof of Play is not enabled: display objects are then unavailable.
+    std::unique_ptr<DisplayObjectSource> disp_src;
+    std::unique_ptr<CameraObjectSource> ix_cam_src;       // the worker's camera source (its own reader)
+
     std::mutex obj_mu;
     std::unique_ptr<ObjectIndex> objects;
     int64_t last_obj_try_ms = 0;
@@ -350,8 +435,7 @@ struct App {
         const int64_t t = steady_ms();
         if (!objects || t - last_obj_try_ms >= 2000) {
             last_obj_try_ms = t;
-            ObjectIndexConfig oc; oc.root_directory = cfg.storage_root; oc.min_roi_px = cfg.objects_min_roi_px;
-            auto o = std::make_unique<ObjectIndex>(oc);
+            auto o = std::make_unique<ObjectIndex>(object_index_config());
             std::string e;
             if (o->open(e)) { objects = std::move(o); obj_err.clear(); }
             else { obj_err = e; objects.reset(); }
@@ -414,7 +498,7 @@ struct App {
     bool provider_loaded() { std::lock_guard<std::mutex> lk(prov_mu); return provider && provider->ready(); }
     void maybe_unload() {
         std::lock_guard<std::mutex> lk(prov_mu);
-        if (provider && !searching.load() && steady_ms() - last_search_ms.load() > cfg.idle_unload_s * 1000LL) {
+        if (provider && !searching.load() && !(indexer && (cfg.auto_objects.live_scan || cfg.auto_objects.display_live_scan)) && steady_ms() - last_search_ms.load() > cfg.idle_unload_s * 1000LL) {
             provider->shutdown(); provider.reset();
         }
     }
@@ -620,10 +704,20 @@ Response handle_status(App& a) {
         json ob = {{"enabled", a.cfg.configured && a.cfg.objects_enabled}};
         if (a.cfg.configured && a.cfg.objects_enabled) {
             std::string w; ObjectIndex* oi = a.get_objects(&w);
-            if (oi) { const ObjectIndexSummary os = oi->summary();
+            if (oi) { const ObjectIndexSummary os = oi->summary("camera");
                 ob["available"] = true; ob["regions"] = os.regions; ob["vector_bytes"] = os.vector_bytes; ob["db_bytes"] = os.db_bytes;
                 ob["schema_version"] = os.schema_version; ob["max_regions"] = a.cfg.objects_max_regions;
                 ob["oldest_utc_ms"] = os.oldest_capture_utc_ms; ob["newest_utc_ms"] = os.newest_capture_utc_ms;
+                ob["manual_regions"] = os.manual_regions; ob["auto_regions"] = os.auto_regions; ob["frames_processed"] = os.frames_processed;
+                ob["frames_with_objects"] = os.frames_with_objects; ob["crops_retained"] = os.crops_retained; ob["crops_expired"] = os.crops_expired;
+                ob["crop_bytes"] = os.crop_bytes; ob["auto_enabled"] = a.cfg.auto_objects.enabled;
+                {   // BrightSign display objects (Weston/VOP2 frames of Proof of Play)
+                    const ObjectIndexSummary ds = oi->summary("display");
+                    ob["display"] = {{"available", a.disp_src != nullptr}, {"regions", ds.regions}, {"manual_regions", ds.manual_regions}, {"auto_regions", ds.auto_regions},
+                                     {"frames_processed", ds.frames_processed}, {"frames_with_objects", ds.frames_with_objects}, {"crops_retained", ds.crops_retained},
+                                     {"crops_expired", ds.crops_expired}, {"crop_bytes", ds.crop_bytes}, {"auto_enabled", a.cfg.auto_objects.enabled && a.cfg.auto_objects.display_enabled}};
+                }
+                if (a.indexer) { const ObjectIndexerStats is = a.indexer->stats(); ob["auto_state"] = is.state; ob["auto_error"] = is.last_error; }
                 ob["models"] = json::array(); for (auto& m : os.models) ob["models"].push_back(model_json(m)); }
             else { ob["available"] = false; ob["reason"] = w; }
         }
@@ -825,20 +919,54 @@ Response handle_search(App& a, const Request& rq, int fd, bool by_frame) {
 
 
 // ---------------------------------------------------------------- D4: object regions (manual ROI)
-const char* kObjLabel = "Object-region similarity (MobileNetV2 embedding of a manually selected crop). Scores are cosine similarities, not identification probabilities.";
+const char* kObjLabel = "Object-region similarity (MobileNetV2 embedding of an object crop: manually selected or proposed by the detector). Scores are cosine similarities, not identification probabilities.";
 
 json region_json(const ObjectRegion& r) {
-    return {{"region_id", r.region_id}, {"frame_id", r.frame_id}, {"source_id", r.source_id}, {"capture_utc_ms", r.capture_utc_ms},
-            {"bbox", {{"x", r.roi.x}, {"y", r.roi.y}, {"w", r.roi.w}, {"h", r.roi.h}}},
-            {"image_width", r.image_width}, {"image_height", r.image_height}, {"label", r.label}, {"created_utc_ms", r.created_utc_ms},
-            {"crop_stored", r.has_crop_file}};
+    json j = {{"region_id", r.region_id}, {"frame_id", r.frame_id}, {"source_id", r.source_id}, {"capture_utc_ms", r.capture_utc_ms},
+              {"bbox", {{"x", r.roi.x}, {"y", r.roi.y}, {"w", r.roi.w}, {"h", r.roi.h}}},
+              {"image_width", r.image_width}, {"image_height", r.image_height}, {"label", r.label}, {"created_utc_ms", r.created_utc_ms},
+              {"crop_stored", r.has_crop_file},
+              {"index_origin", r.index_origin}, {"crop_state", r.crop_state}, {"crop_bytes", r.crop_bytes},
+              {"crop_width", r.crop_width}, {"crop_height", r.crop_height}};
+    if (r.index_origin == "auto") {                                   // detector provenance (absent for manual regions)
+        j["class_id"] = r.class_id; j["class_name"] = r.class_name; j["confidence"] = r.confidence;
+        j["detector"] = r.detector; j["detector_version"] = r.detector_version;
+    }
+    j["source_type"] = r.source_type; j["source_kind"] = r.source_kind;
+    if (r.source_type == "display") {                                 // Weston/VOP2 frame of a Proof-of-Play session
+        j["pop_session_id"] = r.pop_session_id;
+        j["session_link"] = r.pop_session_id.empty() ? json(nullptr) : json("#pop?session=" + r.pop_session_id);
+        j["expected_media_id"] = r.expected_media_id; j["reported_media_id"] = r.reported_media_id.empty() ? json(nullptr) : json(r.reported_media_id);
+        j["playback_offset_ms"] = r.playback_offset_ms < 0 ? json(nullptr) : json(r.playback_offset_ms);
+        j["time_uncertainty_ms"] = r.time_uncertainty_ms < 0 ? json(nullptr) : json(r.time_uncertainty_ms);
+        j["provenance"] = r.provenance;
+        j["frame_image_url"] = "/api/vm/display-frames/" + r.source_kind + "/" + std::to_string(r.frame_id) + "/image";
+    } else j["frame_image_url"] = "/api/vm/frames/" + std::to_string(r.frame_id) + "/image";
+    return j;
 }
 json hit_json(const ObjectHit& h, int rank) {
     json j = region_json(h.region);
     j["rank"] = rank; j["similarity"] = h.similarity; j["distance"] = h.distance;
     j["image_available"] = h.image_available; j["image_exists"] = h.image_exists;
+    j["crop_available"] = h.crop_available;                           // the object's own crop JPEG is retained and present
     return j;
 }
+
+// Frame sources of one request. The camera store may be missing (a player with only Proof of Play data): then only display objects work.
+struct ReqSrcs {
+    std::unique_ptr<CameraObjectSource> cam;
+    DisplayObjectSource* disp = nullptr;
+    ReqSrcs(App& a, VisualMemoryReader* rd) { if (rd) cam = std::make_unique<CameraObjectSource>(*rd); disp = a.disp_src.get(); }
+    ObjectSources all() { return ObjectSources{cam.get(), disp}; }
+    ObjectFrameSource* get(const std::string& t) { return t == "display" ? static_cast<ObjectFrameSource*>(disp) : static_cast<ObjectFrameSource*>(cam.get()); }
+};
+// "camera" | "display" | "all" (-> "" = every source). Anything else is refused.
+bool parse_scope(const std::string& v, std::string& out) {
+    if (v == "camera" || v == "display") { out = v; return true; }
+    if (v == "all") { out.clear(); return true; }
+    return false;
+}
+std::string display_kind_ok(const std::string& k) { return k == "checkpoint" ? "checkpoint" : k == "history" ? "history" : ""; }
 
 bool body_json(const Request& rq, json& j, std::string& why) {
     if (rq.body.empty() || rq.body.size() > 16 * 1024) { why = "JSON body required (max 16 KiB)"; return false; }
@@ -892,7 +1020,7 @@ Response objects_gate(App& a, ObjectIndex*& oi, VisualMemoryReader*& rd) {
     std::string why;
     if (!a.cfg.configured) return jerr(503, "not_enabled", "visual memory is not configured");
     if (!a.cfg.objects_enabled) return jerr(503, "not_enabled", "object search is not enabled (visual_memory.objects.enabled)");
-    rd = a.get_reader(&why); if (!rd) return jerr(503, "store_unavailable", why);
+    rd = a.get_reader(&why);                                            // may stay null: display objects do not need the camera store
     oi = a.get_objects(&why); if (!oi) return jerr(503, "store_unavailable", why);
     return Response{200, "", "", ""};
 }
@@ -918,6 +1046,205 @@ Response handle_frame_crop(App& a, int64_t id, const Request& rq) {
     return r;
 }
 
+
+// What an object search actually covers: only the objects that were indexed (manually, or by the detector from the frames it
+// processed). Never "every stored frame".
+json object_scope_json(App& a, const ObjectIndexSummary& sm, const std::string& source = "camera") {
+    const bool display = source == "display", both = source.empty();
+    const char* what = both ? "camera and display" : display ? "display" : "camera";
+    json sc = {{"source_type", both ? json("all") : json(source)}, {"indexed_objects", sm.regions}, {"manual_objects", sm.manual_regions}, {"auto_objects", sm.auto_regions},
+               {"frames_processed", sm.frames_processed}, {"frames_with_objects", sm.frames_with_objects},
+               {"auto_enabled", display ? a.cfg.auto_objects.enabled && a.cfg.auto_objects.display_enabled : a.cfg.auto_objects.enabled && a.cfg.auto_objects.camera_enabled},
+               {"coverage", "indexed_subset"},
+               {"oldest_processed_capture_utc_ms", sm.oldest_processed_capture_utc_ms}, {"newest_processed_capture_utc_ms", sm.newest_processed_capture_utc_ms}};
+    std::ostringstream m;
+    m << "Searches the " << sm.regions << " indexed " << what << " object" << (sm.regions == 1 ? "" : "s") << " (" << sm.manual_regions << " manually selected, "
+      << sm.auto_regions << " found automatically in " << sm.frames_processed << " processed frame" << (sm.frames_processed == 1 ? "" : "s")
+      << "). Stored frames that were not processed are not searched" << (display ? ": this covers indexed display objects only, not every frame ever displayed." : ".");
+    sc["message"] = m.str();
+    return sc;
+}
+
+// Age + quota limits for the object crop images (independent of the frame JPEG retention). Bounded work, cheap when nothing is due.
+void object_crop_housekeeping(App& a, ObjectIndex& oi) {
+    const int64_t cutoff = a.cfg.objects_crop_retention_days > 0 ? now_ms() - static_cast<int64_t>(a.cfg.objects_crop_retention_days) * 86400000LL : 0;
+    oi.prune_crops(cutoff, a.cfg.objects_crop_max_bytes);
+}
+void object_housekeeping(App& a) {                                           // janitor: regions (age + count) and crops (age + bytes)
+    std::string w; ObjectIndex* oi = a.get_objects(&w);
+    if (!oi) return;
+    const int64_t cutoff = a.cfg.objects_retention_days > 0 ? now_ms() - static_cast<int64_t>(a.cfg.objects_retention_days) * 86400000LL : 0;
+    oi->prune(cutoff, a.cfg.objects_max_regions);
+    object_crop_housekeeping(a, *oi);
+}
+
+// Detector used by the automatic indexer. "mock" (dev/tests): finds saturated colour blobs and names them by colour.
+std::shared_ptr<ObjectDetector> make_detector(App& a, std::string& why) {
+    if (a.detector_kind.rfind("mock", 0) == 0) return argus_objects::make_colour_blob_detector();
+#ifdef ARGUS_OBJECT_DETECTOR
+    argus_objects::YoloxDetector::Options o;
+    const auto& A = a.cfg.auto_objects;
+    o.model_path = A.detector_model.rfind('/', 0) == 0 || a.base_dir.empty() ? A.detector_model : a.base_dir + "/" + A.detector_model;
+    o.npu_core = A.detector_npu_core;
+    auto d = std::make_shared<argus_objects::YoloxDetector>(o);
+    if (!d->init()) { why = "object detector failed to load: " + d->last_error(); return nullptr; }
+    return d;
+#else
+    why = "this build has no object detector (ARGUS_OBJECT_DETECTOR)";
+    return nullptr;
+#endif
+}
+
+json indexer_json(App& a) {
+    const auto& A = a.cfg.auto_objects;
+    json j = {{"enabled", A.enabled}, {"running", a.indexer != nullptr}, {"live_scan", A.live_scan},
+              {"classes", A.classes}, {"class_ids", A.class_ids}, {"min_confidence", A.min_confidence},
+              {"max_objects_per_frame", A.max_objects_per_frame}, {"min_box_px", A.min_box_px}, {"frames_per_minute", A.frames_per_minute},
+              {"queue_depth", A.queue_depth}, {"max_backfill_frames", A.max_backfill_frames},
+              {"detector_kind", a.detector_kind}, {"detector_model", A.detector_model}, {"detector_npu_core", A.detector_npu_core}};
+    if (a.indexer) {
+        const ObjectIndexerStats s = a.indexer->stats();
+        j["worker"] = {{"state", s.state}, {"last_error", s.last_error}, {"last_error_utc_ms", s.last_error_utc_ms},
+                       {"frames_processed", s.frames_processed}, {"frames_with_objects", s.frames_with_objects}, {"objects_indexed", s.objects_indexed},
+                       {"objects_duplicate", s.objects_duplicate}, {"frames_image_unavailable", s.frames_image_unavailable}, {"frames_failed", s.frames_failed},
+                       {"skipped_stale", s.skipped_stale}, {"detector_errors", s.detector_errors}, {"provider_errors", s.provider_errors}, {"db_errors", s.db_errors},
+                       {"queue_depth", s.queue_depth}, {"queue_capacity", s.queue_capacity}, {"dropped_queue_full", s.dropped_queue_full},
+                       {"last_detect_ms", s.last_detect_ms}, {"avg_detect_ms", s.avg_detect_ms}, {"last_index_ms", s.last_index_ms}, {"avg_index_ms", s.avg_index_ms},
+                       {"last_embed_ms", s.last_embed_ms}, {"avg_embed_ms", s.avg_embed_ms},
+                       {"last_frame_total_ms", s.last_frame_total_ms}, {"cursor_utc_ms", s.cursor_utc_ms},
+                       {"detector", s.detector}, {"detector_version", s.detector_version}};
+        j["backfill"] = {{"state", s.backfill_state}, {"source", s.backfill_source}, {"total", s.backfill_total}, {"done", s.backfill_done}, {"indexed", s.backfill_indexed},
+                         {"failed", s.backfill_failed}, {"started_utc_ms", s.backfill_started_utc_ms}, {"finished_utc_ms", s.backfill_finished_utc_ms}};
+        json srcs = json::array();                                  // one entry per frame source served by the worker
+        for (const auto& x : s.sources)
+            srcs.push_back({{"type", x.type}, {"live_scan", x.live_scan}, {"frames_per_minute", x.frames_per_minute}, {"queue_depth", x.queue_depth}, {"queue_capacity", x.queue_capacity},
+                            {"frames_processed", x.frames_processed}, {"frames_with_objects", x.frames_with_objects}, {"objects_indexed", x.objects_indexed},
+                            {"frames_image_unavailable", x.frames_image_unavailable}, {"frames_failed", x.frames_failed}, {"skipped_stale", x.skipped_stale},
+                            {"dropped_queue_full", x.dropped_queue_full}, {"cursor_utc_ms", x.cursor_utc_ms}, {"store_state", x.store_state},
+                            {"avg_detect_ms", x.avg_detect_ms}, {"avg_embed_ms", x.avg_embed_ms}, {"avg_index_ms", x.avg_index_ms}, {"avg_frame_total_ms", x.avg_frame_total_ms}});
+        j["sources"] = srcs;
+    }
+    j["source_config"] = {{"camera", {{"enabled", A.camera_enabled}, {"live_scan", A.live_scan}, {"frames_per_minute", A.frames_per_minute}, {"queue_depth", A.queue_depth}}},
+                          {"display", {{"enabled", A.display_enabled}, {"live_scan", A.display_live_scan}, {"frames_per_minute", A.display_frames_per_minute},
+                                       {"queue_depth", A.display_queue_depth}, {"available", a.disp_src != nullptr}}}};
+    return j;
+}
+
+Response handle_auto_status(App& a, const Request& rq) {
+    ObjectIndex* oi = nullptr; VisualMemoryReader* rd = nullptr;
+    Response g = objects_gate(a, oi, rd); if (!oi) return g;
+    std::string src = "camera";
+    if (rq.query.count("source") && !(rq.query.at("source") == "camera" || rq.query.at("source") == "display")) return jerr(400, "invalid_argument", "source must be camera or display");
+    if (rq.query.count("source")) src = rq.query.at("source");
+    json j = indexer_json(a);
+    j["source_type"] = src;
+    const ObjectIndexSummary sm = oi->summary(src);
+    j["progress"] = {{"frames_processed", sm.frames_processed}, {"frames_with_objects", sm.frames_with_objects}, {"frames_failed", sm.frames_failed},
+                     {"oldest_processed_capture_utc_ms", sm.oldest_processed_capture_utc_ms}, {"newest_processed_capture_utc_ms", sm.newest_processed_capture_utc_ms},
+                     {"last_processed_utc_ms", sm.last_processed_utc_ms}};
+    j["objects"] = {{"total", sm.regions}, {"manual", sm.manual_regions}, {"auto", sm.auto_regions}, {"crops_retained", sm.crops_retained},
+                    {"crops_expired", sm.crops_expired}, {"crop_bytes", sm.crop_bytes}};
+    json bc = json::array(); for (const auto& [n, c] : sm.by_class) bc.push_back({{"class_name", n}, {"count", c}});
+    j["by_class"] = bc;
+    uint64_t stored = 0, with_image = 0;
+    if (src == "display") { if (a.disp_src) a.disp_src->counts(stored, with_image); j["frames"] = {{"stored", stored}, {"with_retained_jpeg", with_image}, {"available", a.disp_src != nullptr}, {"note", "Weston/VOP2 frames kept by Proof of Play (newest 5000 counted)"}}; }
+    else { if (rd) { const StoreSummary ss = rd->summary(); stored = ss.frames; with_image = ss.frames_with_image; } j["frames"] = {{"stored", stored}, {"with_retained_jpeg", with_image}, {"available", rd != nullptr}}; }
+    j["enabled"] = src == "display" ? (a.cfg.auto_objects.enabled && a.cfg.auto_objects.display_enabled) : (a.cfg.auto_objects.enabled && a.cfg.auto_objects.camera_enabled);
+    j["running"] = a.indexer != nullptr && a.indexer->has_source(src);
+    j["scope"] = object_scope_json(a, sm, src);
+    Response r = jok(j); r.cache = "no-store"; return r;
+}
+
+Response handle_auto_backfill(App& a, const Request& rq) {
+    ObjectIndex* oi = nullptr; VisualMemoryReader* rd = nullptr;
+    Response g = objects_gate(a, oi, rd); if (!oi) return g;
+    if (!a.indexer) return jerr(503, "not_enabled", "automatic object indexing is not enabled (visual_memory.objects.auto.enabled)");
+    json j; std::string why;
+    if (!body_json(rq, j, why)) return jerr(400, "invalid_argument", why);
+    BackfillRequest r; int64_t v;
+    if (j.contains("source")) {
+        if (!j["source"].is_string() || !(j["source"].get<std::string>() == "camera" || j["source"].get<std::string>() == "display")) return jerr(400, "invalid_argument", "source must be camera or display");
+        r.source = j["source"].get<std::string>();
+    }
+    if (!a.indexer->has_source(r.source)) return jerr(503, "not_enabled", r.source == "display" ? "automatic indexing of display frames is not enabled (visual_memory.objects.auto.display.enabled, and Proof of Play must be on)" : "automatic indexing of camera frames is not enabled");
+    if (r.source == "display") { r.kind = display_kind_ok(j.contains("kind") && j["kind"].is_string() ? j["kind"].get<std::string>() : std::string("history")); if (r.kind.empty()) return jerr(400, "invalid_argument", "kind must be history or checkpoint"); }
+    r.limit = a.cfg.auto_objects.max_backfill_frames;
+    if (get_int(j, "limit", v)) { if (v < 1 || v > a.cfg.auto_objects.max_backfill_frames) return jerr(400, "invalid_argument", "limit must be 1.." + std::to_string(a.cfg.auto_objects.max_backfill_frames)); r.limit = static_cast<int>(v); }
+    else r.limit = std::min(r.limit, 50);
+    if (get_int(j, "start", v)) r.start_utc_ms = v;
+    if (get_int(j, "end", v)) r.end_utc_ms = v;
+    r.retry_failed = j.value("retry_failed", false);
+    r.newest_first = j.value("newest_first", true);
+    if (j.contains("frame_ids")) {
+        if (!j["frame_ids"].is_array() || j["frame_ids"].size() > static_cast<size_t>(a.cfg.auto_objects.max_backfill_frames)) return jerr(400, "invalid_argument", "frame_ids must be an array of at most " + std::to_string(a.cfg.auto_objects.max_backfill_frames) + " ids");
+        for (const auto& x : j["frame_ids"]) { if (!x.is_number_integer() || x.get<int64_t>() < 1) return jerr(400, "invalid_argument", "bad frame id"); r.frame_ids.push_back(x.get<int64_t>()); }
+    }
+    std::string err;
+    if (!a.indexer->request_backfill(r, err)) return jerr(409, "busy", err);
+    Response out = jok({{"status", "queued"}, {"source", r.source}, {"limit", r.limit}, {"explicit_frames", r.frame_ids.size()}, {"retry_failed", r.retry_failed},
+                        {"note", "bounded backfill; poll /api/vm/objects/auto/status"}});
+    out.status = 202; out.cache = "no-store"; return out;
+}
+
+
+// ---------------------------------------------------------------- BrightSign display frames as object sources (Weston/VOP2 frames of Proof of Play)
+json display_frame_json(const ObjSrcFrame& f) {
+    const std::string base = "/api/vm/display-frames/" + f.kind + "/" + std::to_string(f.id);
+    return {{"source_type", "display"}, {"kind", f.kind}, {"id", f.id}, {"session_id", f.session_id}, {"session_link", f.session_id.empty() ? json(nullptr) : json("#pop?session=" + f.session_id)},
+            {"capture_utc_ms", f.capture_utc_ms}, {"playback_offset_ms", f.playback_offset_ms < 0 ? json(nullptr) : json(f.playback_offset_ms)},
+            {"time_uncertainty_ms", f.time_uncertainty_ms < 0 ? json(nullptr) : json(f.time_uncertainty_ms)},
+            {"expected_media_id", f.expected_media_id}, {"reported_media_id", f.reported_media_id.empty() ? json(nullptr) : json(f.reported_media_id)},
+            {"width", f.width}, {"height", f.height}, {"image_available", f.image_available}, {"sha256", f.sha256}, {"capture_method", f.capture_method}, {"provenance", f.provenance},
+            {"image_url", f.image_available ? json(base + "/image") : json(nullptr)}};
+}
+
+Response display_gate(App& a, DisplayObjectSource*& d) {
+    d = a.disp_src.get();
+    if (!d) return jerr(503, "not_enabled", "Proof of Play is not enabled: there are no display frames");
+    std::string e; if (!d->ensure_open(e)) return jerr(503, "store_unavailable", e);
+    return Response{200, "", "", ""};
+}
+
+// GET /api/vm/display-frames?session_id=&limit=&offset=  -> stored Weston/VOP2 frames, newest first (for choosing an object on a display frame)
+Response handle_display_frames(App& a, const Request& rq) {
+    DisplayObjectSource* d = nullptr; Response g = display_gate(a, d); if (!d) return g;
+    int64_t lim = 48, off = 0;
+    if (rq.query.count("limit") && (!parse_i64(rq.query.at("limit"), lim) || lim < 1 || lim > 200)) return jerr(400, "invalid_argument", "limit must be 1..200");
+    if (rq.query.count("offset") && (!parse_i64(rq.query.at("offset"), off) || off < 0)) return jerr(400, "invalid_argument", "offset must be >= 0");
+    const std::string sid = rq.query.count("session_id") ? rq.query.at("session_id").substr(0, 64) : std::string();
+    std::vector<ObjSrcFrame> all = d->list_range(0, 0, 5000, true), keep;
+    for (const auto& f : all) if (sid.empty() || f.session_id == sid) keep.push_back(f);
+    json arr = json::array();
+    for (size_t i = static_cast<size_t>(off); i < keep.size() && static_cast<int64_t>(arr.size()) < lim; ++i) arr.push_back(display_frame_json(keep[i]));
+    Response r = jok({{"label", "Weston/VOP2 display frames kept by Proof of Play (composed output of the BrightSign presentation, not the audience camera)"},
+                      {"total", keep.size()}, {"limit", lim}, {"offset", off}, {"frames", arr}});
+    r.cache = "no-store"; return r;
+}
+
+Response handle_display_frame_image(App& a, const std::string& kind, int64_t id, const Request& rq, bool crop) {
+    DisplayObjectSource* d = nullptr; Response g = display_gate(a, d); if (!d) return g;
+    if (display_kind_ok(kind).empty()) return jerr(400, "invalid_argument", "kind must be history or checkpoint");
+    std::vector<uint8_t> out; std::string err; int rc = 0;
+    if (!crop) rc = d->read_jpeg(kind, id, out, err);
+    else {
+        int64_t x, y, w, h, mx = 240;
+        auto q = [&](const char* k, int64_t& v) { return rq.query.count(k) && parse_i64(rq.query.at(k), v); };
+        if (!q("x", x) || !q("y", y) || !q("w", w) || !q("h", h)) return jerr(400, "invalid_argument", "x, y, w, h required");
+        if (rq.query.count("max") && (!parse_i64(rq.query.at("max"), mx) || mx < 32 || mx > 640)) return jerr(400, "invalid_argument", "max must be 32..640");
+        ObjectIndex scratch({a.cfg.storage_root});                       // crop generation needs no database
+        rc = scratch.crop_jpeg(*d, kind, id, {static_cast<int>(std::max<int64_t>(-1, std::min<int64_t>(x, 100000))), static_cast<int>(std::max<int64_t>(-1, std::min<int64_t>(y, 100000))),
+                                              static_cast<int>(std::min<int64_t>(w, 100000)), static_cast<int>(std::min<int64_t>(h, 100000))}, static_cast<int>(mx), 88, out, err);
+        if (rc == 4) return jerr(400, "invalid_roi", err);
+    }
+    if (rc == 1) return jerr(404, "not_found", "no such display frame");
+    if (rc == 2) return jerr(410, "image_expired", "the display frame JPEG was removed by retention; its metadata is kept");
+    if (rc == 3) return jerr(404, "image_missing", "the display frame JPEG is missing or unreadable");
+    if (rc != 0) return jerr(500, "internal", "image failed");
+    Response r; r.ctype = "image/jpeg"; r.cache = "private, max-age=300";
+    r.body.assign(reinterpret_cast<const char*>(out.data()), out.size());
+    return r;
+}
+
 Response handle_objects_list(App& a, const Request& rq) {
     ObjectIndex* oi = nullptr; VisualMemoryReader* rd = nullptr;
     Response g = objects_gate(a, oi, rd); if (!oi) return g;
@@ -926,6 +1253,12 @@ Response handle_objects_list(App& a, const Request& rq) {
     if (rq.query.count("end") && parse_i64(rq.query.at("end"), v)) f.end_utc_ms = v;
     if (rq.query.count("source")) f.source_id = rq.query.at("source");
     if (rq.query.count("label")) f.label = rq.query.at("label");
+    f.source_type = "camera";                                                // never mixes the sources by default
+    if (rq.query.count("source_type") && !parse_scope(rq.query.at("source_type"), f.source_type)) return jerr(400, "invalid_argument", "source_type must be camera, display or all");
+    if (rq.query.count("session_id")) f.pop_session_id = rq.query.at("session_id").substr(0, 64);
+    if (rq.query.count("kind")) f.source_kind = rq.query.at("kind").substr(0, 16);
+    if (rq.query.count("origin")) { f.index_origin = rq.query.at("origin"); if (f.index_origin != "manual" && f.index_origin != "auto") return jerr(400, "invalid_argument", "origin must be manual or auto"); }
+    if (rq.query.count("class")) f.class_name = rq.query.at("class").substr(0, 64);
     if (rq.query.count("frame_id") && parse_i64(rq.query.at("frame_id"), v) && v > 0) f.frame_id = v;
     if (rq.query.count("limit")) { if (!parse_i64(rq.query.at("limit"), lim) || lim < 1 || lim > 100) return jerr(400, "invalid_argument", "limit must be 1..100"); }
     if (rq.query.count("offset")) { if (!parse_i64(rq.query.at("offset"), off) || off < 0) return jerr(400, "invalid_argument", "offset must be >= 0"); }
@@ -940,8 +1273,11 @@ Response handle_object_detail(App& a, int64_t id) {
     Response g = objects_gate(a, oi, rd); if (!oi) return g;
     ObjectRegion r; if (!oi->get_region(id, r)) return jerr(404, "not_found", "no such object region");
     json j = region_json(r);
-    FrameDetail fd;
-    if (rd->get_frame(r.frame_id, fd)) { j["image_available"] = fd.record.frame.image_available; j["image_exists"] = fd.record.image_exists; }
+    ReqSrcs S(a, rd);
+    if (ObjectFrameSource* fs = S.get(r.source_type)) {
+        std::string oe; ObjSrcFrame sf;
+        if (fs->ensure_open(oe) && fs->get(r.source_kind, r.frame_id, sf)) { j["image_available"] = sf.image_available; j["image_exists"] = sf.image_exists; }
+    }
     return jok(j);
 }
 
@@ -951,10 +1287,22 @@ Response handle_object_image(App& a, int64_t id, const Request& rq) {
     int64_t mx = 240;
     if (rq.query.count("max") && (!parse_i64(rq.query.at("max"), mx) || mx < 32 || mx > 640)) return jerr(400, "invalid_argument", "max must be 32..640");
     std::vector<uint8_t> out; std::string err;
-    const int rc = oi->region_crop_jpeg(*rd, id, static_cast<int>(mx), 88, out, err);
-    if (rc == 1) return jerr(404, "not_found", "no such object region or frame");
-    if (rc == 2) return jerr(410, "image_expired", "source frame JPEG expired; the embedding and bounding box are retained");
-    if (rc == 3) return jerr(404, "image_missing", "source frame JPEG is missing");
+    ObjectRegion reg; if (!oi->get_region(id, reg)) return jerr(404, "not_found", "no such object region");
+    // 1. the object's OWN crop image (independent of the full-frame retention)
+    int src = rq.query.count("source") && rq.query.at("source") == "frame" ? 1 : 0;
+    std::string crop_err; int crc = 99;
+    if (!src) { crc = oi->stored_crop_jpeg(id, out, crop_err); if (crc == 0) { Response r; r.ctype = "image/jpeg"; r.cache = "private, max-age=300"; r.body.assign(reinterpret_cast<const char*>(out.data()), out.size()); return r; } }
+    // 2. otherwise regenerate it from the full frame while that is still retained
+    ReqSrcs S(a, rd);
+    const int rc = oi->region_crop_jpeg(S.all(), id, static_cast<int>(mx), 88, out, err);
+    if (rc == 1 || rc == 2 || rc == 3) {                    // 1: the parent frame record itself has been removed by retention
+        const std::string why = reg.crop_state == "expired" ? "the object crop image and the source frame JPEG have both expired"
+                              : reg.crop_state == "retained" ? "the object crop image is missing and the source frame JPEG has expired"
+                              : "no crop image was stored for this object and the source frame JPEG has expired";
+        Response r = jerr(rc == 3 ? 404 : 410, rc == 3 ? "image_missing" : "image_expired",
+                          (rc == 1 ? std::string("the source frame record no longer exists; ") + why : why) + "; the embedding, bounding box and timestamp are retained");
+        return r;
+    }
     if (rc != 0) return jerr(500, "internal", "crop failed");
     Response r; r.ctype = "image/jpeg"; r.cache = "private, max-age=300";
     r.body.assign(reinterpret_cast<const char*>(out.data()), out.size());
@@ -971,11 +1319,17 @@ Response handle_object_index(App& a, const Request& rq, int fd) {
     if (!get_int(j, "frame_id", frame_id) || frame_id < 1) return jerr(400, "invalid_argument", "frame_id required");
     if (!get_roi(j, roi, why)) return jerr(400, "invalid_argument", why);
     std::string label = j.contains("label") && j["label"].is_string() ? j["label"].get<std::string>() : std::string();
+    std::string stype = j.contains("source_type") && j["source_type"].is_string() ? j["source_type"].get<std::string>() : std::string("camera");
+    if (stype != "camera" && stype != "display") return jerr(400, "invalid_argument", "source_type must be camera or display");
+    std::string kind = stype == "display" ? display_kind_ok(j.contains("kind") && j["kind"].is_string() ? j["kind"].get<std::string>() : std::string("history")) : std::string();
+    if (stype == "display" && kind.empty()) return jerr(400, "invalid_argument", "kind must be history or checkpoint for a display frame");
+    ReqSrcs S(a, rd); ObjectFrameSource* fsrc = S.get(stype);
+    if (!fsrc) return jerr(503, "store_unavailable", stype == "display" ? "Proof of Play is not enabled: there are no display frames" : "the camera frame store is not available");
     NpuGuard ng(a);
     if (!ng.held) return jerr(429, "busy", "another search or indexing operation is running");
     auto prov = a.get_provider(why); if (!prov) return jerr(503, "provider_failed", why);
     ObjectIndexResult res;
-    run_watched(a, fd, [] {}, [&] { res = oi->index_region(*rd, *prov, frame_id, roi, label); });
+    run_watched(a, fd, [] {}, [&] { res = oi->index_region(*fsrc, *prov, kind, frame_id, roi, label); });
     using C = ObjectIndexResult::Code;
     int http = 200; std::string code = "ok";
     switch (res.code) {
@@ -997,6 +1351,7 @@ Response handle_object_index(App& a, const Request& rq, int fd) {
     if (res.code == C::Indexed) {
         const int64_t cutoff = a.cfg.objects_retention_days > 0 ? now_ms() - static_cast<int64_t>(a.cfg.objects_retention_days) * 86400000LL : 0;
         pruned = oi->prune(cutoff, a.cfg.objects_max_regions);
+        object_crop_housekeeping(a, *oi);
     }
     json out = {{"label", kObjLabel}, {"status", code}, {"region", region_json(reg)}, {"elapsed_ms", res.elapsed_ms}, {"pruned", pruned},
                 {"model", model_json(prov->spec())}};
@@ -1016,6 +1371,11 @@ Response handle_object_search(App& a, const Request& rq, int fd) {
     if (get_int(j, "end", v)) o.end_utc_ms = v;
     if (j.contains("source") && j["source"].is_string()) o.source_id = j["source"].get<std::string>();
     if (j.contains("label") && j["label"].is_string()) o.label = j["label"].get<std::string>();
+    if (j.contains("origin") && j["origin"].is_string()) {
+        o.index_origin = j["origin"].get<std::string>();
+        if (!o.index_origin.empty() && o.index_origin != "manual" && o.index_origin != "auto") return jerr(400, "invalid_argument", "origin must be manual or auto");
+    }
+    if (j.contains("class") && j["class"].is_string()) o.class_name = j["class"].get<std::string>().substr(0, 64);
     if (j.contains("min_similarity") && j["min_similarity"].is_number()) {
         const double m = j["min_similarity"].get<double>();
         if (!std::isfinite(m) || m < -1 || m > 1) return jerr(400, "invalid_argument", "min_similarity must be in [-1,1]");
@@ -1023,11 +1383,25 @@ Response handle_object_search(App& a, const Request& rq, int fd) {
     }
     o.require_image = j.value("require_image", false);
     int64_t frame_id = 0, region_id = 0; Roi roi; const bool by_region = get_int(j, "region_id", region_id);
+    // The query: a stored region, or a box on a stored frame of `frame_source_type` (default camera; display frames also need `kind`).
+    std::string qtype = j.contains("frame_source_type") && j["frame_source_type"].is_string() ? j["frame_source_type"].get<std::string>() : std::string("camera");
+    if (qtype != "camera" && qtype != "display") return jerr(400, "invalid_argument", "frame_source_type must be camera or display");
+    std::string qkind = qtype == "display" ? display_kind_ok(j.contains("kind") && j["kind"].is_string() ? j["kind"].get<std::string>() : std::string("history")) : std::string();
+    if (qtype == "display" && qkind.empty()) return jerr(400, "invalid_argument", "kind must be history or checkpoint for a display frame");
+    std::string scope;                                           // which objects are searched: never mixed unless "all" is asked for explicitly
+    if (j.contains("source_type") && j["source_type"].is_string()) { if (!parse_scope(j["source_type"].get<std::string>(), scope)) return jerr(400, "invalid_argument", "source_type must be camera, display or all"); }
+    else if (by_region) {                                        // default: the source of the query region
+        ObjectRegion qr; if (!oi->get_region(region_id, qr)) return jerr(400, "invalid_argument", "unknown region"); scope = qr.source_type;
+    } else scope = qtype;
+    o.source_type = scope;
     if (by_region) { if (region_id < 1) return jerr(400, "invalid_argument", "region_id must be >= 1"); }
     else {
         if (!get_int(j, "frame_id", frame_id) || frame_id < 1) return jerr(400, "invalid_argument", "region_id, or frame_id with x,y,w,h, required");
         if (!get_roi(j, roi, why)) return jerr(400, "invalid_argument", why);
     }
+    ReqSrcs S(a, rd);
+    ObjectFrameSource* qsrc = by_region ? nullptr : S.get(qtype);
+    if (!by_region && !qsrc) return jerr(503, "store_unavailable", qtype == "display" ? "Proof of Play is not enabled: there are no display frames" : "the camera frame store is not available");
     NpuGuard ng(a);
     if (!ng.held) return jerr(429, "busy", "another search or indexing operation is running");
     const int64_t t_start = steady_ms();
@@ -1035,7 +1409,7 @@ Response handle_object_search(App& a, const Request& rq, int fd) {
     if (!by_region) { prov = a.get_provider(why); if (!prov) return jerr(503, "provider_failed", why); }
     ObjectSearchResult res;
     const int cancelled = run_watched(a, fd, [oi] { oi->cancel(); }, [&] {
-        res = by_region ? oi->search_by_region(rd, region_id, o) : oi->search_by_roi(*rd, *prov, frame_id, roi, o);
+        res = by_region ? oi->search_by_region(S.all(), region_id, o) : oi->search_by_roi(*qsrc, S.all(), *prov, qkind, frame_id, roi, o);
     });
     std::string code = code_name(res.status.code); int http = 200;
     if (res.status.code == SearchStatus::Code::Cancelled) { code = cancelled == 1 ? "timeout" : "cancelled"; http = cancelled == 1 ? 504 : 200; }
@@ -1044,11 +1418,12 @@ Response handle_object_search(App& a, const Request& rq, int fd) {
              res.status.code == SearchStatus::Code::InvalidVector || res.status.code == SearchStatus::Code::ModelMismatch) http = 400;
     else if (res.status.code == SearchStatus::Code::DatabaseError) http = 500;
     json hits = json::array(); int rank = 0; for (auto& h : res.hits) hits.push_back(hit_json(h, ++rank));
-    const ObjectIndexSummary sm = oi->summary();
+    const ObjectIndexSummary sm = oi->summary(scope);
     json out = {{"label", kObjLabel},
                 {"query", by_region ? json{{"type", "region"}, {"region_id", region_id}}
-                                    : json{{"type", "roi"}, {"frame_id", frame_id}, {"bbox", {{"x", roi.x}, {"y", roi.y}, {"w", roi.w}, {"h", roi.h}}}}},
+                                    : json{{"type", "roi"}, {"frame_source_type", qtype}, {"kind", qkind}, {"frame_id", frame_id}, {"bbox", {{"x", roi.x}, {"y", roi.y}, {"w", roi.w}, {"h", roi.h}}}}},
                 {"index_regions", sm.regions},
+                {"scope", object_scope_json(a, sm, scope)},
                 {"status", {{"code", code}, {"message", res.status.message}, {"elapsed_ms", res.status.elapsed_ms}, {"candidates_scanned", res.index_size},
                             {"total_ms", static_cast<double>(steady_ms() - t_start)}}},
                 {"results", hits}};
@@ -1247,6 +1622,32 @@ Response route_pop(App& a, const Request& rq) {
 Response route_display(App& a, const Request& rq) {
     if (rq.method != "GET" && rq.method != "HEAD") return jerr(405, "method_not_allowed", "GET only");
     const std::string sub = rq.path.substr(std::string("/api/display/").size());
+    if (sub.rfind("history/", 0) == 0) {                                                  // time-based lookup of stored display frames (PoP database; no display provider needed)
+        if (!a.pop || !a.cfg.pop.enabled) return jerr(503, "pop_disabled", "Proof of Play is not enabled (visual_memory.pop.enabled), so there is no display history to look up");
+        const std::string what = sub.substr(8);
+        auto q = [&](const char* k) { auto it = rq.query.find(k); return it == rq.query.end() ? std::string() : it->second; };
+        if (what == "info") { Response r = jok(a.pop->display_time_info()); r.cache = "no-store"; return r; }
+        if (what != "nearest" && what != "search") return jerr(404, "not_found", "unknown route");
+        int64_t t = 0; std::string err;
+        if (!q("time").empty()) { if (!argus_pop::parse_iso8601_utc(q("time"), t, err)) return jerr(400, "invalid_argument", "time: " + err); }
+        else if (!q("utc_ms").empty()) { if (!parse_i64(q("utc_ms"), t) || t < 0 || t > 7258118400000LL) return jerr(400, "invalid_argument", "utc_ms must be epoch milliseconds"); }
+        else return jerr(400, "invalid_argument", "time is required (ISO-8601 with an explicit offset, e.g. 2026-11-07T14:30:00Z)");
+        const std::string sid = q("session_id");
+        if (!sid.empty() && !safe_id(sid)) return jerr(400, "invalid_argument", "bad session_id");
+        Response r;
+        if (what == "nearest") {
+            int64_t tol = 2000;
+            if (!q("max_diff_ms").empty() && (!parse_i64(q("max_diff_ms"), tol) || tol < 0 || tol > 3600000)) return jerr(400, "invalid_argument", "max_diff_ms must be 0..3600000");
+            r = jok(a.pop->display_nearest(t, tol, sid));
+        } else {
+            int64_t w = 30, lim = 60;
+            if (!q("window_s").empty() && (!parse_i64(q("window_s"), w) || w < 1 || w > 3600)) return jerr(400, "invalid_argument", "window_s must be 1..3600");
+            if (!q("limit").empty() && (!parse_i64(q("limit"), lim) || lim < 1 || lim > 600)) return jerr(400, "invalid_argument", "limit must be 1..600");
+            r = jok(a.pop->display_time_search(t, w * 1000, static_cast<int>(lim)));
+        }
+        r.cache = "no-store";
+        return r;
+    }
     if (!a.display) {
         if (sub == "status") return jok(json{{"enabled", false}, {"state", "disabled"},
                                              {"detail", "visual_memory.display.enabled is false in the active configuration"}});
@@ -1296,6 +1697,13 @@ Response route(App& a, const Request& rq, int fd) {
         return post ? handle_object_index(a, rq, fd) : jerr(405, "method_not_allowed", "GET or POST only");
     }
     if (sub == "objects/search") return post ? handle_object_search(a, rq, fd) : jerr(405, "method_not_allowed", "POST only");
+    if (sub == "objects/auto/status") return get ? handle_auto_status(a, rq) : jerr(405, "method_not_allowed", "GET only");
+    if (sub == "objects/auto/backfill") return post ? handle_auto_backfill(a, rq) : jerr(405, "method_not_allowed", "POST only");
+    if (sub == "objects/auto/backfill/cancel") {
+        if (!post) return jerr(405, "method_not_allowed", "POST only");
+        if (!a.indexer) return jerr(503, "not_enabled", "automatic object indexing is not enabled");
+        a.indexer->cancel_backfill(); return jok({{"status", "cancel_requested"}});
+    }
     if (sub.rfind("objects/", 0) == 0) {
         if (!get) return jerr(405, "method_not_allowed", "GET only");
         std::string rest = sub.substr(8), tail;
@@ -1305,6 +1713,16 @@ Response route(App& a, const Request& rq, int fd) {
         if (!parse_i64(rest, id) || id < 1) return jerr(400, "invalid_argument", "bad object id");
         if (tail.empty()) return handle_object_detail(a, id);
         if (tail == "image") return handle_object_image(a, id, rq);
+        return jerr(404, "not_found", "unknown route");
+    }
+    if (sub == "display-frames") return get ? handle_display_frames(a, rq) : jerr(405, "method_not_allowed", "GET only");
+    if (sub.rfind("display-frames/", 0) == 0) {
+        if (!get) return jerr(405, "method_not_allowed", "GET only");
+        const auto seg = split_path(sub.substr(15));                          // <kind>/<id>/(image|crop)
+        int64_t id;
+        if (seg.size() != 3 || !parse_i64(seg[1], id) || id < 1) return jerr(400, "invalid_argument", "expected display-frames/<kind>/<id>/image|crop");
+        if (seg[2] == "image") return handle_display_frame_image(a, seg[0], id, rq, false);
+        if (seg[2] == "crop") return handle_display_frame_image(a, seg[0], id, rq, true);
         return jerr(404, "not_found", "unknown route");
     }
     if (sub.rfind("frames/", 0) == 0) {
@@ -1345,6 +1763,7 @@ void serve_conn(App& a, int fd) {
 } // namespace
 
 int main(int argc, char** argv) {
+    ::prctl(PR_SET_NAME, "vm_api_server", 0, 0, 0);      // an in-place restart (execv of /proc/self/exe) would otherwise be called "exe" and vanish from /api/pop/system
     App app;
     int port = 20310;
     std::string cfg_path;
@@ -1359,6 +1778,7 @@ int main(int argc, char** argv) {
         else if (a == "--viewer") app.viewer = true;
         else if (a == "--base-dir") app.base_dir = next();
         else if (a == "--provider") app.provider_kind = next();      // auto | mock (dev/tests only)
+        else if (a == "--detector") app.detector_kind = next();      // auto | mock (dev/tests only)
         else if (a == "--root") { app.cfg.storage_root = next(); }   // dev: bypass config
         else if (a == "--no-reexec") no_reexec = true;               // do not restart in place when the config file changes
         else { std::fprintf(stderr, "usage: vm_api_server --config <argus-config.json> [--port N] [--status-file F] [--base-dir D] [--provider auto|mock]\n"); return 2; }
@@ -1401,6 +1821,38 @@ int main(int argc, char** argv) {
         if (app.display) app.pop->set_display(app.display.get());
         std::string perr;
         if (!app.pop->start(perr)) { std::fprintf(stderr, "vm_api_server: Proof of Play store unavailable: %s\n", perr.c_str()); app.pop.reset(); }
+        else if (app.cfg.objects_enabled) app.disp_src = std::make_unique<DisplayObjectSource>(app.pop->store());   // D4: Weston/VOP2 frames as an object source
+    }
+
+    if (app.cfg.configured && app.cfg.objects_enabled && app.cfg.embedding && app.cfg.auto_objects.enabled) {   // D4 automatic object indexing worker
+        std::string e2;
+        app.ix_objects = std::make_unique<ObjectIndex>(app.object_index_config());
+        if (!app.ix_objects->open(e2)) { std::fprintf(stderr, "vm_api_server: object index unavailable for automatic indexing: %s\n", e2.c_str()); app.ix_objects.reset(); }
+        else {
+            const auto& A = app.cfg.auto_objects;
+            ObjectIndexerConfig ic;
+            ic.live_scan = A.live_scan; ic.class_ids = A.class_ids; ic.min_confidence = A.min_confidence; ic.max_objects_per_frame = A.max_objects_per_frame;
+            ic.min_box_px = A.min_box_px; ic.frames_per_minute = A.frames_per_minute; ic.queue_depth = A.queue_depth;
+            ic.max_backfill_frames = A.max_backfill_frames; ic.backfill_pause_ms = A.backfill_pause_ms;
+            std::vector<IndexerSource> srcs;
+            if (A.camera_enabled) {          // the camera store is written by Argus and may not exist yet at boot: the source opens it lazily
+                app.ix_reader = std::make_unique<VisualMemoryReader>(ReaderConfig{app.cfg.storage_root});
+                app.ix_cam_src = std::make_unique<CameraObjectSource>(*app.ix_reader);
+                srcs.push_back(IndexerSource{app.ix_cam_src.get(), A.live_scan, A.frames_per_minute, A.queue_depth});
+            }
+            if (A.display_enabled && app.disp_src) srcs.push_back(IndexerSource{app.disp_src.get(), A.display_live_scan, A.display_frames_per_minute, A.display_queue_depth});
+            else if (A.display_enabled) std::fprintf(stderr, "vm_api_server: display object indexing requested but Proof of Play is not enabled: skipped\n");
+            if (srcs.empty()) { std::fprintf(stderr, "vm_api_server: automatic object indexing enabled but no frame source is enabled\n"); app.ix_objects.reset(); }
+            else {
+                // ONE worker, ONE detector context and ONE embedding provider serve every source (no duplicate models)
+                app.indexer = std::make_unique<ObjectIndexer>(ic, *app.ix_objects, srcs,
+                    [&app](std::string& why) -> std::shared_ptr<EmbeddingProvider> { auto p = app.get_provider(why); app.last_search_ms = steady_ms(); return p; },
+                    [&app](std::string& why) { return make_detector(app, why); });
+                app.indexer->start();
+                std::fprintf(stderr, "vm_api_server: automatic object indexing enabled (sources=%zu classes=%zu camera_live=%d display_live=%d conf>=%.2f)\n", srcs.size(), A.class_ids.size(),
+                             A.camera_enabled && A.live_scan, A.display_enabled && A.display_live_scan, A.min_confidence);
+            }
+        }
     }
 
     int ls = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
@@ -1422,6 +1874,7 @@ int main(int argc, char** argv) {
         while (!g_stop) {
             for (int i = 0; i < 10 && !g_stop; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(100));
             if (++tick % 5 == 0) app.maybe_unload();
+            if (tick % 300 == 150 && app.cfg.configured && app.cfg.objects_enabled) object_housekeeping(app);          // every ~5 min
             if (!no_reexec && have_cfg && tick % 2 == 0) {                              // every 2 s
                 struct stat st{};
                 if (::stat(cfg_path.c_str(), &st) == 0 && (st.st_mtim.tv_sec * 1000000000LL + st.st_mtim.tv_nsec != seen_mtime_ns || st.st_size != seen_size)) {
@@ -1449,12 +1902,13 @@ int main(int argc, char** argv) {
     }
     ::close(ls);
     janitor.join();
+    if (app.indexer) app.indexer->stop();                                   // an in-flight frame finishes; nothing is left half-written
     if (app.pop) app.pop->stop();
     if (app.display) app.display->stop();
     if (app.bridge) app.bridge->stop();
     for (int i = 0; i < 50 && g_conn.load() > 0; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(100));
     if (g_reexec.load()) {                                                  // new configuration: start again from scratch with the same arguments
-        app.pop.reset(); app.display.reset(); app.bridge.reset();
+        app.indexer.reset(); app.ix_cam_src.reset(); app.disp_src.reset(); app.ix_objects.reset(); app.ix_reader.reset(); app.pop.reset(); app.display.reset(); app.bridge.reset();
         std::vector<char*> av; for (int i = 0; i < argc; ++i) av.push_back(argv[i]); av.push_back(nullptr);
         ::execv("/proc/self/exe", av.data());
         std::perror("vm_api_server: re-exec failed");

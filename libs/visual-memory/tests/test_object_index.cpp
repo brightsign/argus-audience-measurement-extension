@@ -129,7 +129,7 @@ TEST(ObjectIndex, IndexDuplicatePersistAndRetrieval) {
     VisualMemoryReader r({fx.dir.str()}); ASSERT_TRUE(r.open(e));
     ObjectIndex oi({fx.dir.str()}); ASSERT_TRUE(oi.open(e)) << e;
     EXPECT_EQ(oi.summary().regions, 8u);
-    EXPECT_EQ(oi.summary().schema_version, 1);
+    EXPECT_EQ(oi.summary().schema_version, 3);   // v3 (migrations: test_object_auto.cpp, test_object_display.cpp)
     MockEmbeddingProvider prov(32);
     // query: unindexed frames 8..11 (colour = i%4, third background) -> top-1 must have the same colour label
     const char* names[4] = {"red", "green", "blue", "yellow"};
@@ -200,7 +200,8 @@ TEST(ObjectIndex, MissingJpegHandledGracefully) {
     Fixture fx; fx.build(4);
     std::string e;
     VisualMemoryReader r({fx.dir.str()}); ASSERT_TRUE(r.open(e));
-    ObjectIndex oi({fx.dir.str()}); ASSERT_TRUE(oi.open(e));
+    ObjectIndexConfig oc; oc.root_directory = fx.dir.str(); oc.store_crops = false;   // no stored crop: the parent JPEG is the only image
+    ObjectIndex oi(oc); ASSERT_TRUE(oi.open(e));
     MockEmbeddingProvider prov(32);
     ASSERT_TRUE(oi.index_region(r, prov, fx.frame_ids[0], Fixture::roi_of(0), "a").ok());
     ASSERT_TRUE(oi.index_region(r, prov, fx.frame_ids[1], Fixture::roi_of(1), "b").ok());

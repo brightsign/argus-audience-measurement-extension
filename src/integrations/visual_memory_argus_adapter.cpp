@@ -84,6 +84,11 @@ void write_status_snapshot(visualmemory::VisualMemory& vm,
                    {"max_queue_depth", s.max_queue_depth}, {"bytes_on_disk", s.bytes_on_disk},
                    {"last_commit_utc_ms", s.last_commit_utc_ms}, {"retention_pending", s.retention_pending},
                    {"retention_slices", s.retention_slices}};
+    {   // details of the most recent database failure (the counter above is cumulative since the process started)
+        const auto& e = s.last_database_error;
+        j["stage1"]["last_database_error"] = {{"count", e.count}, {"code", e.code}, {"extended_code", e.extended_code}, {"code_name", e.code_name},
+                                              {"message", e.message}, {"operation", e.operation}, {"utc_ms", e.utc_ms}, {"frame_sequence", e.frame_sequence}};
+    }
     auto lat = [](const visualmemory::LatencyStats& l) {
         return json{{"count", l.count}, {"p50_ms", l.p50_ms}, {"p95_ms", l.p95_ms}, {"p99_ms", l.p99_ms}, {"max_ms", l.max_ms}};
     };

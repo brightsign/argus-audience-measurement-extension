@@ -15,6 +15,7 @@
 #include <fstream>
 #include <map>
 #include <random>
+#include <set>
 #include <sstream>
 
 namespace fs = std::filesystem;
@@ -830,6 +831,247 @@ bool PopService::search_display(const std::vector<uint8_t>& jpeg, const std::map
     }
     http = 200;
     return true;
+}
+
+// ======================================================================== time-based display history lookup
+bool parse_iso8601_utc(const std::string& in, int64_t& out, std::string& err) {
+    size_t i = 0; const size_t n = in.size();
+    auto num = [&](int digits, int& v) { if (i + digits > n) return false; v = 0; for (int k = 0; k < digits; ++k) { const char ch = in[i + k]; if (ch < '0' || ch > '9') return false; v = v * 10 + (ch - '0'); } i += digits; return true; };
+    auto lit = [&](char ch) { if (i < n && in[i] == ch) { ++i; return true; } return false; };
+    int Y = 0, M = 0, D = 0, h = 0, mi = 0, sec = 0; int64_t frac_ms = 0;
+    if (!num(4, Y) || !lit('-') || !num(2, M) || !lit('-') || !num(2, D) || !(lit('T') || lit('t') || lit(' '))) { err = "expected an ISO-8601 timestamp such as 2026-11-07T14:30:00Z"; return false; }
+    if (!num(2, h) || !lit(':') || !num(2, mi)) { err = "expected hh:mm after the date"; return false; }
+    if (lit(':')) { if (!num(2, sec)) { err = "bad seconds"; return false; } }
+    if (lit('.') || lit(',')) {
+        int digits = 0; int64_t scale = 100;
+        while (i < n && in[i] >= '0' && in[i] <= '9') { if (digits < 3) { frac_ms += (in[i] - '0') * scale; scale /= 10; } ++digits; ++i; }
+        if (!digits) { err = "bad fractional seconds"; return false; }
+    }
+    int64_t off_min = 0;
+    if (i < n && (in[i] == 'Z' || in[i] == 'z')) { ++i; }
+    else if (i < n && (in[i] == '+' || in[i] == '-' || in[i] == ' ')) {
+        const int sign = in[i] == '-' ? -1 : 1; ++i;
+        int oh = 0, om = 0;
+        if (!num(2, oh)) { err = "bad UTC offset"; return false; }
+        lit(':'); if (i < n && !num(2, om)) { err = "bad UTC offset"; return false; }
+        if (oh > 23 || om > 59) { err = "UTC offset out of range"; return false; }
+        off_min = sign * (oh * 60 + om);
+    } else { err = "the timestamp needs an explicit UTC offset (Z or +-HH:MM): a wall-clock time without one is ambiguous"; return false; }
+    if (i != n) { err = "unexpected characters after the timestamp"; return false; }
+    if (Y < 1970 || Y > 2200 || M < 1 || M > 12 || D < 1 || h > 23 || mi > 59 || sec > 59) { err = "date or time out of range"; return false; }
+    static const int dim[] = {31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31};
+    const bool leap = (Y % 4 == 0 && Y % 100 != 0) || Y % 400 == 0;
+    if (D > dim[M - 1] + (M == 2 && leap ? 1 : 0)) { err = "no such calendar day"; return false; }
+    const int y = Y - (M <= 2); const int64_t era = (y >= 0 ? y : y - 399) / 400; const int64_t yoe = y - era * 400;
+    const int64_t doy = (153 * (M + (M > 2 ? -3 : 9)) + 2) / 5 + D - 1; const int64_t doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    const int64_t days = era * 146097 + doe - 719468;
+    out = (((days * 24 + h) * 60 + mi - off_min) * 60 + sec) * 1000 + frac_ms;
+    return true;
+}
+
+std::string format_iso8601_utc(int64_t ms) {
+    int64_t secs = ms / 1000; int64_t rem = ms % 1000; if (rem < 0) { rem += 1000; --secs; }
+    int64_t days = secs / 86400; int64_t sod = secs % 86400; if (sod < 0) { sod += 86400; --days; }
+    const int64_t z = days + 719468; const int64_t era = (z >= 0 ? z : z - 146096) / 146097; const int64_t doe = z - era * 146097;
+    const int64_t yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365; int64_t y = yoe + era * 400;
+    const int64_t doy = doe - (365 * yoe + yoe / 4 - yoe / 100); const int64_t mp = (5 * doy + 2) / 153;
+    const int d = static_cast<int>(doy - (153 * mp + 2) / 5 + 1); const int m = static_cast<int>(mp < 10 ? mp + 3 : mp - 9); y += (m <= 2);
+    char b[40]; std::snprintf(b, sizeof(b), "%04d-%02d-%02dT%02d:%02d:%02d.%03dZ", static_cast<int>(y), m, d, static_cast<int>(sod / 3600), static_cast<int>(sod % 3600 / 60), static_cast<int>(sod % 60), static_cast<int>(rem));
+    return b;
+}
+
+namespace {
+std::string frame_image_url(const DisplayFrameRef& f) {
+    if (f.frame_id) return "/api/pop/history/" + std::to_string(f.frame_id) + "/image";
+    return "/api/pop/sessions/" + f.session_id + "/evidence/" + std::to_string(f.evidence_id) + "/image";
+}
+}  // namespace
+
+json PopService::time_session_json(const PopSession& s, int64_t req) {
+    Verification v; const bool have = store_->get_verification(s.session_id, v);
+    const bool reported = !s.played_media_id.empty();
+    json pb = {{"expected_media_id", s.expected_media_id}, {"reported_media_id", reported ? json(s.played_media_id) : json(nullptr)}, {"player_reported", reported},
+               {"reported_matches_schedule", reported ? json(s.played_media_id == s.expected_media_id) : json(nullptr)}, {"state", s.state}, {"end_reason", s.end_reason},
+               {"start_utc_ms", s.start_utc_ms ? json(s.start_utc_ms) : json(nullptr)}, {"end_utc_ms", s.end_utc_ms ? json(s.end_utc_ms) : json(nullptr)},
+               {"start_utc", s.start_utc_ms ? json(format_iso8601_utc(s.start_utc_ms)) : json(nullptr)}, {"end_utc", s.end_utc_ms ? json(format_iso8601_utc(s.end_utc_ms)) : json(nullptr)},
+               {"scheduled_utc_ms", s.scheduled_utc_ms}, {"actual_play_ms", s.actual_play_ms}, {"slot_ms", s.slot_ms},
+               {"basis", "reported by the player application (playback events); not derived from the images"}};
+    if (s.start_utc_ms) {
+        const int64_t end = s.end_utc_ms ? s.end_utc_ms : s.start_utc_ms + s.slot_ms;
+        pb["requested_offset_ms"] = req - s.start_utc_ms;
+        pb["requested_within_reported_play"] = req >= s.start_utc_ms && req <= end;
+    }
+    std::string verdict = "not_established";
+    if (have && (v.status == PopStatus::PlaybackCorroborated || v.status == PopStatus::VisualMatch)) verdict = "matches_expected";
+    else if (have && v.status == PopStatus::Mismatch) verdict = "contradicts_expected";
+    json vis = {{"status", have ? to_string(v.status) : "scheduled"}, {"status_label", have ? pop_status_label(v.status) : "Scheduled"}, {"reason", have ? v.reason : "no verification yet"},
+                {"visual_verdict", verdict}, {"visually_corroborated", verdict == "matches_expected"},
+                {"checkpoints", {{"ok", have ? v.frames_ok : 0}, {"matched", have ? v.frames_matched : 0}, {"mismatched", have ? v.frames_mismatched : 0}, {"failed", have ? v.frames_failed : 0}}},
+                {"basis", "the three verification checkpoints (3, 15, 27 s) compared with the expected advertisement; unchanged by display history"}};
+    if (have) { vis["mean_sim_expected"] = v.mean_sim_expected; vis["min_sim_expected"] = v.min_sim_expected; }
+    return {{"session_id", s.session_id}, {"session_url", "/api/pop/sessions/" + s.session_id}, {"playback", pb}, {"visual_verification", vis}};
+}
+
+json PopService::time_frame_json(const DisplayFrameRef& f, int64_t req, const FrameSim* sim) {
+    const int64_t diff = f.utc_ms - req;
+    json j = {{"frame_id", f.frame_id ? json(f.frame_id) : json(nullptr)}, {"evidence_id", f.evidence_id ? json(f.evidence_id) : json(nullptr)}, {"kind", f.kind},
+              {"is_verification_checkpoint", f.kind != "history_sample"}, {"index", f.index}, {"session_id", f.session_id},
+              {"requested_utc_ms", req}, {"requested_utc", format_iso8601_utc(req)}, {"recorded_utc_ms", f.utc_ms}, {"recorded_utc", format_iso8601_utc(f.utc_ms)},
+              {"time_diff_ms", diff}, {"playback_offset_ms", f.actual_offset_ms}, {"width", f.width}, {"height", f.height}, {"bytes", f.bytes},
+              {"expected_media_id", f.expected_media_id}, {"sha256", f.sha256}};
+    const bool bounded = f.uncertainty_ms >= 0;
+    j["time_uncertainty_ms"] = bounded ? json(f.uncertainty_ms) : json(nullptr);
+    j["timestamp_quality"] = bounded ? "bounded" : "unknown";
+    if (bounded) j["time_diff_range_ms"] = json::array({diff - f.uncertainty_ms, diff + f.uncertainty_ms});
+    j["timing_note"] = bounded ? "recorded_utc is the capture instant of the frame; the true instant lies within +-time_uncertainty_ms of it"
+                               : "the capture instant has no stated bound for this frame: treat the time as approximate";
+    j["provenance"] = {{"origin", "BrightSign display output (Weston/VOP2), not the audience camera"}, {"source", f.source}, {"capture_method", f.capture_method}, {"detail", f.provenance}};
+    j["image"] = {{"available", f.image_available}, {"state", f.image_available ? "available" : "expired"}, {"url", f.image_available ? json(frame_image_url(f)) : json(nullptr)},
+                  {"message", f.image_available ? "" : "The JPEG was removed by retention; the metadata and vector are kept."}};
+    j["image_url"] = f.image_available ? json(frame_image_url(f)) : json(nullptr);
+    json sm = {{"available", false}};
+    if (sim) {
+        if (sim->ok) {
+            sm = {{"available", true}, {"similarity_to_expected", sim->sim}, {"best_reference_offset_ms", sim->best_ref_offset_ms}, {"reference_frames", sim->refs},
+                  {"match_threshold", cfg_.thresholds.match_sim}, {"matches_expected_reference", sim->sim >= cfg_.thresholds.match_sim},
+                  {"basis", "cosine similarity of the stored frame vector to the expected advertisement's reference frames (display geometry); an observation, not proof"}};
+        } else sm["reason"] = sim->reason;
+    }
+    j["similarity"] = sm;
+    return j;
+}
+
+json PopService::display_time_info() {
+    std::string tz = cfg_.device_timezone, src = tz.empty() ? "" : "config visual_memory.pop.device_timezone";
+    if (tz.empty()) { const char* e = std::getenv("TZ"); if (e && *e) { tz = e; src = "TZ environment"; } }
+    if (tz.empty()) { std::ifstream f("/etc/timezone"); std::string l; if (f && std::getline(f, l) && !l.empty()) { tz = l; src = "/etc/timezone"; } }
+    if (tz.empty()) { tz = "UTC"; src = "default (no device timezone is configured: set visual_memory.pop.device_timezone)"; }
+    NearestDisplayFrame nf; store_->nearest_display_frame(now_ms(), 0, "", nf);
+    const auto& h = cfg_.history;
+    return {{"utc_now_ms", now_ms()}, {"utc_now", format_iso8601_utc(now_ms())},
+            {"device_timezone", {{"name", tz}, {"source", src}}},
+            {"storage", "all timestamps are stored and returned in UTC (epoch ms); *_utc fields are ISO-8601 with Z"},
+            {"display_frames", {{"retained", nf.frames_in_store}, {"oldest_utc_ms", nf.frames_in_store ? json(nf.oldest_utc_ms) : json(nullptr)},
+                                {"newest_utc_ms", nf.frames_in_store ? json(nf.newest_utc_ms) : json(nullptr)},
+                                {"oldest_utc", nf.frames_in_store ? json(format_iso8601_utc(nf.oldest_utc_ms)) : json(nullptr)},
+                                {"newest_utc", nf.frames_in_store ? json(format_iso8601_utc(nf.newest_utc_ms)) : json(nullptr)}}},
+            {"history", {{"recording", history_enabled()}, {"ready", store_->history_ready()}, {"interval_ms", h.interval_ms}, {"jpeg_retention_days", h.jpeg_retention_days},
+                         {"metadata_retention_days", h.metadata_retention_days}, {"scope", "registered Proof-of-Play sessions only"}}},
+            {"limits", {{"max_diff_ms_max", 3600000}, {"window_s_max", 3600}, {"default_max_diff_ms", 2000}, {"default_window_s", 30}}}};
+}
+
+namespace {
+// Why a requested time has no frame: said as facts about retention and recording scope, never as "nothing was displayed".
+std::string no_evidence_text(const NearestDisplayFrame& nf, int64_t req, int64_t tol, bool recording, bool hist_ready, size_t sessions_at_time) {
+    std::string m = "No stored display frame lies within +-" + std::to_string(tol) + " ms of " + format_iso8601_utc(req) + ". ";
+    if (!nf.frames_in_store) m += "No display frames are retained at all" + std::string(hist_ready ? "" : " (display history has not been created on this player)") + ". ";
+    else if (req < nf.oldest_utc_ms) m += "That time is earlier than the oldest retained frame (" + format_iso8601_utc(nf.oldest_utc_ms) + "); older frames may have been removed by retention. ";
+    else if (req > nf.newest_utc_ms) m += "That time is later than the newest retained frame (" + format_iso8601_utc(nf.newest_utc_ms) + "). ";
+    else if (sessions_at_time) m += "That time lies between the stored frames of a reported session (about one frame per second is stored while it plays). ";
+    else m += "That time falls in a gap: frames are stored only while a registered Proof-of-Play advertisement session plays, never for the idle presentation. ";
+    if (nf.has_nearest) m += "The nearest retained frame is " + std::to_string(nf.diff_ms < 0 ? -nf.diff_ms : nf.diff_ms) + " ms " + (nf.diff_ms < 0 ? "earlier" : "later") + ". ";
+    if (!recording) m += "1 FPS display history is not recording now. ";
+    if (sessions_at_time) m += "The player reported " + std::to_string(sessions_at_time) + " session(s) playing at that time (listed), but no frame of them is retained for it. ";
+    m += "This does not establish that nothing was displayed.";
+    return m;
+}
+}  // namespace
+
+json PopService::display_nearest(int64_t t, int64_t tol, const std::string& sid) {
+    NearestDisplayFrame nf;
+    const bool ok = store_->nearest_display_frame(t, tol, sid, nf);
+    json out = {{"requested", {{"utc_ms", t}, {"utc", format_iso8601_utc(t)}}}, {"max_diff_ms", tol}, {"source_scope", "BrightSign display output only (Weston/VOP2); audience-camera frames are never returned"},
+                {"selection", "nearest recorded_utc_ms to the requested time within the tolerance; ties resolve to the earlier frame, then history before checkpoint, then the lowest id"},
+                {"query", "read-only; no model inference"}};
+    if (!ok) { out["found"] = false; out["evidence_state"] = "store_unavailable"; out["message"] = "The Proof-of-Play store is not available (schema 1 or closed), so no display frames can be looked up."; return out; }
+    out["coverage"] = {{"frames_retained", nf.frames_in_store}, {"oldest_utc_ms", nf.frames_in_store ? json(nf.oldest_utc_ms) : json(nullptr)}, {"newest_utc_ms", nf.frames_in_store ? json(nf.newest_utc_ms) : json(nullptr)},
+                       {"oldest_utc", nf.frames_in_store ? json(format_iso8601_utc(nf.oldest_utc_ms)) : json(nullptr)}, {"newest_utc", nf.frames_in_store ? json(format_iso8601_utc(nf.newest_utc_ms)) : json(nullptr)},
+                       {"history_recording", history_enabled()}};
+    out["found"] = nf.found;
+    if (nf.found) {
+        PopSession s; const bool have_s = store_->get_session(nf.frame.session_id, s);
+        const std::vector<FrameSim> sims = store_->expected_similarity(nf.frame.session_id, {FrameSimQuery{nf.frame.frame_id, nf.frame.evidence_id}});
+        out["evidence_state"] = nf.frame.image_available ? "frame_found" : "frame_found_image_expired";
+        out["frame"] = time_frame_json(nf.frame, t, sims.empty() ? nullptr : &sims[0]);
+        if (have_s) out["session"] = time_session_json(s, t);
+        out["message"] = nf.frame.image_available ? "Nearest stored display frame returned."
+                                                  : "The nearest display frame's metadata is retained but its JPEG was removed by retention (image expired).";
+        return out;
+    }
+    std::vector<PopSession> at = store_->list_sessions_overlapping(t, t, 20);
+    if (!sid.empty()) at.erase(std::remove_if(at.begin(), at.end(), [&](const PopSession& p) { return p.session_id != sid; }), at.end());
+    out["evidence_state"] = "no_evidence_in_tolerance";
+    out["message"] = no_evidence_text(nf, t, tol, history_enabled(), store_->history_ready(), at.size());
+    if (nf.has_nearest) {
+        json n = {{"recorded_utc_ms", nf.frame.utc_ms}, {"recorded_utc", format_iso8601_utc(nf.frame.utc_ms)}, {"time_diff_ms", nf.diff_ms}, {"session_id", nf.frame.session_id},
+                  {"frame_id", nf.frame.frame_id ? json(nf.frame.frame_id) : json(nullptr)}, {"evidence_id", nf.frame.evidence_id ? json(nf.frame.evidence_id) : json(nullptr)}};
+        out["nearest_outside_tolerance"] = n;
+    }
+    json arr = json::array(); for (const auto& p : at) arr.push_back(time_session_json(p, t));
+    out["playback_sessions_at_time"] = arr;
+    return out;
+}
+
+json PopService::display_time_search(int64_t t, int64_t win, int max_frames) {
+    const int64_t from = t - win, to = t + win;
+    max_frames = std::clamp(max_frames, 1, 600);
+    json out = {{"requested", {{"utc_ms", t}, {"utc", format_iso8601_utc(t)}}}, {"window_ms", win}, {"from_utc_ms", from}, {"to_utc_ms", to},
+                {"from_utc", format_iso8601_utc(from)}, {"to_utc", format_iso8601_utc(to)}, {"query", "read-only; no model inference"},
+                {"source_scope", "BrightSign display output only (Weston/VOP2); audience-camera frames are never returned"}};
+    NearestDisplayFrame nf;
+    if (!store_->nearest_display_frame(t, win, "", nf)) { out["evidence_state"] = "store_unavailable"; out["message"] = "The Proof-of-Play store is not available, so nothing can be looked up."; out["sessions"] = json::array(); return out; }
+    bool trunc_all = false;
+    std::vector<DisplayFrameRef> frames = store_->display_frames_between(from, to, "", 3000, &trunc_all);
+    std::vector<PopSession> sess = store_->list_sessions_overlapping(from, to, 200);
+    std::map<std::string, std::vector<DisplayFrameRef>> by;
+    for (auto& f : frames) by[f.session_id].push_back(f);
+    std::set<std::string> have; for (const auto& s : sess) have.insert(s.session_id);
+    for (const auto& kv : by) if (!have.count(kv.first)) { PopSession s; if (store_->get_session(kv.first, s)) { sess.push_back(s); have.insert(s.session_id); } }
+    auto dist = [&](const PopSession& s) {                                   // 0 when the requested instant lies inside the reported play
+        if (!s.start_utc_ms) return std::abs(s.scheduled_utc_ms - t);
+        const int64_t e = s.end_utc_ms ? s.end_utc_ms : s.start_utc_ms + s.slot_ms;
+        return t < s.start_utc_ms ? s.start_utc_ms - t : (t > e ? t - e : int64_t(0));
+    };
+    std::sort(sess.begin(), sess.end(), [&](const PopSession& a, const PopSession& b) { const int64_t da = dist(a), db = dist(b); return da != db ? da < db : a.session_id < b.session_id; });
+    json sa = json::array(); size_t frames_total = 0, with_frames = 0;
+    for (const auto& s : sess) {
+        auto& fs_ = by[s.session_id];
+        const size_t total = fs_.size(); frames_total += total; if (total) ++with_frames;
+        bool trunc = false;
+        if (static_cast<int>(fs_.size()) > max_frames) {                       // keep the frames nearest to the requested time, shown in time order
+            std::stable_sort(fs_.begin(), fs_.end(), [&](const DisplayFrameRef& a, const DisplayFrameRef& b) { return std::abs(a.utc_ms - t) < std::abs(b.utc_ms - t); });
+            fs_.resize(max_frames); trunc = true;
+            std::sort(fs_.begin(), fs_.end(), [](const DisplayFrameRef& a, const DisplayFrameRef& b) { return a.utc_ms < b.utc_ms; });
+        }
+        std::vector<FrameSimQuery> q; for (const auto& f : fs_) q.push_back({f.frame_id, f.evidence_id});
+        const std::vector<FrameSim> sims = fs_.empty() ? std::vector<FrameSim>() : store_->expected_similarity(s.session_id, q);
+        json sj = time_session_json(s, t);
+        json fa = json::array(); int64_t best = INT64_MAX; size_t bi = 0;
+        for (size_t i = 0; i < fs_.size(); ++i) { fa.push_back(time_frame_json(fs_[i], t, i < sims.size() ? &sims[i] : nullptr)); const int64_t d = std::abs(fs_[i].utc_ms - t); if (d < best) { best = d; bi = i; } }
+        sj["frames"] = fa; sj["frames_in_window"] = total; sj["frames_truncated"] = trunc;
+        sj["nearest_frame_index"] = fs_.empty() ? json(nullptr) : json(bi);
+        sj["evidence_state"] = total ? "frames_retained" : "no_frames_retained_for_this_session_in_window";
+        sj["scheduled_but_not_started"] = s.start_utc_ms == 0;
+        sa.push_back(sj);
+    }
+    out["sessions"] = sa;
+    out["frames_total"] = frames_total; out["frames_truncated_total"] = trunc_all;
+    out["coverage"] = {{"frames_retained", nf.frames_in_store}, {"oldest_utc", nf.frames_in_store ? json(format_iso8601_utc(nf.oldest_utc_ms)) : json(nullptr)},
+                       {"newest_utc", nf.frames_in_store ? json(format_iso8601_utc(nf.newest_utc_ms)) : json(nullptr)}, {"history_recording", history_enabled()},
+                       {"history_ready", store_->history_ready()}};
+    if (nf.found) out["nearest"] = {{"session_id", nf.frame.session_id}, {"frame_id", nf.frame.frame_id ? json(nf.frame.frame_id) : json(nullptr)}, {"evidence_id", nf.frame.evidence_id ? json(nf.frame.evidence_id) : json(nullptr)},
+                                    {"time_diff_ms", nf.diff_ms}};
+    if (frames_total) {
+        out["evidence_state"] = "frames_retained";
+        out["message"] = std::to_string(frames_total) + " stored display frame(s) in the window across " + std::to_string(with_frames) + " session(s). Player-reported playback and visual corroboration are shown separately for each session.";
+    } else if (!sess.empty()) {
+        out["evidence_state"] = "sessions_without_frames";
+        out["message"] = "The player reported " + std::to_string(sess.size()) + " session(s) in the window, but no display frame of them is retained for it (history not recording, JPEG and metadata removed by retention, or the session ended before capture). The reported playback is shown; it is not visually corroborated by a stored frame here.";
+    } else {
+        out["evidence_state"] = "no_evidence";
+        out["message"] = no_evidence_text(nf, t, win, history_enabled(), store_->history_ready(), 0);
+    }
+    return out;
 }
 
 json PopService::session_json(const PopSession& s) {

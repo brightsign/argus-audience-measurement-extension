@@ -26,6 +26,11 @@ namespace argus_display { class DisplayFrameSource; struct DisplayFrame; }
 
 namespace argus_pop {
 
+// Strict ISO-8601 -> UTC milliseconds. Requires an explicit offset ("Z" or +-HH[:MM]) so a wall-clock time is never guessed.
+// A "+" that a query string turned into a space is accepted ("2026-11-07T14:00:00 01:00").
+bool parse_iso8601_utc(const std::string& s, int64_t& utc_ms, std::string& err);
+std::string format_iso8601_utc(int64_t utc_ms);        // YYYY-MM-DDTHH:MM:SS.mmmZ
+
 struct PopCfg {
     bool        enabled = false;                                   // visual_memory.pop.enabled
     std::string events_path = "/storage/sd/pop/events.jsonl";      // JSONL written by the player application
@@ -48,6 +53,7 @@ struct PopCfg {
     int         grpc_prewarm_s = 120;                              // keep the OS producer awake this long between scheduling and the player starting
     int         grpc_max_dense_captures = 60;                      // upper bound for capture_every_s sessions
     visualmemory::VerifyThresholds thresholds;
+    std::string device_timezone;                                       // visual_memory.pop.device_timezone: IANA name of the player's timezone (informational default for the time-search UI; all storage is UTC)
 
     // Phase 2: about one display frame per second while a registered advertisement session plays (visual_memory.pop.history). OFF by default.
     // Needs capture_backend resilience_grpc (the OS rendered frames); never records outside a session; separate from the three verification checkpoints.
@@ -103,7 +109,14 @@ public:
     nlohmann::json history_status();
     nlohmann::json history_frames(const std::string& session_id, int limit, int offset);
     bool history_enabled() const { return cfg_.history.enabled && display_ != nullptr; }
-    void history_flush_for_test();                      // drain the writer queue and embed everything pending (tests / shutdown)
+    void history_flush_for_test();
+
+    // Time-based lookup of stored display-output frames (read-only; uses stored timestamps and vectors, never the model).
+    // nearest: one frame closest to utc_ms within max_diff_ms (found=false + an explanation when there is none).
+    nlohmann::json display_nearest(int64_t utc_ms, int64_t max_diff_ms, const std::string& session_id);
+    // search: every PoP session overlapping [utc_ms-window_ms, utc_ms+window_ms] with its stored frames; max_frames per session.
+    nlohmann::json display_time_search(int64_t utc_ms, int64_t window_ms, int max_frames);
+    nlohmann::json display_time_info();                 // device timezone, retained range, limits                      // drain the writer queue and embed everything pending (tests / shutdown)
 
     nlohmann::json session_detail(const std::string& id, bool* found);
     nlohmann::json session_json(const visualmemory::PopSession& s);
@@ -114,6 +127,8 @@ public:
     void process_line(const std::string& line, int64_t read_utc_ms);
 
 private:
+    nlohmann::json time_frame_json(const visualmemory::DisplayFrameRef& f, int64_t requested_ms, const visualmemory::FrameSim* sim);
+    nlohmann::json time_session_json(const visualmemory::PopSession& s, int64_t requested_ms);
     void loop();
     void grpc_loop();                                  // selects display frames at the capture offsets of active sessions
     void grpc_collect(const std::string& sid, bool final_pass, int64_t end_utc_ms);

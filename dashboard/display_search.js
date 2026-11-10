@@ -149,7 +149,7 @@
 
   function build(slot) {
     SD.built = true;
-    E.coverage = h("div"); E.hist = h("div"); E.refMsg = h("div"); E.refPreview = h("div"); E.results = h("div", { "aria-live": "polite" });
+    E.coverage = h("div"); E.hist = h("div"); E.time = h("div", { "data-role": "time-search-slot" }); E.refMsg = h("div"); E.refPreview = h("div"); E.results = h("div", { "aria-live": "polite" });
     const fileIn = h("input", { type: "file", accept: "image/jpeg", style: "display:none", "aria-label": "Choose a JPEG reference image for display search" });
     fileIn.addEventListener("change", () => { if (fileIn.files[0]) setUpload(fileIn.files[0]); fileIn.value = ""; });
     const drop = h("div", { class: "vm-drop", tabindex: "0", role: "button", "aria-label": "Upload reference JPEG: click or drop a file" },
@@ -190,7 +190,8 @@
           E.tf.el,
           h("div", { class: "vm-row" }, h("label", { class: "inline" }, E.minOn, "Override minimum similarity (default: the Proof-of-Play match threshold)"), E.minSim),
           h("div", { class: "vm-row" }, E.run, E.cancel, E.spin, E.runMsg)))));
-    slot.append(h("div", { class: "vm-stack" }, h("div", { class: "vm-note", text: NOTE }), E.hist, E.coverage, E.fs, E.results));
+    slot.append(h("div", { class: "vm-stack" }, h("div", { class: "vm-note", text: NOTE }), E.time, E.hist, E.coverage, E.fs, E.results));
+    if (U.timeSearch) U.timeSearch.mount(E.time);
     if (U.lightbox) U.lightbox.attach(E.results);
     renderRef(); renderCoverage(); renderHistory();
   }
@@ -309,6 +310,7 @@
   function mount(slot) {
     if (!SD.built) build(slot);
     loadCoverage(); loadAds(); loadHistory(); consumePending();
+    if (U.timeSearch && SD.built) U.timeSearch.mount(E.time);
     if (!SD.timer) SD.timer = setInterval(() => { if (document.getElementById('view-search') && !document.getElementById('view-search').hidden && E.hist && E.hist.offsetParent !== null) loadHistory(); }, 5000);
   }
   if (U.registerDisplaySearch) U.registerDisplaySearch({ mount });

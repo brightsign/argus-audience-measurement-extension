@@ -1,5 +1,10 @@
 # D4 — Object Search (manual region of interest)
 
+> **Update:** an optional automatic indexer (YOLOX detector → crop → embedding → this index), schema v2 with independent crop images,
+> and the diagnostics for the cumulative stage-1 failure counter are described in
+> [`VISUAL_MEMORY_OBJECT_AUTO_INDEXING.md`](VISUAL_MEMORY_OBJECT_AUTO_INDEXING.md). It is off by default and host-validated only.
+> Statements below that "there is no object detector" and "no crop file is stored" describe schema v1 / the manual-only mode.
+
 Find visually similar **objects** in historical frames. The user draws a rectangle around an object in a stored frame; the
 crop is embedded with the existing MobileNetV2 FP16 model (the same `pp1` preprocessing as full frames), stored in a
 separate object index, and searched by cosine similarity. It is **manual ROI indexing**: there is no object detector, the

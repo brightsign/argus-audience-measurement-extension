@@ -17,6 +17,8 @@ add_executable(visualmemory_tests
     test_embedding_pipeline.cpp
     test_reader.cpp
     test_object_index.cpp
+    test_object_auto.cpp
+    test_object_display.cpp
     test_pop.cpp
 )
 

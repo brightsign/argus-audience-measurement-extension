@@ -16,7 +16,9 @@
 #include <fcntl.h>
 #include <cmath>
 #include <filesystem>
+#include <map>
 #include <mutex>
+#include <tuple>
 #include <set>
 #include <unistd.h>
 
@@ -846,7 +848,12 @@ bool PopStore::history_open(std::string& err) {
     std::lock_guard<std::mutex> lk(impl_->mu);
     if (!impl_->db) { err = "store not open"; return false; }
     if (!impl_->v2) { err = "pop.db is schema 1: display history needs visual_memory.pop.allow_schema_upgrade"; return false; }
-    if (impl_->hist) return true;
+    auto time_indexes = [&] {   // additive, optional: they only speed up the time lookup (pop.db user_version stays 2)
+        std::string e2;
+        impl_->exec("CREATE INDEX IF NOT EXISTS ix_pop_sess_start ON playback_sessions(start_utc_ms);"
+                    "CREATE INDEX IF NOT EXISTS ix_pop_hist_evidence ON display_history_frames(evidence_id) WHERE evidence_id IS NOT NULL;", e2);
+    };
+    if (impl_->hist) { time_indexes(); return true; }
     const char* ddl =
         "CREATE TABLE IF NOT EXISTS display_history_frames(frame_id INTEGER PRIMARY KEY AUTOINCREMENT,session_id TEXT NOT NULL,sec_idx INTEGER NOT NULL,"
         " evidence_id INTEGER,source TEXT NOT NULL,expected_media_id TEXT NOT NULL DEFAULT '',played_media_id TEXT NOT NULL DEFAULT '',"
@@ -862,6 +869,7 @@ bool PopStore::history_open(std::string& err) {
     if (!impl_->exec(ddl, err)) { std::string e2; impl_->exec("ROLLBACK;", e2); return false; }
     if (!impl_->exec("COMMIT;", err)) return false;
     impl_->hist = true;
+    time_indexes();
     return true;
 }
 bool PopStore::history_ready() const { std::lock_guard<std::mutex> lk(impl_->mu); return impl_->db && impl_->hist; }
@@ -1019,6 +1027,202 @@ HistoryStats PopStore::history_stats() {
     if (q && sqlite3_step(q.s) == SQLITE_ROW) { s.oldest_utc_ms = sqlite3_column_int64(q.s, 0); s.newest_utc_ms = sqlite3_column_int64(q.s, 1); }
     return s;
 }
+// ---- time lookup (read-only) -------------------------------------------------------------------------------------------------------
+namespace {
+// Column order shared by both sources: kind(0 hist,1 evidence),frame_id,evidence_id,index,session,source,method,provenance,expected,utc,offset,uncertainty,w,h,bytes,sha,embedded,image
+const char* kDispHistSel =
+    "SELECT 0,h.frame_id,COALESCE(h.evidence_id,0),h.sec_idx,h.session_id,h.source,h.capture_method,h.provenance,h.expected_media_id,h.utc_ms,h.actual_offset_ms,"
+    "h.uncertainty_ms,h.width,h.height,h.bytes,h.sha256,"
+    "CASE WHEN h.evidence_id IS NULL THEN h.embedded ELSE COALESCE((SELECT e.embedded FROM display_capture_evidence e WHERE e.evidence_id=h.evidence_id),0) END,"
+    "CASE WHEN h.evidence_id IS NULL THEN h.image_available ELSE COALESCE((SELECT e.image_available FROM display_capture_evidence e WHERE e.evidence_id=h.evidence_id),0) END"
+    " FROM display_history_frames h WHERE h.status='ok'";
+const char* kDispEvSel =
+    "SELECT 1,0,e.evidence_id,e.idx,e.session_id,e.source,e.capture_method,e.provenance,"
+    "COALESCE((SELECT s.expected_media_id FROM playback_sessions s WHERE s.session_id=e.session_id),''),e.utc_ms,e.actual_offset_ms,e.uncertainty_ms,e.width,e.height,"
+    "e.bytes,e.sha256,e.embedded,e.image_available FROM display_capture_evidence e WHERE e.status='ok' AND e.capture_method='resilience_grpc'";
+
+DisplayFrameRef row_dfr(sqlite3_stmt* s) {
+    DisplayFrameRef f;
+    const bool ev = sqlite3_column_int(s, 0) == 1;
+    f.frame_id = sqlite3_column_int64(s, 1); f.evidence_id = sqlite3_column_int64(s, 2); f.index = sqlite3_column_int(s, 3);
+    f.kind = ev ? "verification_checkpoint" : (f.evidence_id ? "history_and_checkpoint" : "history_sample");
+    f.session_id = col_text(s, 4); f.source = col_text(s, 5); f.capture_method = col_text(s, 6); f.provenance = col_text(s, 7); f.expected_media_id = col_text(s, 8);
+    f.utc_ms = sqlite3_column_int64(s, 9); f.actual_offset_ms = sqlite3_column_int(s, 10); f.uncertainty_ms = sqlite3_column_int(s, 11);
+    f.width = sqlite3_column_int(s, 12); f.height = sqlite3_column_int(s, 13); f.bytes = static_cast<uint64_t>(sqlite3_column_int64(s, 14)); f.sha256 = col_text(s, 15);
+    f.embedded = sqlite3_column_int(s, 16) != 0; f.image_available = sqlite3_column_int(s, 17) != 0;
+    return f;
+}
+
+// Nearest frame on one side of t in one source. Two indexed probes (the best utc_ms, then the lowest id at that instant) keep the
+// choice deterministic without a sort over the table: ties at the same instant resolve to the lowest id.
+bool probe_side(sqlite3* db, bool hist_src, bool has_hist, int64_t t, bool before, const std::string& sid, DisplayFrameRef& out) {
+    const char* tc = hist_src ? "h.utc_ms" : "e.utc_ms"; const char* idc = hist_src ? "h.frame_id" : "e.evidence_id";
+    std::string where = std::string(" AND ") + tc + (before ? "<=?" : ">?");
+    if (!sid.empty()) where += hist_src ? " AND h.session_id=?" : " AND e.session_id=?";
+    if (!hist_src && has_hist) where += " AND NOT EXISTS(SELECT 1 FROM display_history_frames x WHERE x.evidence_id=e.evidence_id)";
+    const std::string base = hist_src ? kDispHistSel : kDispEvSel;
+    int64_t best = 0;
+    {
+        Stmt q(db, std::string(hist_src ? "SELECT h.utc_ms FROM display_history_frames h WHERE h.status='ok'" : "SELECT e.utc_ms FROM display_capture_evidence e WHERE e.status='ok' AND e.capture_method='resilience_grpc'") +
+                       where + " ORDER BY " + tc + (before ? " DESC" : " ASC") + " LIMIT 1;");
+        if (!q) return false;
+        int i = 1; sqlite3_bind_int64(q.s, i++, t); if (!sid.empty()) q.text(i++, sid);
+        if (sqlite3_step(q.s) != SQLITE_ROW) return false;
+        best = sqlite3_column_int64(q.s, 0);
+    }
+    Stmt q(db, base + std::string(" AND ") + tc + "=?" + (sid.empty() ? "" : (hist_src ? " AND h.session_id=?" : " AND e.session_id=?")) +
+                   ((!hist_src && has_hist) ? " AND NOT EXISTS(SELECT 1 FROM display_history_frames x WHERE x.evidence_id=e.evidence_id)" : "") +
+                   " ORDER BY " + idc + " ASC LIMIT 1;");
+    if (!q) return false;
+    int i = 1; sqlite3_bind_int64(q.s, i++, best); if (!sid.empty()) q.text(i++, sid);
+    if (sqlite3_step(q.s) != SQLITE_ROW) return false;
+    out = row_dfr(q.s);
+    return true;
+}
+}  // namespace
+
+bool PopStore::nearest_display_frame(int64_t utc_ms, int64_t max_diff_ms, const std::string& session_id, NearestDisplayFrame& out) {
+    out = NearestDisplayFrame{};
+    std::lock_guard<std::mutex> lk(impl_->mu);
+    if (!impl_->db || !impl_->v2) return false;
+    const bool hh = impl_->hist;
+    std::vector<DisplayFrameRef> c;
+    for (int src = 0; src < 2; ++src) {                      // 0 = history rows, 1 = checkpoints that history does not already link
+        if (src == 0 && !hh) continue;
+        for (int side = 0; side < 2; ++side) {               // side 0 = at or before the requested time, 1 = after it
+            DisplayFrameRef f;
+            if (probe_side(impl_->db, src == 0, hh, utc_ms, side == 0, session_id, f)) c.push_back(std::move(f));
+        }
+    }
+    // order: smallest |diff|, then the earlier frame, then history before checkpoint, then lowest id
+    auto key = [&](const DisplayFrameRef& f) {
+        const int64_t d = f.utc_ms - utc_ms;
+        return std::make_tuple(d < 0 ? -d : d, d > 0 ? 1 : 0, f.kind == "verification_checkpoint" ? 1 : 0, f.frame_id ? f.frame_id : f.evidence_id);
+    };
+    if (!c.empty()) {
+        const auto it = std::min_element(c.begin(), c.end(), [&](const DisplayFrameRef& a, const DisplayFrameRef& b) { return key(a) < key(b); });
+        out.frame = *it; out.has_nearest = true; out.diff_ms = it->utc_ms - utc_ms;
+        const int64_t ad = out.diff_ms < 0 ? -out.diff_ms : out.diff_ms;
+        out.found = ad <= std::max<int64_t>(0, max_diff_ms);
+    }
+    // coverage of what is retained at all (all sessions), so a miss can be explained
+    out.frames_in_store = impl_->count(hh ? "SELECT COUNT(*) FROM display_capture_evidence e WHERE e.status='ok' AND e.capture_method='resilience_grpc' AND NOT EXISTS(SELECT 1 FROM display_history_frames x WHERE x.evidence_id=e.evidence_id);"
+                                       : "SELECT COUNT(*) FROM display_capture_evidence e WHERE e.status='ok' AND e.capture_method='resilience_grpc';");
+    int64_t lo = 0, hi = 0; bool any = false;
+    auto span = [&](const char* sql) {
+        Stmt q(impl_->db, sql);
+        if (q && sqlite3_step(q.s) == SQLITE_ROW && sqlite3_column_type(q.s, 0) != SQLITE_NULL) {
+            const int64_t a = sqlite3_column_int64(q.s, 0), b = sqlite3_column_int64(q.s, 1);
+            lo = any ? std::min(lo, a) : a; hi = any ? std::max(hi, b) : b; any = true;
+        }
+    };
+    span("SELECT MIN(utc_ms),MAX(utc_ms) FROM display_capture_evidence WHERE status='ok' AND capture_method='resilience_grpc';");
+    if (hh) {
+        out.frames_in_store += impl_->count("SELECT COUNT(*) FROM display_history_frames WHERE status='ok';");
+        span("SELECT MIN(utc_ms),MAX(utc_ms) FROM display_history_frames WHERE status='ok';");
+    }
+    if (any) { out.oldest_utc_ms = lo; out.newest_utc_ms = hi; }
+    return true;
+}
+
+std::vector<DisplayFrameRef> PopStore::display_frames_between(int64_t from_utc_ms, int64_t to_utc_ms, const std::string& session_id, int limit, bool* truncated, bool newest_first) {
+    std::vector<DisplayFrameRef> v;
+    if (truncated) *truncated = false;
+    std::lock_guard<std::mutex> lk(impl_->mu);
+    if (!impl_->db || !impl_->v2) return v;
+    limit = std::clamp(limit, 1, 5000);
+    const bool hh = impl_->hist;
+    auto run = [&](bool hist_src) {
+        const char* tc = hist_src ? "h.utc_ms" : "e.utc_ms";
+        std::string sql = std::string(hist_src ? kDispHistSel : kDispEvSel) + " AND " + tc + ">=? AND " + tc + "<=?";
+        if (!session_id.empty()) sql += hist_src ? " AND h.session_id=?" : " AND e.session_id=?";
+        if (!hist_src && hh) sql += " AND NOT EXISTS(SELECT 1 FROM display_history_frames x WHERE x.evidence_id=e.evidence_id)";
+        sql += std::string(" ORDER BY ") + tc + (newest_first ? " DESC" : "") + (hist_src ? ",h.frame_id" : ",e.evidence_id") + (newest_first ? " DESC" : "") + " LIMIT ?;";
+        Stmt q(impl_->db, sql);
+        if (!q) return;
+        int i = 1; sqlite3_bind_int64(q.s, i++, from_utc_ms); sqlite3_bind_int64(q.s, i++, to_utc_ms); if (!session_id.empty()) q.text(i++, session_id);
+        sqlite3_bind_int(q.s, i, limit + 1);
+        while (sqlite3_step(q.s) == SQLITE_ROW) v.push_back(row_dfr(q.s));
+    };
+    if (hh) run(true);
+    run(false);
+    std::sort(v.begin(), v.end(), [newest_first](const DisplayFrameRef& a, const DisplayFrameRef& b) {
+        if (a.utc_ms != b.utc_ms) return newest_first ? a.utc_ms > b.utc_ms : a.utc_ms < b.utc_ms;
+        if (a.kind == "verification_checkpoint" != (b.kind == "verification_checkpoint")) return a.kind != "verification_checkpoint";
+        const int64_t ia = a.frame_id ? a.frame_id : a.evidence_id, ib = b.frame_id ? b.frame_id : b.evidence_id;
+        return newest_first ? ia > ib : ia < ib;
+    });
+    if (static_cast<int>(v.size()) > limit) { v.resize(limit); if (truncated) *truncated = true; }
+    return v;
+}
+
+std::vector<FrameSim> PopStore::expected_similarity(const std::string& session_id, const std::vector<FrameSimQuery>& qs) {
+    std::vector<FrameSim> out(qs.size());
+    std::lock_guard<std::mutex> lk(impl_->mu);
+    auto fail = [&](const std::string& why) { for (auto& o : out) o.reason = why; return out; };
+    if (!impl_->db || !impl_->v2) return fail("store unavailable");
+    PopSession s;
+    if (!impl_->load_session(session_id, s)) return fail("unknown session");
+    if (s.expected_media_id.empty()) return fail("the session has no expected media");
+    struct Ref { std::string media; int off = 0; std::vector<float> e; };
+    std::map<int64_t, std::vector<Ref>> refs_by_model;
+    const std::string suffix = kDisplayProfileSuffix();
+    auto refs_for = [&](int64_t model) -> const std::vector<Ref>& {
+        auto it = refs_by_model.find(model);
+        if (it != refs_by_model.end()) return it->second;
+        std::vector<Ref>& v = refs_by_model[model];
+        Stmt q(impl_->db, "SELECT media_id,offset_ms,embedding FROM media_reference_frames WHERE model_id=? AND media_id IN (?,?);");
+        if (q) {
+            sqlite3_bind_int64(q.s, 1, model); q.text(2, s.expected_media_id); q.text(3, s.expected_media_id + suffix);
+            while (sqlite3_step(q.s) == SQLITE_ROW) { Ref r; r.media = col_text(q.s, 0); r.off = sqlite3_column_int(q.s, 1); r.e = blob_vec(q.s, 2); v.push_back(std::move(r)); }
+        }
+        return v;
+    };
+    for (size_t k = 0; k < qs.size(); ++k) {
+        const bool ev = qs[k].evidence_id != 0;
+        if (!ev && qs[k].frame_id == 0) { out[k].reason = "no frame"; continue; }
+        Stmt q(impl_->db, ev ? "SELECT model_id,embedding,embedded,capture_method FROM display_capture_evidence WHERE evidence_id=?;"
+                             : "SELECT model_id,embedding,embedded,capture_method FROM display_history_frames WHERE frame_id=?;");
+        if (!q) { out[k].reason = "query failed"; continue; }
+        sqlite3_bind_int64(q.s, 1, ev ? qs[k].evidence_id : qs[k].frame_id);
+        if (sqlite3_step(q.s) != SQLITE_ROW) { out[k].reason = "frame not found"; continue; }
+        if (!sqlite3_column_int(q.s, 2) || sqlite3_column_type(q.s, 1) == SQLITE_NULL) { out[k].reason = "the frame's vector has not been computed (yet)"; continue; }
+        const int64_t model = sqlite3_column_int64(q.s, 0);
+        const std::vector<float> fv = blob_vec(q.s, 1);
+        const bool weston = col_text(q.s, 3) == "resilience_grpc";
+        const auto& all = refs_for(model);
+        bool have_display = false;
+        for (const auto& r : all) if (r.media == s.expected_media_id + suffix) have_display = true;
+        const std::string want = (weston && have_display) ? s.expected_media_id + suffix : s.expected_media_id;     // same rule as the verifier: never mix the sets
+        float best = -2.0f; int boff = -1, n = 0;
+        for (const auto& r : all) {
+            if (r.media != want || r.e.size() != fv.size() || fv.empty()) continue;
+            float d = 0; for (size_t i = 0; i < fv.size(); ++i) d += fv[i] * r.e[i];
+            ++n; if (d > best) { best = d; boff = r.off; }
+        }
+        if (!n) { out[k].reason = "no reference frames of the expected media for this model"; continue; }
+        out[k].ok = true; out[k].sim = best; out[k].best_ref_offset_ms = boff; out[k].refs = n;
+    }
+    return out;
+}
+
+std::vector<PopSession> PopStore::list_sessions_overlapping(int64_t from_utc_ms, int64_t to_utc_ms, int limit) {
+    std::vector<PopSession> v;
+    std::lock_guard<std::mutex> lk(impl_->mu);
+    if (!impl_->db) return v;
+    std::string cols;
+    for (const char* p = kSessionCols; *p; ++p) { if (p == kSessionCols || *(p - 1) == ',') cols += "s."; cols += *p; }
+    Stmt q(impl_->db, "SELECT " + cols + " FROM playback_sessions s WHERE (s.start_utc_ms>0 AND s.start_utc_ms<=? AND "
+                      "(CASE WHEN s.end_utc_ms>0 THEN s.end_utc_ms ELSE s.start_utc_ms+s.slot_ms END)>=?) OR "
+                      "(s.start_utc_ms=0 AND s.scheduled_utc_ms>=? AND s.scheduled_utc_ms<=?) ORDER BY s.start_utc_ms,s.session_id LIMIT ?;");
+    if (!q) return v;
+    sqlite3_bind_int64(q.s, 1, to_utc_ms); sqlite3_bind_int64(q.s, 2, from_utc_ms); sqlite3_bind_int64(q.s, 3, from_utc_ms); sqlite3_bind_int64(q.s, 4, to_utc_ms);
+    sqlite3_bind_int(q.s, 5, std::clamp(limit, 1, 500));
+    while (sqlite3_step(q.s) == SQLITE_ROW) v.push_back(row_session(q.s));
+    return v;
+}
+
+
 uint64_t PopStore::history_finalize_session(const std::string& session_id, int64_t end_utc_ms, int guard_ms, const std::string& played_media_id) {
     std::lock_guard<std::mutex> lk(impl_->mu);
     if (!impl_->db || !impl_->hist) return 0;

@@ -388,6 +388,7 @@ Stats VisualMemory::stats() const {
     s.encoded = impl_->encoded.load();
     s.jpeg_write_failures = impl_->jpeg_write_failures.load();
     s.database_failures = impl_->database_failures.load();
+    s.last_database_error = impl_->db.last_insert_error();
     s.retention_deletions = impl_->retention_deletions.load();
     s.bytes_on_disk = impl_->bytes_on_disk.load();
     s.last_commit_utc_ms = impl_->last_commit_utc_ms.load();

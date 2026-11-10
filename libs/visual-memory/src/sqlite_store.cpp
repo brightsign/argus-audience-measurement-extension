@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MIT
 #include "sqlite_store.h"
 
+#include <algorithm>
+#include <chrono>
+
 #include <sqlite3.h>
 
 #include <cstring>
@@ -207,16 +210,53 @@ void SqliteStore::close() {
     if (db_) { sqlite3_close(db_); db_ = nullptr; }
 }
 
+namespace {
+const char* sqlite_code_name(int c) {
+    switch (c & 0xff) {
+        case SQLITE_BUSY: return "SQLITE_BUSY"; case SQLITE_LOCKED: return "SQLITE_LOCKED"; case SQLITE_NOMEM: return "SQLITE_NOMEM";
+        case SQLITE_READONLY: return "SQLITE_READONLY"; case SQLITE_IOERR: return "SQLITE_IOERR"; case SQLITE_CORRUPT: return "SQLITE_CORRUPT";
+        case SQLITE_FULL: return "SQLITE_FULL"; case SQLITE_CANTOPEN: return "SQLITE_CANTOPEN"; case SQLITE_CONSTRAINT: return "SQLITE_CONSTRAINT";
+        case SQLITE_INTERRUPT: return "SQLITE_INTERRUPT"; case SQLITE_MISUSE: return "SQLITE_MISUSE"; case SQLITE_NOTADB: return "SQLITE_NOTADB";
+        case SQLITE_ERROR: return "SQLITE_ERROR"; case SQLITE_SCHEMA: return "SQLITE_SCHEMA"; case SQLITE_PROTOCOL: return "SQLITE_PROTOCOL";
+        default: return "SQLITE_OTHER";
+    }
+}
+int64_t wall_ms() { return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count(); }
+} // namespace
+
+// Called with m_ held, straight after a failing sqlite3_* call (so errcode/errmsg still describe that failure).
+void SqliteStore::note_error(const char* op, int64_t seq) {
+    DbErrorInfo e;
+    e.code = db_ ? sqlite3_errcode(db_) : -1;
+    e.extended_code = db_ ? sqlite3_extended_errcode(db_) : -1;
+    e.code_name = db_ ? sqlite_code_name(e.code) : "NOT_OPEN";
+    e.message = db_ ? sqlite3_errmsg(db_) : "database not open";
+    e.operation = op; e.utc_ms = wall_ms(); e.frame_sequence = seq;
+    std::lock_guard<std::mutex> lk(err_m_);
+    e.count = last_err_.count + 1;
+    last_err_ = std::move(e);
+}
+
+void SqliteStore::set_busy_timeout_ms(int ms) {
+    std::lock_guard<std::mutex> lk(m_);
+    if (db_) sqlite3_busy_timeout(db_, std::max(0, ms));
+}
+
+DbErrorInfo SqliteStore::last_insert_error() const {
+    std::lock_guard<std::mutex> lk(err_m_);
+    return last_err_;
+}
+
 int64_t SqliteStore::insert(const InsertRow& r) {
     std::lock_guard<std::mutex> lk(m_);
-    if (!db_) return -1;
+    if (!db_) { note_error("insert.not_open", static_cast<int64_t>(r.source_sequence)); return -1; }
     static const char* sql =
         "INSERT INTO frames(source_id,source_type,device_id,capture_utc_ms,pts_ns,"
         "source_sequence,stored_width,stored_height,pixel_format,relative_jpeg_path,"
         "jpeg_size_bytes,jpeg_sha256,created_utc_ms) "
         "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?);";
     sqlite3_stmt* st = nullptr;
-    if (sqlite3_prepare_v2(db_, sql, -1, &st, nullptr) != SQLITE_OK) return -1;
+    if (sqlite3_prepare_v2(db_, sql, -1, &st, nullptr) != SQLITE_OK) { note_error("insert.prepare", static_cast<int64_t>(r.source_sequence)); return -1; }
     sqlite3_bind_text(st, 1, r.source_id.c_str(), -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(st, 2, r.source_type.c_str(), -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(st, 3, r.device_id.c_str(), -1, SQLITE_TRANSIENT);
@@ -236,6 +276,7 @@ int64_t SqliteStore::insert(const InsertRow& r) {
 
     int64_t id = -1;
     if (sqlite3_step(st) == SQLITE_DONE) id = sqlite3_last_insert_rowid(db_);
+    else note_error("insert.step", static_cast<int64_t>(r.source_sequence));      // before finalize: errcode/errmsg still describe the step
     sqlite3_finalize(st);
     return id;
 }

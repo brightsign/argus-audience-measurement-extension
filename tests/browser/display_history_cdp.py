@@ -10,7 +10,7 @@ Nothing in a result is pre-set: every history frame is a frame the bridge pulled
 Tests A (correct ad), B (wrong ad, 15 s loop in a 30 s slot), C (interrupted at 10 s), D (producer stalls mid-play), E (historical search boundaries),
 F (storage pressure: recording pauses, checkpoints unaffected), plus dashboard checks.
 """
-import asyncio, base64, io, json, os, re, signal, subprocess, sys, tempfile, threading, time, traceback, urllib.request, urllib.error, websockets
+import asyncio, base64, hashlib, urllib.parse, io, json, os, re, signal, sqlite3, zoneinfo, datetime, subprocess, sys, tempfile, threading, time, traceback, urllib.request, urllib.error, websockets
 from PIL import Image, ImageDraw
 
 API_BIN, DASH_BIN, BRIDGE_BIN, FAKE_BIN, OUT = sys.argv[1:6]
@@ -186,7 +186,7 @@ async def main():
     def config(root_dir, proot_dir, hist, bsock_name="b.sock"):
         return {"visual_memory": {"enabled": True, "vector_search_enabled": True, "storage_root": root_dir, "embedding": {"enabled": True},
                 "pop": {"enabled": True, "storage_root": proot_dir, "events_path": events, "jobs_dir": jobs, "poll_ms": 50, "sd_path_prefix_from": "SD:/",
-                        "sd_path_prefix_to": sd + "/", "allow_test_jobs": True, "capture_backend": "resilience_grpc", "history": hist},
+                        "sd_path_prefix_to": sd + "/", "allow_test_jobs": True, "capture_backend": "resilience_grpc", "history": hist, "device_timezone": "Europe/London"},
                 "display": {"enabled": True, "bridge_socket": os.path.join(tmp, bsock_name), "poll_ms": 100, "max_age_ms": 1200, "bridge_binary": BRIDGE_BIN,
                             "os_socket": "unix://" + dsock, "interest_file": os.path.join(tmp, "interest")}}}
     cfg = os.path.join(tmp, "cfg.json")
@@ -334,6 +334,101 @@ async def main():
     ps = http("GET", "/api/pop/status")[1]
     check("API: pop status reports the history block", ps["history"]["enabled"] is True and ps["history"]["ready"] is True)
 
+
+    # ===== Test G (API): time-based lookup of stored display frames ============================================================================
+    def iso(ms): return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(ms // 1000)) + ".%03dZ" % (ms % 1000)
+    def near(t, tol=500, sid=None, raw=False):
+        return http("GET", "/api/display/history/nearest?time=" + (t if raw else urllib.parse.quote(t)) + "&max_diff_ms=%d" % tol + (("&session_id=" + sid) if sid else ""))
+    def tsearch(t, w=10, extra=""): return http("GET", "/api/display/history/search?time=%s&window_s=%d%s" % (urllib.parse.quote(t), w, extra))
+    def fetch(url):
+        try:
+            with urllib.request.urlopen("http://127.0.0.1:%d%s" % (API_PORT, url), timeout=20) as r: return r.status, r.read()
+        except urllib.error.HTTPError as e: return e.code, e.read()
+    fa_s = sorted(fa, key=lambda f: f["utc_ms"]); fk = fa_s[10]
+    dbp = os.path.join(proot, "pop.db")
+    sha_before = hashlib.sha256(open(dbp, "rb").read()).hexdigest()
+    st, r = near(iso(fk["utc_ms"] + 120))
+    fr = r.get("frame") or {}
+    check("G: nearest returns the one stored frame closest to the requested time", st == 200 and r["found"] and fr["frame_id"] == fk["frame_id"] and fr["time_diff_ms"] == -120, r)
+    check("G: requested and recorded timestamps are UTC (ISO-8601 Z and epoch ms) and agree", fr["recorded_utc_ms"] == fk["utc_ms"] and fr["recorded_utc"] == iso(fk["utc_ms"]) and fr["requested_utc"] == iso(fk["utc_ms"] + 120) and fr["requested_utc_ms"] == fk["utc_ms"] + 120, fr)
+    check("G: time difference, timing uncertainty and timestamp quality are reported", fr["time_diff_ms"] == -120 and fr["time_uncertainty_ms"] == fk["time_uncertainty_ms"] and fr["timestamp_quality"] in ("bounded", "unknown") and "timing_note" in fr, fr)
+    check("G: provenance says Weston/VOP2 display output, with the capture method", "Weston/VOP2" in fr["provenance"]["origin"] and fr["provenance"]["capture_method"] == "resilience_grpc", fr["provenance"])
+    sess = r["session"]
+    check("G: the playback session, expected advertisement and the advertisement the player reported are returned", fr["session_id"] == sid_a and sess["playback"]["expected_media_id"] == "ad-a" and sess["playback"]["reported_media_id"] == "ad-a" and sess["playback"]["player_reported"] is True, sess["playback"])
+    check("G: the verification result is separate from the player's report (D5 verdict: corroborated)", sess["visual_verification"]["status"] == "playback_corroborated" and sess["visual_verification"]["visually_corroborated"] is True and sess["visual_verification"]["checkpoints"]["matched"] == 3, sess["visual_verification"])
+    check("G: the playback-relative offset equals the stored offset into the play", fr["playback_offset_ms"] == fk["actual_offset_ms"] and 9000 <= fr["playback_offset_ms"] <= 12000, fr["playback_offset_ms"])
+    check("G: image dimensions and availability are reported", fr["width"] == 640 and fr["height"] == 360 and fr["image"]["available"] is True and fr["image"]["state"] == "available", fr["image"])
+    sc, body = fetch(fr["image"]["url"])
+    im = Image.open(io.BytesIO(body)) if sc == 200 else None
+    check("G: the JPEG is served by a same-origin endpoint, separate from the JSON, as the unchanged 640x360 JPEG", sc == 200 and im is not None and im.size == (640, 360) and hashlib.sha256(body).hexdigest() == fk["sha256"], (sc, fr["image"]))
+    check("G: the frame's similarity to the expected advertisement comes from the stored vector (no model run)", fr["similarity"]["available"] and fr["similarity"]["similarity_to_expected"] > 0.8 and fr["similarity"]["matches_expected_reference"] is True, fr["similarity"])
+    check("G: the response states that only display output is searched and no model is used", "audience-camera" in r["source_scope"] and "no model" in r["query"], (r["source_scope"], r["query"]))
+    # ISO-8601 forms of the same instant
+    plus1 = datetime.datetime.fromtimestamp(fk["utc_ms"] / 1000, datetime.timezone(datetime.timedelta(hours=1))).strftime("%Y-%m-%dT%H:%M:%S") + ".%03d+01:00" % (fk["utc_ms"] % 1000)
+    minus330 = datetime.datetime.fromtimestamp(fk["utc_ms"] / 1000, datetime.timezone(datetime.timedelta(hours=-3, minutes=-30))).strftime("%Y-%m-%dT%H:%M:%S") + ".%03d-03:30" % (fk["utc_ms"] % 1000)
+    st1, r1 = near(plus1); st2, r2 = near(minus330); st3, r3 = near(plus1, raw=True)      # raw: "+" arrives as a space, as with an unencoded query string
+    check("G: other UTC offsets (+01:00, -03:30, even an unencoded '+') resolve to the same instant and frame", all(x == 200 and y["found"] and y["frame"]["frame_id"] == fk["frame_id"] and y["frame"]["time_diff_ms"] == 0 for x, y in ((st1, r1), (st2, r2), (st3, r3))), (r1.get("error"), r2.get("error"), r3.get("error"), r3.get("message")))
+    st, r = near("2026-11-07T14:30:00"); check("G: a wall-clock time without an offset is refused (ambiguous), not guessed", st == 400 and "offset" in r["message"], r)
+    st, r = near("yesterday"); check("G: a malformed timestamp is a 400", st == 400, r)
+    st, r = near("2026-02-30T10:00:00Z"); check("G: an impossible calendar day is a 400", st == 400, r)
+    st, r = http("GET", "/api/display/history/nearest"); check("G: a missing time is a 400", st == 400, r)
+    st, r = near(iso(fk["utc_ms"]), tol=4000000); check("G: an oversized tolerance is a 400", st == 400, r)
+    st, r = http("GET", "/api/display/history/nearest?time=%s&max_diff_ms=-1" % urllib.parse.quote(iso(fk["utc_ms"]))); check("G: a negative tolerance is a 400", st == 400, r)
+    st, r = http("POST", "/api/display/history/nearest", b"{}"); check("G: the lookup is GET only", st in (403, 405), st)
+    # determinism: exactly between two frames -> the earlier; the same answer every time
+    a1, a2 = fa_s[11], fa_s[12]; mid = a1["utc_ms"] + (a2["utc_ms"] - a1["utc_ms"]) // 2
+    ans = [near(iso(mid), tol=2000)[1]["frame"]["frame_id"] for _ in range(4)]
+    if (a2["utc_ms"] - a1["utc_ms"]) % 2 == 0:
+        check("G: an exact tie resolves to the earlier frame, every time", set(ans) == {a1["frame_id"]}, ans)
+    else:
+        check("G: the choice is the same every time (odd gap: the nearer frame wins)", len(set(ans)) == 1, ans)
+    st, r = near(iso(mid), tol=100)   # mid = halfway between two frames, about 500 ms from both
+    check("G: when no frame is within the tolerance the answer is a clear no-evidence response, with the nearest retained frame named", st == 200 and r["found"] is False and r["evidence_state"] == "no_evidence_in_tolerance" and "frame" not in r and r["nearest_outside_tolerance"]["time_diff_ms"] in range(-1100, 1100), r)
+    check("G: that response never claims that nothing was displayed", "does not establish that nothing was displayed" in r["message"] and "between the stored frames of a reported session" in r["message"] and "idle presentation" not in r["message"], r["message"])
+    first = min(f["utc_ms"] for f in frames_of(sid_a) + fb)
+    st, r = near(iso(first - 7 * 86400000))
+    check("G: a time before the oldest retained frame says so (it may have been removed by retention)", st == 200 and not r["found"] and "earlier than the oldest retained frame" in r["message"] and "retention" in r["message"] and r["coverage"]["frames_retained"] > 0, r.get("message"))
+    st, r = near(iso(int(time.time() * 1000) + 86400000))
+    check("G: a future time says it is later than the newest retained frame", st == 200 and not r["found"] and "later than the newest retained frame" in r["message"], r.get("message"))
+    # wrong advertisement and interrupted sessions
+    fb_s = sorted(fb, key=lambda f: f["utc_ms"]); st, r = near(iso(fb_s[8]["utc_ms"]))
+    check("G: a wrong-advertisement session: expected ad-a, the player reported ad-b, the stored frames contradict the schedule", st == 200 and r["found"] and r["session"]["playback"]["expected_media_id"] == "ad-a" and r["session"]["playback"]["reported_media_id"] == "ad-b" and r["session"]["visual_verification"]["status"] == "mismatch" and r["session"]["visual_verification"]["visual_verdict"] == "contradicts_expected" and r["frame"]["similarity"]["matches_expected_reference"] is False, r.get("session"))
+    check("G: the player-reported advertisement is not presented as visually corroborated when the verdict is a mismatch", r["session"]["playback"]["reported_matches_schedule"] is False and r["session"]["visual_verification"]["visually_corroborated"] is False)
+    fc_s = sorted(frames_of(sid_c), key=lambda f: f["utc_ms"]); sc_end = http("GET", "/api/pop/sessions/" + sid_c)[1]["end_utc_ms"]
+    st, r = near(iso(sc_end + 3000), tol=800, sid=sid_c)
+    check("G: after an interrupted session ended no frame is attributed to it (the session filter finds nothing)", st == 200 and r["found"] is False, r.get("message"))
+    st, r = near(iso(fc_s[3]["utc_ms"]), sid=sid_c); check("G: an interrupted session is reported as Incomplete", st == 200 and r["found"] and r["session"]["visual_verification"]["status"] == "incomplete" and r["session"]["visual_verification"]["visually_corroborated"] is False, r.get("session"))
+    # window search
+    st, w = tsearch(iso(fk["utc_ms"]), 5)
+    sw = [x for x in w["sessions"] if x["session_id"] == sid_a][0]
+    offs_w = [f["playback_offset_ms"] for f in sw["frames"]]
+    check("G: the window search lists the overlapping session with every stored frame in the window, in time order", st == 200 and 9 <= len(sw["frames"]) <= 11 and offs_w == sorted(offs_w) and sw["frames_in_window"] == len(sw["frames"]) and sw["evidence_state"] == "frames_retained", (len(sw["frames"]), offs_w))
+    check("G: every window frame carries time, offset, image state and a similarity score", all(f["recorded_utc"] and f["similarity"]["available"] and f["image"]["available"] and isinstance(f["playback_offset_ms"], int) for f in sw["frames"]))
+    check("G: the nearest frame of the session is identified", sw["frames"][sw["nearest_frame_index"]]["frame_id"] == fk["frame_id"], sw["nearest_frame_index"])
+    check("G: player-reported playback and visual verification are separate blocks of the session", sw["playback"]["basis"].startswith("reported by the player") and "verification checkpoints" in sw["visual_verification"]["basis"] and sw["visual_verification"]["status"] == "playback_corroborated", (sw["playback"]["basis"], sw["visual_verification"]["basis"]))
+    check("G: the window search states the requested time's offset inside the reported play", sw["playback"]["requested_within_reported_play"] is True and 9000 <= sw["playback"]["requested_offset_ms"] <= 12500, sw["playback"])
+    st, w2 = tsearch(iso(first - 7 * 86400000), 30)
+    check("G: a window with no retained evidence and no reported session says 'no evidence' and does not claim nothing was displayed", st == 200 and w2["evidence_state"] == "no_evidence" and w2["sessions"] == [] and "does not establish that nothing was displayed" in w2["message"], w2.get("message"))
+    st, w3 = tsearch(iso(fk["utc_ms"]), 5, "&limit=3")
+    sw3 = [x for x in w3["sessions"] if x["session_id"] == sid_a][0]
+    check("G: the per-session frame limit keeps the frames nearest the requested time and flags truncation", len(sw3["frames"]) == 3 and sw3["frames_truncated"] is True and sw3["frames_in_window"] > 3 and any(f["frame_id"] == fk["frame_id"] for f in sw3["frames"]), (len(sw3["frames"]), sw3["frames_truncated"]))
+    st, r = http("GET", "/api/display/history/search?time=%s&window_s=0" % urllib.parse.quote(iso(fk["utc_ms"]))); check("G: a zero window is a 400", st == 400, r)
+    st, inf = http("GET", "/api/display/history/info")
+    check("G: info reports the device timezone, retention and the retained range (UTC)", st == 200 and inf["device_timezone"]["name"] == "Europe/London" and inf["display_frames"]["retained"] > 0 and inf["display_frames"]["oldest_utc"].endswith("Z") and inf["history"]["jpeg_retention_days"] == 7 and "UTC" in inf["storage"], inf)
+    sha_after = hashlib.sha256(open(dbp, "rb").read()).hexdigest()
+    check("G: all those lookups were read-only (pop.db is byte-identical)", sha_before == sha_after, (sha_before[:12], sha_after[:12]))
+    check("G: every frame returned is a Weston display frame (never the audience camera)", all(f["provenance"]["capture_method"] == "resilience_grpc" for x in w["sessions"] for f in x["frames"]))
+    # retention removed one JPEG (what the pruner does: file removed, image flag cleared, row and vector kept)
+    fx = fa_s[5]; row_path = None
+    cx = sqlite3.connect(dbp, timeout=20); cur = cx.cursor()
+    row_path = cur.execute("SELECT path FROM display_history_frames WHERE frame_id=? AND evidence_id IS NULL", (fx["frame_id"],)).fetchone()
+    if row_path is None:
+        fx = [f for f in fa_s if not f.get("verification_checkpoint_evidence_id")][5]; row_path = cur.execute("SELECT path FROM display_history_frames WHERE frame_id=?", (fx["frame_id"],)).fetchone()
+    os.remove(os.path.join(proot, row_path[0])); cur.execute("UPDATE display_history_frames SET image_available=0 WHERE frame_id=?", (fx["frame_id"],)); cx.commit(); cx.close()
+    st, r = near(iso(fx["utc_ms"]))
+    check("G: when retention removed the JPEG the metadata is returned and the image is reported as expired", st == 200 and r["found"] and r["evidence_state"] == "frame_found_image_expired" and r["frame"]["image"]["available"] is False and r["frame"]["image"]["state"] == "expired" and r["frame"]["image"]["url"] is None and r["frame"]["session_id"] == sid_a and r["frame"]["similarity"]["available"], r.get("frame"))
+    sc, body = fetch("/api/pop/history/%d/image" % fx["frame_id"]); check("G: the image endpoint answers 410 for the expired JPEG", sc == 410, sc)
+
     chrome = start(["/usr/bin/google-chrome", "--headless=new", "--no-sandbox", "--disable-gpu", f"--remote-debugging-port={CDP_PORT}", f"--user-data-dir={OUT}/profile",
                     "--window-size=1440,2400", "about:blank"], "chrome.log")
     time.sleep(2.5)
@@ -440,6 +535,87 @@ async def main():
         await cmd("Page.navigate", url=BASE + "?t=%d#pop?session=%s" % (int(time.time() * 1000), sid_d))
         check("UI: a session with a gap shows the 'Partial history' warning", await wait_for("/Partial history/.test((document.body||{}).innerText||'')", 20), await ev("((document.body||{}).innerText||'').slice(0,300)"))
         await shot("4_partial_history")
+
+        # ----- Test G (UI): Search by time -----------------------------------------------------------------------------------------------------
+        await ev("document.querySelectorAll('.vm-modal-head button').forEach(b=>b.click()), 1")
+        await cmd("Page.navigate", url=BASE + "?t=%d#search?source=display" % int(time.time() * 1000))
+        check("UI/G: the Search by time panel is on the BrightSign Display search page with date, time, timezone, window and tolerance", await wait_for(
+            "(()=>{const p=document.querySelector('[data-role=time-search]');return !!p&&!!p.querySelector('[data-role=ts-date]')&&!!p.querySelector('[data-role=ts-time]')&&!!p.querySelector('[data-role=ts-tz]')&&!!p.querySelector('[data-role=ts-window]')&&!!p.querySelector('[data-role=ts-tol]')&&/Europe\\/London/.test(p.innerText)})()", 20),
+            await ev("((document.querySelector('[data-role=time-search]')||{}).innerText||'').slice(0,300)"))
+        JS_SET = """(args)=>{const q=s=>document.querySelector('[data-role=time-search] '+s);
+          const set=(el,v)=>{el.value=v;el.dispatchEvent(new Event('input',{bubbles:true}));el.dispatchEvent(new Event('change',{bubbles:true}));};
+          set(q('[data-role=ts-tz]'),args.tz); if(args.other!==undefined) set(q('[data-role=ts-tz-other]'),args.other);
+          set(q('[data-role=ts-date]'),args.date); set(q('[data-role=ts-time]'),args.time); if(args.win) set(q('[data-role=ts-window]'),args.win); if(args.tol) set(q('[data-role=ts-tol]'),args.tol);
+          return true}"""
+        async def set_time(tz, ms, other=None, win=None, tol=None):
+            z = "UTC" if tz == "utc" else (other if tz == "other" else "Europe/London")
+            d = datetime.datetime.fromtimestamp(ms // 1000, zoneinfo.ZoneInfo(z))
+            a = {"tz": tz, "date": d.strftime("%Y-%m-%d"), "time": d.strftime("%H:%M:%S")}
+            if other is not None: a["other"] = other
+            if win: a["win"] = str(win)
+            if tol: a["tol"] = str(tol)
+            await ev("(%s)(%s)" % (JS_SET, json.dumps(a)))
+        async def run_ts():
+            await ev("(document.querySelector('[data-role=ts-run]').click(), 1)")
+            return await wait_for("!!document.querySelector('[data-role=nearest-frame],[data-role=no-evidence]')&&!document.querySelector('[data-role=time-search] .vm-spin:not([hidden])')", 25)
+        # (1) device timezone (Europe/London, BST/GMT aware): the instant is resolved correctly and the nearest frame is shown with everything
+        t_sec = (fk["utc_ms"] // 1000) * 1000
+        await set_time("device", t_sec, win=10, tol=2000)
+        resolved = await ev("document.querySelector('[data-role=resolved-utc]').textContent")
+        check("UI/G: a London wall-clock time is converted to the right UTC instant", resolved == iso(t_sec).replace(".000Z", ".000Z"), (resolved, iso(t_sec)))
+        expect_near = near(iso(t_sec), 2000)[1]["frame"]
+        check("UI/G: the lookup runs and shows the nearest stored display frame", await run_ts(), await ev("(document.querySelector('[data-role=time-search]').innerText||'').slice(0,400)"))
+        await ev("(async()=>{for(const f of document.querySelectorAll('[data-role=time-search] figure, [data-role=nearest-frame] img')){f.scrollIntoView();await new Promise(r=>setTimeout(r,40));}return 1})()")
+        card = await ev("document.querySelector('[data-role=nearest-frame]').innerText.replace(/\\n+/g,' | ')")
+        REPORT["ui_time_search_nearest_card"] = card
+        check("UI/G: the card shows the frame id, UTC and zone times, difference, uncertainty, offset, source, size and similarity", all(x in card for x in (("history frame #%d" % expect_near["frame_id"]), "Recorded (UTC)", "Recorded (selected zone)", "Time difference", "Timestamp quality", "Within the play", "Weston/VOP2", "640 × 360", "Similarity")), card)
+        check("UI/G: the stored JPEG is displayed", await wait_for("(()=>{const i=document.querySelector('[data-role=nearest-frame] img');return !!i&&i.complete&&i.naturalWidth===640&&i.naturalHeight===360})()", 15))
+        check("UI/G: player-reported playback and visual verification are two separate, labelled blocks", await ev("(()=>{const r=document.querySelector('[data-role=nearest-frame] [data-role=player-reported]'),v=document.querySelector('[data-role=nearest-frame] [data-role=visual-verification]');return !!r&&!!v&&r!==v&&/Reported by the player/.test(r.innerText)&&/Seen on the display/.test(v.innerText)&&r.querySelector('[data-role=expected-ad]').textContent==='ad-a'&&r.querySelector('[data-role=reported-ad]').textContent==='ad-a'&&/Playback corroborated/.test(v.querySelector('[data-role=verify-status]').textContent)&&/match the expected advertisement/.test(v.querySelector('[data-role=visual-verdict]').textContent)})()"))
+        await shot("5_time_search_nearest")
+        check("UI/G: clicking the stored frame opens the large viewer", (await ev("(document.querySelector('[data-role=nearest-frame] img[data-zoom]').click(),1)")) and await wait_for("!!document.querySelector('.lb-bg .lb-stage img')", 8))
+        await ev("(document.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true})),1)"); await ev("(document.querySelector('.lb-bg')&&document.querySelector('.lb-bg').remove(),1)")
+        check("UI/G: the session window of the result lists the stored frames of that session in time order", await ev("(()=>{const f=[...document.querySelectorAll('[data-session=\"%s\"] [data-role=session-frames] figure')];return f.length>=9&&f.some(x=>x.classList.contains('ts-near'))})()" % sid_a))
+        # (2) open the Proof-of-Play session from the result
+        check("UI/G: 'Open Proof-of-Play session' links to the session", await ev("document.querySelector('[data-role=nearest-frame] a[data-session-link]').getAttribute('href')") == "#pop?session=" + sid_a)
+        await ev("(document.querySelector('[data-role=nearest-frame] a[data-session-link]').click(),1)")
+        check("UI/G: the link opens that Proof-of-Play session with its checkpoints and history", await wait_for("/Proof of Play . %s/i.test((document.body||{}).innerText||'') && /Verification checkpoints/i.test((document.body||{}).innerText||'')" % sid_a, 20), await ev("((document.body||{}).innerText||'').slice(0,200)"))
+        await ev("document.querySelectorAll('.vm-modal-head button').forEach(b=>b.click()), 1")
+        # (3) wrong advertisement: reported ad-b, contradicted by the frames
+        await cmd("Page.navigate", url=BASE + "?t=%d#search?source=display" % int(time.time() * 1000))
+        await wait_for("!!document.querySelector('[data-role=ts-run]')", 15)
+        await set_time("utc", (fb_s[8]["utc_ms"] // 1000) * 1000, win=10, tol=2000)
+        await run_ts()
+        check("UI/G: a wrong-advertisement session shows expected ad-a, reported ad-b, a Mismatch verdict and that the frames contradict the schedule", await wait_for("(()=>{const n=document.querySelector('[data-role=nearest-frame]');if(!n)return false;return n.querySelector('[data-role=expected-ad]').textContent==='ad-a'&&n.querySelector('[data-role=reported-ad]').textContent==='ad-b'&&/Mismatch/.test(n.querySelector('[data-role=verify-status]').textContent)&&/different content than expected/.test(n.querySelector('[data-role=visual-verdict]').textContent)&&/different advertisement than scheduled/.test(n.innerText)})()", 15), await ev("(document.querySelector('[data-role=time-search]').innerText||'').slice(0,500)"))
+        await shot("6_time_search_mismatch")
+        # (4) no retained evidence
+        await set_time("utc", first - 7 * 86400000, win=30, tol=2000)
+        await run_ts()
+        check("UI/G: with no retained evidence the page says so and never claims nothing was displayed", await wait_for("(()=>{const n=document.querySelector('[data-role=no-evidence]');return !!n&&/No retained display evidence/i.test(n.innerText)&&/does not establish that nothing was displayed/i.test(n.innerText)&&/earlier than the oldest retained frame/i.test(n.innerText)&&!document.querySelector('[data-role=nearest-frame]')})()", 15), await ev("(document.querySelector('[data-role=time-search]').innerText||'').slice(0,600)"))
+        await shot("7_time_search_none")
+        # (5) a gap between frames, with the session the player reported
+        await set_time("utc", ((fk["utc_ms"] // 1000) * 1000) + 500, win=10, tol=100)
+        await run_ts()
+        # (6) expired JPEG
+        # the time input has whole-second precision: use the second (floor or ceil) whose nearest stored frame is the expired one
+        t_exp = next((t for t in ((fx["utc_ms"] // 1000) * 1000, (fx["utc_ms"] // 1000 + 1) * 1000) if near(iso(t), 2000)[1].get("frame", {}).get("frame_id") == fx["frame_id"]), None)
+        check("UI/G: a whole-second time exists whose nearest frame is the expired one (test precondition)", t_exp is not None)
+        await set_time("device", t_exp or (fx["utc_ms"] // 1000) * 1000, win=10, tol=2000)
+        await run_ts()
+        check("UI/G: an expired JPEG shows the metadata and says the image expired", await wait_for("(()=>{const n=document.querySelector('[data-role=nearest-frame]');return !!n&&!!n.querySelector('[data-role=image-expired]')&&/image expired/.test(n.innerText)&&/Recorded \\(UTC\\)/.test(n.innerText)&&/Playback corroborated/.test(n.innerText)})()", 15), await ev("(document.querySelector('[data-role=time-search]').innerText||'').slice(0,500)"))
+        await shot("8_time_search_expired")
+        # (7) timezone arithmetic: DST in another zone, ambiguous and non-existent local times
+        z = lambda a: ev("(()=>{const r=VMUI.timeSearch.wallToUtc(%s);return JSON.stringify({u:new Date(r.utc).toISOString(),o:r.other?new Date(r.other).toISOString():null,a:!!r.ambiguous,g:!!r.gap})})()" % a)
+        r1 = json.loads(await z("2026,1,15,12,0,0,'America/New_York'")); r2 = json.loads(await z("2026,7,15,12,0,0,'America/New_York'"))
+        r3 = json.loads(await z("2026,10,25,1,30,0,'Europe/London'")); r4 = json.loads(await z("2026,3,29,1,30,0,'Europe/London'")); r5 = json.loads(await z("2026,11,1,1,30,0,'America/New_York'"))
+        r6 = json.loads(await z("2026,6,1,12,0,0,'Europe/London'")); r7 = json.loads(await z("2026,12,1,12,0,0,'Europe/London'")); r8 = json.loads(await z("2026,6,1,12,0,0,'UTC'"))
+        check("UI/G: New York winter (EST) and summer (EDT) times convert to UTC with the right offset", r1["u"] == "2026-01-15T17:00:00.000Z" and r2["u"] == "2026-07-15T16:00:00.000Z", (r1, r2))
+        check("UI/G: London summer (BST) and winter (GMT) times convert to UTC with the right offset", r6["u"] == "2026-06-01T11:00:00.000Z" and r7["u"] == "2026-12-01T12:00:00.000Z" and r8["u"] == "2026-06-01T12:00:00.000Z", (r6, r7, r8))
+        check("UI/G: a local time that happens twice (clocks go back) is flagged ambiguous with both instants", r3["a"] and {r3["u"], r3["o"]} == {"2026-10-25T00:30:00.000Z", "2026-10-25T01:30:00.000Z"} and r5["a"] and {r5["u"], r5["o"]} == {"2026-11-01T05:30:00.000Z", "2026-11-01T06:30:00.000Z"}, (r3, r5))
+        check("UI/G: a local time that does not exist (clocks go forward) is flagged", r4["g"] and not r4["a"], r4)
+        await ev("(%s)(%s)" % (JS_SET, json.dumps({"tz": "other", "other": "Europe/London", "date": "2026-10-25", "time": "01:30:00", "win": "10", "tol": "2000"})))
+        check("UI/G: the form shows the ambiguity banner and offers the first or second occurrence", await wait_for("!!document.querySelector('[data-role=tz-ambiguous]')&&!!document.querySelector('[data-role=ts-pick]')&&!document.querySelector('[data-role=ts-pick]').closest('.vm-row').hidden", 8))
+        await ev("(%s)(%s)" % (JS_SET, json.dumps({"tz": "other", "other": "Mars/Olympus", "date": "2026-10-25", "time": "01:30:00"})))
+        check("UI/G: an unknown timezone name is rejected with a message and the search is disabled", await wait_for("(()=>{const p=document.querySelector('[data-role=time-search]');return /not a timezone name/.test(p.innerText)&&p.querySelector('[data-role=ts-run]').disabled})()", 8))
     check("UI: no console errors or exceptions", not [l for l in logs if "favicon" not in l], logs)
 
     # ===== Test F: storage pressure ===================================================================================================================

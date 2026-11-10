@@ -123,6 +123,9 @@ add_library(visualmemory STATIC
     src/search_core.cpp
     src/reader.cpp
     src/object_index.cpp
+    src/object_frame_source.cpp
+    src/object_detector.cpp
+    src/object_indexer.cpp
     src/pop_store.cpp
     src/pop_verify.cpp
 )

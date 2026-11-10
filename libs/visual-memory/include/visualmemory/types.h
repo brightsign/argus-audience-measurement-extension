@@ -163,6 +163,19 @@ struct LatencyStats {
 };
 
 // Runtime counters (all monotonic except queue_depth / bytes_on_disk).
+// The most recent SQLite failure of the frame writer (diagnostics for the cumulative `database_failures` counter:
+// lets a historical transient failure be told apart from an active one by comparing utc_ms with last_commit_utc_ms).
+struct DbErrorInfo {
+    uint64_t    count = 0;              // failures recorded since start (equals Stats::database_failures)
+    int         code = 0;               // sqlite3_errcode() at the failure (0 = none yet; -1 = database not open)
+    int         extended_code = 0;      // sqlite3_extended_errcode()
+    std::string code_name;              // e.g. "SQLITE_BUSY"
+    std::string message;                // sqlite3_errmsg()
+    std::string operation;              // "insert.prepare" | "insert.step" | "insert.not_open"
+    int64_t     utc_ms = 0;             // wall clock of the most recent failure (0 = none)
+    int64_t     frame_sequence = 0;     // source_sequence of the frame that was lost
+};
+
 struct Stats {
     uint64_t samples_seen         = 0;  // frames handed to try_submit()
     uint64_t accepted             = 0;  // frames queued for processing
@@ -171,6 +184,7 @@ struct Stats {
     uint64_t encoded              = 0;  // frames successfully encoded + persisted
     uint64_t jpeg_write_failures  = 0;
     uint64_t database_failures    = 0;
+    DbErrorInfo last_database_error;    // details of the most recent database failure
     uint64_t retention_deletions  = 0;
     uint64_t bytes_on_disk        = 0;  // logical sum of stored JPEG bytes
     int64_t  last_commit_utc_ms   = 0;  // wall-clock time the newest JPEG+row was committed (0 = none yet)

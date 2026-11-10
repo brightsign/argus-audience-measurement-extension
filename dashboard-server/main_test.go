@@ -276,3 +276,16 @@ func TestDisplayPreviewIsGetOnlyAndProxied(t *testing.T) {
 		t.Fatalf("refused POSTs must not reach the upstream (calls %d)", seen.n)
 	}
 }
+
+func TestVMPostAllowedAutoIndexingRoutes(t *testing.T) {
+	for _, p := range []string{"/api/vm/objects/auto/backfill", "/api/vm/objects/auto/backfill/cancel"} {
+		if !vmPostAllowed(p) {
+			t.Errorf("POST %s should be allowed (bounded D4 backfill)", p)
+		}
+	}
+	for _, p := range []string{"/api/vm/objects/auto/status", "/api/vm/objects/auto", "/api/vm/objects/auto/backfill/x", "/api/vm/objects/1/image", "/api/vm/status"} {
+		if vmPostAllowed(p) {
+			t.Errorf("POST %s must stay refused", p)
+		}
+	}
+}

@@ -133,8 +133,7 @@
   document.addEventListener("visibilitychange", () => { if (!document.hidden) { pollStatus(); schedulePoll(); } });
 
   // ---- health evaluation (pill) -------------------------------------------------
-  const HARD_FAIL = [["stage1", "jpeg_write_failures", "JPEG write failures"], ["stage1", "database_failures", "Stage-1 DB failures"],
-    ["stage2", "inference_failures", "Inference failures"], ["stage2", "permanent_failures", "Permanent embed failures"],
+  const HARD_FAIL = [["stage1", "jpeg_write_failures", "JPEG write failures"], ["stage2", "inference_failures", "Inference failures"], ["stage2", "permanent_failures", "Permanent embed failures"],
     ["stage2", "decode_failures", "Decode failures"], ["stage2", "db_failures", "Stage-2 DB failures"], ["stage2", "invalid_vectors", "Invalid vectors"]];
   const DROPS = [["stage1", "dropped_queue_full", "Stage-1 queue drops"], ["stage1", "dropped_invalid", "Invalid frames dropped"],
     ["stage2", "dropped_queue_full", "Stage-2 queue drops"]];
@@ -149,6 +148,19 @@
     const red = [], amber = [];
     if (st.store && st.store.available === false) red.push("Store unavailable");
     for (const [g, k, l] of HARD_FAIL) { const v = cnt(st, g, k); if (v) red.push(`${l}: ${v}`); }
+    {   // Stage-1 DB failures: the counter is cumulative since the Argus process started. Say what happened and whether the writer
+      // has committed since: a failure with no later commit is ACTIVE (red); one followed by successful commits is a recovered,
+      // historical failure (amber). It is never hidden: it stays listed until Argus restarts.
+      const n = cnt(st, "stage1", "database_failures");
+      if (n) {
+        const e = (st.runtime.stage1 && st.runtime.stage1.last_database_error) || null;
+        const lastCommit = cnt(st, "stage1", "last_commit_utc_ms") || 0;
+        const when = e && e.utc_ms ? new Date(e.utc_ms).toISOString().replace("T", " ").slice(0, 19) + " UTC" : "";
+        const what = e && e.utc_ms ? ` (last: ${e.code_name || "code " + e.code} "${e.message}" in ${e.operation} at ${when}${e.frame_sequence ? ", frame seq " + e.frame_sequence : ""})` : " (no error details: older Argus build)";
+        if (e && e.utc_ms && lastCommit > e.utc_ms) amber.push(`Stage-1 DB failures since Argus started: ${n}, recovered (frames committed since)${what}`);
+        else red.push(`Stage-1 DB failures: ${n}, no successful commit since${what}`);
+      }
+    }
     if (st.store && st.store.embeddings_failed > 0) red.push(`Failed embeddings stored: ${st.store.embeddings_failed}`);
     if (st.viewer) { /* dataset viewer: no live Argus writer by design */ }
     else if (!st.runtime) amber.push("No runtime snapshot");
@@ -705,9 +717,10 @@
     // Source selector: the audience camera (everything above, unchanged) or the BrightSign display (persisted Proof-of-Play display evidence).
     E.srcCam = h("button", { class: "vm-btn on", type: "button", text: "Audience Camera", onclick: () => setSearchSource("camera") });
     E.srcDisp = h("button", { class: "vm-btn", type: "button", text: "BrightSign Display (Weston/VOP2)", onclick: () => setSearchSource("display") });
-    E.camWrap = h("div", { class: "vm-stack" }, h("div", { class: "vm-row", role: "group", "aria-label": "Search mode" }, E.modeFull, E.modeObj), E.full, E.objSlot);
+    E.modeRow = h("div", { class: "vm-row", role: "group", "aria-label": "Search mode" }, E.modeFull, E.modeObj);
     E.dispSlot = h("div", { hidden: true });
-    root.append(h("div", { class: "vm-stack" }, h("div", { class: "vm-row", role: "group", "aria-label": "Search source" }, h("b", { text: "Source" }), E.srcCam, E.srcDisp), E.camWrap, E.dispSlot));
+    // Source (camera | BrightSign display) and mode (full frame | object) are independent: object search works for both sources and never mixes them.
+    root.append(h("div", { class: "vm-stack" }, h("div", { class: "vm-row", role: "group", "aria-label": "Search source" }, h("b", { text: "Source" }), E.srcCam, E.srcDisp), E.modeRow, E.full, E.objSlot, E.dispSlot));
     renderRef();
     onStatus(() => { updateRunBtn(); });
     tz.subs.push(() => refreshTs(root));
@@ -715,26 +728,27 @@
   }
 
   let searchSource = "camera";
+  let searchMode = "frame";
+  function applySearchView() {
+    const E = searchEls, disp = searchSource === "display", obj = searchMode === "objects" && !!VMUI.objects;
+    E.full.hidden = disp || obj; E.dispSlot.hidden = !disp || obj; E.objSlot.hidden = !obj;
+    E.srcCam.classList.toggle("on", !disp); E.srcDisp.classList.toggle("on", disp);
+    E.srcCam.setAttribute("aria-pressed", String(!disp)); E.srcDisp.setAttribute("aria-pressed", String(disp));
+    E.modeFull.classList.toggle("on", !obj); E.modeObj.classList.toggle("on", obj);
+    E.modeFull.setAttribute("aria-pressed", String(!obj)); E.modeObj.setAttribute("aria-pressed", String(obj));
+    if (disp && !obj) { if (VMUI.displaySearch) VMUI.displaySearch.mount(E.dispSlot); else E.dispSlot.replaceChildren(h("div", { class: "vm-banner warn", text: "Display search is loading…" })); }
+    if (obj) { VMUI.objects.mountSearch(E.objSlot); VMUI.objects.setSource(searchSource); }
+  }
   function setSearchSource(src) {
     searchSource = src === "display" ? "display" : "camera";
     buildSearch();
-    const E = searchEls, disp = searchSource === "display";
-    E.camWrap.hidden = disp; E.dispSlot.hidden = !disp;
-    E.srcCam.classList.toggle("on", !disp); E.srcDisp.classList.toggle("on", disp);
-    E.srcCam.setAttribute("aria-pressed", String(!disp)); E.srcDisp.setAttribute("aria-pressed", String(disp));
-    if (disp) { if (VMUI.displaySearch) VMUI.displaySearch.mount(E.dispSlot); else E.dispSlot.replaceChildren(h("div", { class: "vm-banner warn", text: "Display search is loading…" })); }
+    applySearchView();
   }
-
-  let searchMode = "frame";
   function setSearchMode(mode) {
     searchMode = mode;                                   // the requested mode survives until objects.js has registered
     if (currentView !== "search") { location.hash = "#search"; }
     buildSearch();
-    const E = searchEls, obj = mode === "objects" && !!VMUI.objects;
-    E.full.hidden = obj; E.objSlot.hidden = !obj;
-    E.modeFull.classList.toggle("on", !obj); E.modeObj.classList.toggle("on", obj);
-    E.modeFull.setAttribute("aria-pressed", String(!obj)); E.modeObj.setAttribute("aria-pressed", String(obj));
-    if (obj) VMUI.objects.mountSearch(E.objSlot);
+    applySearchView();
   }
 
   function openPicker() {
@@ -866,7 +880,7 @@
   const VMUI = window.VMUI = {
     h, api, openModal, frameImage, loadImg, tsEl, otherZone, fmtInt, fmtBytes, isNum, DASH, API, S, clear, errorMessage, authBox,
     makeTimeFilter, sourceSelect, makeGallery, openDetail, onStatus, pollStatus, refreshTs, tzSubscribe: (f) => tz.subs.push(f),
-    showSearchMode: (m) => setSearchMode(m), objects: null,
+    showSearchMode: (m) => setSearchMode(m), objects: null, healthPill: evaluate,   // healthPill: the VM status pill logic (also used by the browser tests)
     registerObjects(o) { VMUI.objects = o; if (SR.built) setSearchMode(searchMode); },
     displaySearch: null, showSearchSource: (m) => setSearchSource(m),
     registerDisplaySearch(o) { VMUI.displaySearch = o; if (SR.built && searchSource === "display") setSearchSource("display"); },

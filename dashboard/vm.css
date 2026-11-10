@@ -286,3 +286,18 @@ img[data-zoom]{cursor:zoom-in}
 .lb-nav{font-size:28px;line-height:1;padding:6px 14px}
 .lb-meta{font-size:13px}
 .lb-actions{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+
+/* Search by time (BrightSign Display source) */
+.ts-cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:12px;margin:10px 0}
+.ts-col{border:1px solid var(--line,#26324a);border-radius:8px;padding:8px 12px}
+.ts-col h4{margin:0 0 6px 0}
+.ts-session{margin-top:12px}
+.ts-nearest{margin-top:12px}
+.ts-noevidence{margin-top:12px;border-color:var(--warn,#e0a030)}
+.ts-frames figure.ts-near{border-color:var(--present,#4cc3f0);box-shadow:0 0 0 1px var(--present,#4cc3f0)}
+.ts-warn{color:var(--warn,#e0a030)}
+.ts-expired{min-height:90px;display:flex;align-items:center;justify-content:center;text-align:center;padding:8px}
+.ts-dl dt{font-size:12px}
+
+/* D4 automatic indexing: origin badges */
+.vm-badge.auto { border-color: rgba(80,160,255,0.7); color: #8cc4ff; } .vm-badge.manual { border-color: rgba(190,190,210,0.5); color: var(--ink-2); }

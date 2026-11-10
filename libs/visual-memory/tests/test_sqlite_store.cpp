@@ -5,6 +5,7 @@
 #include "test_util.h"
 
 #include <gtest/gtest.h>
+#include <sqlite3.h>
 
 using namespace visualmemory;
 using namespace visualmemory::detail;
@@ -119,4 +120,35 @@ TEST(SqliteStore, TotalBytesAndDelete) {
     ASSERT_TRUE(db.delete_by_id(id1));
     EXPECT_EQ(db.row_count(), 1);
     EXPECT_EQ(db.total_jpeg_bytes(), 1002u);
+}
+
+// ---- diagnostics of a failed insert (separates a historical transient failure from an active one) ----------------
+TEST(SqliteStore, FailedInsertRecordsErrorCodeMessageAndTime) {
+    vmtest::TempDir dir; const std::string path = (dir.path() / "visual_memory.db").string();
+    SqliteStore s; std::string err; ASSERT_TRUE(s.open(path, err)) << err;
+    EXPECT_EQ(s.last_insert_error().count, 0u); EXPECT_EQ(s.last_insert_error().utc_ms, 0);
+    ASSERT_GT(s.insert(row("cam", 1000, 1)), 0);
+    EXPECT_EQ(s.last_insert_error().count, 0u);                       // success leaves it untouched
+
+    s.set_busy_timeout_ms(50);
+    sqlite3* other = nullptr; ASSERT_EQ(sqlite3_open(path.c_str(), &other), SQLITE_OK);
+    ASSERT_EQ(sqlite3_exec(other, "BEGIN EXCLUSIVE;", nullptr, nullptr, nullptr), SQLITE_OK);     // a second process holds the database
+    const int64_t before = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    EXPECT_EQ(s.insert(row("cam", 2000, 77)), -1);
+    const DbErrorInfo e = s.last_insert_error();
+    EXPECT_EQ(e.count, 1u); EXPECT_EQ(e.code, SQLITE_BUSY); EXPECT_EQ(e.code_name, "SQLITE_BUSY");
+    EXPECT_EQ(e.operation, "insert.step"); EXPECT_FALSE(e.message.empty());
+    EXPECT_GE(e.utc_ms, before); EXPECT_EQ(e.frame_sequence, 77);
+    sqlite3_exec(other, "ROLLBACK;", nullptr, nullptr, nullptr); sqlite3_close(other);
+
+    ASSERT_GT(s.insert(row("cam", 3000, 78)), 0);                      // recovered
+    const DbErrorInfo after = s.last_insert_error();                   // the historical record is kept, not erased
+    EXPECT_EQ(after.count, 1u); EXPECT_EQ(after.utc_ms, e.utc_ms); EXPECT_EQ(after.frame_sequence, 77);
+}
+
+TEST(SqliteStore, InsertOnClosedStoreIsReported) {
+    SqliteStore s;
+    EXPECT_EQ(s.insert(row("cam", 1000, 5)), -1);
+    const DbErrorInfo e = s.last_insert_error();
+    EXPECT_EQ(e.count, 1u); EXPECT_EQ(e.code, -1); EXPECT_EQ(e.code_name, "NOT_OPEN"); EXPECT_EQ(e.operation, "insert.not_open");
 }

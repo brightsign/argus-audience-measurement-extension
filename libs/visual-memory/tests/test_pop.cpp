@@ -808,3 +808,121 @@ TEST(PopHistoryBench, DISABLED_ExactSearchLatencyVersusHistorySize) {
                     static_cast<double>(fs::file_size(path)) / 1048576.0);
     }
 }
+
+// ---- Time-based display history lookup (read-only; stored timestamps only) ---------------------------------------------------------------------------
+TEST(PopTimeLookup, NearestIsDeterministicTiesResolveToTheEarlierFrameAndTheToleranceIsHonoured) {
+    Fx f; history_fixture(f); NearestDisplayFrame n;
+    ASSERT_TRUE(f.store.nearest_display_frame(kT0 + 1500, 100, "", n));
+    EXPECT_TRUE(n.found); EXPECT_EQ(n.diff_ms, 0); EXPECT_EQ(n.frame.session_id, "h1"); EXPECT_EQ(n.frame.index, 1);
+    ASSERT_TRUE(f.store.nearest_display_frame(kT0 + 1000, 1000, "", n));            // 500 ms from sample 0 and from sample 1: the earlier one wins
+    EXPECT_TRUE(n.found); EXPECT_EQ(n.frame.index, 0); EXPECT_EQ(n.diff_ms, -500);
+    ASSERT_TRUE(f.store.nearest_display_frame(kT0 + 1100, 1000, "", n));
+    EXPECT_EQ(n.frame.index, 1); EXPECT_EQ(n.diff_ms, 400);
+    ASSERT_TRUE(f.store.nearest_display_frame(kT0 + 1100, 399, "", n));             // nearest is 400 ms away: outside a 399 ms tolerance
+    EXPECT_FALSE(n.found); EXPECT_TRUE(n.has_nearest); EXPECT_EQ(n.diff_ms, 400);
+    ASSERT_TRUE(f.store.nearest_display_frame(kT0 + 1100, 400, "", n)); EXPECT_TRUE(n.found) << "the tolerance is inclusive";
+    ASSERT_TRUE(f.store.nearest_display_frame(kT0 + 100000, 500, "", n));          // between sessions: a gap, not a match
+    EXPECT_FALSE(n.found); EXPECT_EQ(n.frames_in_store, 50u); EXPECT_EQ(n.oldest_utc_ms, kT0 + 500); EXPECT_EQ(n.newest_utc_ms, kT0 + 1200000 + 500 + 9000);
+    ASSERT_TRUE(f.store.nearest_display_frame(kT0 + 1100, 100000, "h3", n));       // session filter
+    EXPECT_EQ(n.frame.session_id, "h3");
+    for (int i = 0; i < 5; ++i) { NearestDisplayFrame m; ASSERT_TRUE(f.store.nearest_display_frame(kT0 + 1000, 1000, "", m)); EXPECT_EQ(m.frame.index, 0); EXPECT_EQ(m.frame.session_id, "h1"); }
+}
+
+TEST(PopTimeLookup, IdenticalInstantsResolveToTheLowestId) {
+    Fx f; f.media("ad-a", 0); f.schedule("a", "ad-a"); f.schedule("b", "ad-a"); f.full_play("a"); f.full_play("b");
+    std::string e; ASSERT_TRUE(f.store.history_open(e)) << e; HistoryLimits lim; HistoryFrame oa, ob;
+    ASSERT_TRUE(f.store.add_history_frame(hist_in("b", 0, 0, 0, kT0 + 5000), lim, ob, e)) << e;   // "b" is stored first: lower id
+    ASSERT_TRUE(f.store.add_history_frame(hist_in("a", 0, 0, 0, kT0 + 5000), lim, oa, e)) << e;
+    ASSERT_LT(ob.frame_id, oa.frame_id);
+    NearestDisplayFrame n; ASSERT_TRUE(f.store.nearest_display_frame(kT0 + 5000, 10, "", n));
+    EXPECT_EQ(n.frame.frame_id, ob.frame_id);
+    ASSERT_TRUE(f.store.nearest_display_frame(kT0 + 5000, 10, "a", n)); EXPECT_EQ(n.frame.session_id, "a");
+}
+
+TEST(PopTimeLookup, OnlyWestonDisplayFramesAreReturnedAndALinkedCheckpointIsReportedOnce) {
+    Fx f; f.media("ad-a", 0); f.schedule("s", "ad-a"); f.full_play("s");
+    std::string e; ASSERT_TRUE(f.store.history_open(e)) << e;
+    shot_via(f, "s", 1, 0, 3000, "brightscript_screenshot", 1);                       // a BrightScript screenshot is not Weston/VOP2 output
+    shot_via(f, "s", 2, 0, 15000, "resilience_grpc", 2, 275);                          // an unlinked Weston checkpoint
+    shot_via(f, "s", 3, 0, 27000, "resilience_grpc", 3, 275);                          // a Weston checkpoint that history links
+    HistoryLimits lim; HistoryFrame o;
+    HistoryFrameIn link = hist_in("s", 27, 0); link.utc_ms = kT0 + 1000 + 27000; link.actual_offset_ms = 27007; link.capture_method = "resilience_grpc";
+    ASSERT_TRUE(f.store.add_history_frame(link, lim, o, e)) << e;
+    NearestDisplayFrame n;
+    ASSERT_TRUE(f.store.nearest_display_frame(kT0 + 1000 + 3000, 5000, "", n));
+    EXPECT_FALSE(n.found) << "the only frame at +3 s is a screenshot-method checkpoint: excluded, the next Weston frame is 12 s away";
+    ASSERT_TRUE(n.has_nearest); EXPECT_NE(n.frame.capture_method, "brightscript_screenshot"); EXPECT_NE(n.frame.utc_ms, kT0 + 1000 + 3000);
+    EXPECT_EQ(n.frames_in_store, 2u) << "an unlinked checkpoint and one history row (which carries the linked checkpoint)";
+    ASSERT_TRUE(f.store.nearest_display_frame(kT0 + 1000 + 15000, 10, "", n));
+    EXPECT_TRUE(n.found); EXPECT_EQ(n.frame.kind, "verification_checkpoint"); EXPECT_EQ(n.frame.frame_id, 0); EXPECT_GT(n.frame.evidence_id, 0); EXPECT_EQ(n.frame.uncertainty_ms, 275);
+    ASSERT_TRUE(f.store.nearest_display_frame(kT0 + 1000 + 27000, 10, "", n));
+    EXPECT_TRUE(n.found); EXPECT_NE(n.frame.kind, "verification_checkpoint") << "history row, with the checkpoint attached";
+    const auto rows = f.store.display_frames_between(kT0, kT0 + 60000, "s", 100);
+    int at27 = 0; for (const auto& r : rows) if (r.utc_ms == kT0 + 1000 + 27000) ++at27;
+    EXPECT_EQ(at27, 1) << "one entry, not a history row plus its checkpoint";
+    EXPECT_EQ(rows.size(), 2u);
+}
+
+TEST(PopTimeLookup, AnExpiredJpegKeepsItsMetadataAndSaysSo) {
+    Fx f; history_fixture(f);
+    HistoryPruneResult r = f.store.prune_history(kT0 + 5000, 1ull << 40, 0, 0);       // JPEG retention: remove images older than +5 s, keep the rows
+    EXPECT_GT(r.images_removed, 0u);
+    NearestDisplayFrame n; ASSERT_TRUE(f.store.nearest_display_frame(kT0 + 2500, 100, "", n));
+    EXPECT_TRUE(n.found); EXPECT_FALSE(n.frame.image_available) << "JPEG gone"; EXPECT_TRUE(n.frame.embedded) << "vector and row are kept";
+    ASSERT_TRUE(f.store.nearest_display_frame(kT0 + 12500, 100, "", n)); EXPECT_TRUE(n.frame.image_available);
+    { std::vector<uint8_t> b; EXPECT_TRUE(f.store.history_jpeg(n.frame.frame_id, b)); EXPECT_FALSE(b.empty()); }
+    r = f.store.prune_history(0, 1ull << 40, kT0 + 5000, 0);                           // metadata retention: remove rows older than +5 s
+    EXPECT_GT(r.rows_removed, 0u);
+    ASSERT_TRUE(f.store.nearest_display_frame(kT0 + 2500, 100, "", n)); EXPECT_FALSE(n.found) << "no row left: a no-evidence answer";
+}
+
+TEST(PopTimeLookup, TheWindowQueryOrdersFramesFindsSessionsAndReportsTruncation) {
+    Fx f; history_fixture(f);
+    bool tr = true;
+    auto rows = f.store.display_frames_between(kT0 + 4500, kT0 + 8500, "", 100, &tr);
+    ASSERT_EQ(rows.size(), 5u); EXPECT_FALSE(tr);
+    for (size_t i = 1; i < rows.size(); ++i) EXPECT_LT(rows[i - 1].utc_ms, rows[i].utc_ms);
+    rows = f.store.display_frames_between(kT0, kT0 + 2000000, "", 7, &tr); EXPECT_EQ(rows.size(), 7u); EXPECT_TRUE(tr);
+    const auto sess = f.store.list_sessions_overlapping(kT0 + 5000, kT0 + 6000, 10);          // the fixture's events put all three sessions at +0.3 s..+30.3 s
+    EXPECT_EQ(sess.size(), 3u);
+    rows = f.store.display_frames_between(kT0 + 5000, kT0 + 6000, "", 100);
+    ASSERT_EQ(rows.size(), 1u); EXPECT_EQ(rows[0].session_id, "h1") << "only h1 has a frame in that second";
+    EXPECT_TRUE(f.store.list_sessions_overlapping(kT0 + 31000, kT0 + 60000, 10).empty()) << "between sessions";
+}
+
+TEST(PopTimeLookup, SimilarityUsesStoredVectorsAndReportsWhenAVectorIsMissing) {
+    Fx f; history_fixture(f);
+    NearestDisplayFrame n; ASSERT_TRUE(f.store.nearest_display_frame(kT0 + 1500, 10, "h1", n));
+    auto s = f.store.expected_similarity("h1", {FrameSimQuery{n.frame.frame_id, n.frame.evidence_id}});
+    ASSERT_EQ(s.size(), 1u); EXPECT_TRUE(s[0].ok) << s[0].reason; EXPECT_GT(s[0].sim, 0.8f); EXPECT_EQ(s[0].refs, 4);
+    ASSERT_TRUE(f.store.nearest_display_frame(kT0 + 1200000 + 1500, 10, "h3", n));            // ad-B frames against ad-B references
+    s = f.store.expected_similarity("h3", {FrameSimQuery{n.frame.frame_id, n.frame.evidence_id}}); EXPECT_TRUE(s[0].ok); EXPECT_GT(s[0].sim, 0.8f);
+    s = f.store.expected_similarity("h1", {FrameSimQuery{n.frame.frame_id, n.frame.evidence_id}});   // the same ad-B frame against ad-A references
+    EXPECT_TRUE(s[0].ok); EXPECT_LT(s[0].sim, 0.8f) << "a different advertisement is clearly lower";
+    f.schedule("p", "ad-a"); f.full_play("p"); HistoryLimits lim; HistoryFrame o; std::string e;
+    ASSERT_TRUE(f.store.add_history_frame(hist_in("p", 0, 0, 0, kT0 + 2400000), lim, o, e)) << e;   // not embedded yet
+    s = f.store.expected_similarity("p", {FrameSimQuery{o.frame_id, 0}}); EXPECT_FALSE(s[0].ok); EXPECT_NE(s[0].reason.find("vector"), std::string::npos) << s[0].reason;
+    s = f.store.expected_similarity("nosuch", {FrameSimQuery{o.frame_id, 0}}); EXPECT_FALSE(s[0].ok);
+}
+
+TEST(PopTimeLookup, TheQueriesAreReadOnlyAndUseTheTimestampIndexes) {
+    Fx f; history_fixture(f);
+    const std::string db = (fs::path(f.dir.str()) / "pop.db").string();
+    std::ifstream a(db, std::ios::binary); std::string before((std::istreambuf_iterator<char>(a)), std::istreambuf_iterator<char>()); a.close();
+    NearestDisplayFrame n; for (int i = 0; i < 20; ++i) ASSERT_TRUE(f.store.nearest_display_frame(kT0 + i * 777, 1000, "", n));
+    f.store.display_frames_between(kT0, kT0 + 100000, "", 100); f.store.list_sessions_overlapping(kT0, kT0 + 100000, 10);
+    sqlite3* h = nullptr; ASSERT_EQ(sqlite3_open_v2(db.c_str(), &h, SQLITE_OPEN_READONLY, nullptr), SQLITE_OK);
+    auto plan = [&](const char* sql) {
+        std::string out; sqlite3_stmt* st = nullptr;
+        if (sqlite3_prepare_v2(h, (std::string("EXPLAIN QUERY PLAN ") + sql).c_str(), -1, &st, nullptr) == SQLITE_OK)
+            while (sqlite3_step(st) == SQLITE_ROW) out += reinterpret_cast<const char*>(sqlite3_column_text(st, 3)) + std::string(";");
+        sqlite3_finalize(st); return out;
+    };
+    EXPECT_NE(plan("SELECT utc_ms FROM display_history_frames h WHERE h.status='ok' AND h.utc_ms<=5 ORDER BY h.utc_ms DESC LIMIT 1").find("ix_pop_hist_time"), std::string::npos);
+    EXPECT_NE(plan("SELECT utc_ms FROM display_capture_evidence e WHERE e.status='ok' AND e.capture_method='resilience_grpc' AND e.utc_ms>5 ORDER BY e.utc_ms ASC LIMIT 1").find("ix_pop_evd_time"), std::string::npos);
+    EXPECT_NE(plan("SELECT 1 FROM playback_sessions s WHERE s.start_utc_ms>0 AND s.start_utc_ms<=5").find("ix_pop_sess_start"), std::string::npos);
+    sqlite3_close(h);
+    EXPECT_EQ(user_version_of(db), 2);
+    std::ifstream c(db, std::ios::binary); std::string after((std::istreambuf_iterator<char>(c)), std::istreambuf_iterator<char>());
+    EXPECT_EQ(before, after) << "lookups never write to pop.db";
+}
